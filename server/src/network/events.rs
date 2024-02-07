@@ -1,5 +1,7 @@
 use bevy::prelude::*;
+use lightyear::prelude::NetworkTarget;
 use lightyear::server::events::ConnectEvent;
+use shared::network::protocol::prelude::*;
 use crate::network::bundle::snake::SnakeBundle;
 
 pub(crate) fn handle_connections(
@@ -7,7 +9,7 @@ pub(crate) fn handle_connections(
     mut commands: Commands,
 ) {
     for connection in connections.read() {
-        info!("Spawning new snake");
-        SnakeBundle::spawn(&mut commands);
+        let client_id = connection.context();
+        SnakeBundle::spawn(&mut commands, *client_id);
     }
 }

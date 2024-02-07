@@ -3,8 +3,10 @@ use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::ClientId;
 use shared::network::config::Transports;
+use crate::network::inputs::NetworkInputsPlugin;
 
 pub(crate) mod config;
+mod inputs;
 
 pub(crate) struct NetworkPlugin {
     pub(crate) client_id: ClientId,
@@ -21,6 +23,7 @@ impl Plugin for NetworkPlugin {
             self.server_addr,
             self.transport,
         ));
+        app.add_plugins(NetworkInputsPlugin);
         app.add_systems(Startup, connect);
     }
 }

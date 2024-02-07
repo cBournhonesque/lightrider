@@ -4,7 +4,7 @@ use itertools::Itertools;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub enum Direction {
     Left,
     Right,
@@ -24,24 +24,24 @@ impl Direction {
 }
 
 
-#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 pub struct TailLength{
     pub current_size: f32,
     pub target_size: f32,
 }
 
-#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 pub struct HeadPoint(pub Vec2);
 
-#[derive(Component, Message, Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Message, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct HeadDirection(pub Direction);
 
-#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 // tail inflection points, from front (point closest to the head) to back (tail end point)
 pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
 
 // TODO: replace this with Parent in bevy 0.13
-#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 #[message(custom_map)]
 pub struct TailParent(pub Entity);
 
@@ -55,12 +55,13 @@ impl<'a> MapEntities<'a> for TailParent {
     }
 }
 
-
-
-
 impl TailPoints {
-    pub fn pairs<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
+    pub fn pairs_front_to_back<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
         std::iter::once(head).chain(self.0.iter()).tuple_windows().map(|(a, b)| (b, a))
+    }
+
+    pub fn pairs_back_to_front<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
+        self.0.iter().rev().chain(std::iter::once(head)).tuple_windows()
     }
 }
 
@@ -84,10 +85,15 @@ mod tests {
             (Vec2::new(0.0, 1.0), Direction::Down),
             (Vec2::new(-2.0, 1.0), Direction::Right),
         ]));
-        assert_eq!(tail.pairs(&head).collect_vec(), vec![
+        assert_eq!(tail.pairs_front_to_back(&head).collect_vec(), vec![
             (&(Vec2::new(0.0, 1.0), Direction::Down), &(Vec2::new(0.0, 0.0), Direction::Right)),
             (&(Vec2::new(-2.0, 1.0), Direction::Right), &(Vec2::new(0.0, 1.0), Direction::Down)),
         ]);
+        assert_eq!(tail.pairs_back_to_front(&head).collect_vec(), vec![
+            (&(Vec2::new(-2.0, 1.0), Direction::Right), &(Vec2::new(0.0, 1.0), Direction::Down)),
+            (&(Vec2::new(0.0, 1.0), Direction::Down), &(Vec2::new(0.0, 0.0), Direction::Right)),
+        ]);
+
 
     }
 }

@@ -11,10 +11,17 @@ pub use messages::Messages;
 pub use inputs::PlayerMovement;
 
 pub mod prelude {
+    // components
     pub use super::components::snake::*;
     pub use super::components::player::*;
 
+    // inputs
     pub use super::inputs::PlayerMovement;
+
+    // reexports
+    pub use super::Replicate;
+    pub use super::ClientConnectionManager;
+    pub use super::ServerConnectionManager;
 }
 
 protocolize!(

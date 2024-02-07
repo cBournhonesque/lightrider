@@ -15,7 +15,7 @@ impl Plugin for SnakeRenderPlugin {
 /// The components should be replicated from the server to the client
 pub(crate) fn draw_snakes(
     mut gizmos: Gizmos,
-    heads: Query<(&HeadPoint), Without<Confirmed>>,
+    heads: Query<&HeadPoint, Without<Confirmed>>,
     tails: Query<(&TailParent, &TailPoints), Without<Confirmed>>,
 ) {
     for (parent, points) in tails.iter() {
@@ -27,10 +27,10 @@ pub(crate) fn draw_snakes(
         gizmos.rect_2d(
             position.0,
             0.0,
-            Vec2::ONE * 20.0,
+            Vec2::ONE * 10.0,
             Color::BLUE
         );
-        points.pairs(&(position.0, Direction::Up)).for_each(|(start, end)| {
+        points.pairs_front_to_back(&(position.0, Direction::Up)).for_each(|(start, end)| {
             gizmos.line_2d(start.0, end.0, Color::BLUE);
             if start.0.x != end.0.x && start.0.y != end.0.y {
                 info!("DIAGONAL");

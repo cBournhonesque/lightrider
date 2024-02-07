@@ -47,6 +47,25 @@ pub fn turn_heads(
     }
 }
 
+// 3. update front of the tail: possibly add a new inflection point if necessary
+pub fn update_tails_front(
+    heads: Query<(&HeadPoint, Ref<HeadDirection>), Controlled>,
+    mut query: Query<(&mut TailPoints, &TailParent), Controlled>
+) {
+    for (mut tail, parent) in query.iter_mut() {
+        let Ok((head, direction)) = heads.get(parent.0) else {
+            error!("Update tails front: Snake tail has no parent head: {:?}", parent.0);
+            continue;
+        };
+
+        // if direction changed, we need to add a new point to the tail
+        if direction.is_changed() {
+            // it's just the current head position (we haven't updated it yet)
+            tail.0.push_front((head.0, direction.0.clone()));
+        }
+    }
+}
+
 // 4. update heads' speed and position
 pub fn update_heads(
     mut query: Query<(&mut HeadPoint, &mut TailLength, &HeadDirection, &mut Speed, &Acceleration), Controlled>
@@ -61,34 +80,15 @@ pub fn update_heads(
     }
 }
 
-// 3. update front of the tail: possibly add a new inflection point if necessary
-pub fn update_tails_front(
-    heads: Query<(&HeadPoint, Ref<HeadDirection>), Controlled>,
-    mut query: Query<(&mut TailPoints, &Parent),  Controlled>
-) {
-    for (mut tail, parent) in query.iter_mut() {
-        let Ok((head, direction)) = heads.get(parent.get()) else {
-            error!("Snake tail has no parent head");
-            continue;
-        };
-
-        // if direction changed, we need to add a new point to the tail
-        if direction.is_changed() {
-            info!("adding new tail point");
-            // it's just the current head position (we haven't updated it yet)
-            tail.0.push_front((head.0, direction.0.clone()));
-        }
-    }
-}
 
 // 5. update the back of the tails: shorten tail
 pub fn update_tails_back(
-    heads: Query<(&HeadPoint, &TailLength, Ref<HeadDirection>), Controlled>,
-    mut query: Query<(&mut TailPoints, &TailParent),  Controlled>
+    mut heads: Query<(&HeadPoint, &mut TailLength, Ref<HeadDirection>), Controlled>,
+    mut query: Query<(&mut TailPoints, &TailParent), Controlled>
 ) {
     for (mut tail, parent) in query.iter_mut() {
-        let Ok((head, length, direction)) = heads.get(parent.0) else {
-            error!("Snake tail has no parent head");
+        let Ok((head, mut length, direction)) = heads.get_mut(parent.0) else {
+            error!("Update tails back: Snake tail has no parent head: {:?}", parent.0);
             continue;
         };
 
@@ -97,22 +97,21 @@ pub fn update_tails_back(
             continue;
         }
 
-        // TODO: add unit tests
-
         // we need to shorten the tail
         let mut shorten_amount = length.current_size - length.target_size;
         // iterate from the tail to the front
         let mut drop_point = 0;
         let mut new_point = None;
-        for (i, (from, to)) in tail.pairs(&(head.0, direction.0)).enumerate() {
+        for (i, (from, to)) in tail.pairs_back_to_front(&(head.0, direction.0)).enumerate() {
             let segment_size = from.0.distance(to.0);
 
-            if segment_size == shorten_amount {
-                drop_point = tail.0.len() - i;
-            } else if segment_size > shorten_amount {
+            if segment_size >= shorten_amount {
                 // we need to shorten this segment, and drop all the points past that
-                new_point = Some(from.0 + from.1.delta() * shorten_amount);
-                drop_point = tail.0.len() - i;
+                drop_point = tail.0.len() - 1 - i;
+                if segment_size > shorten_amount {
+                    new_point = Some(from.0 + from.1.delta() * shorten_amount);
+                }
+                break;
             } else {
                 // we still need to shorten more
                 shorten_amount -= segment_size;
@@ -120,14 +119,84 @@ pub fn update_tails_back(
         }
 
         // drop the tail points
-        let drained = tail.0.drain(drop_point..).next().clone();
+        let drained = tail.0.drain(drop_point..).next().unwrap();
         // add the new point
         if let Some(new_point) = new_point {
-            if let Some(drained) = drained {
-                tail.0.push_back((new_point, drained.1));
-            }
+            tail.0.push_back((new_point, drained.1));
         }
+
+        length.current_size = length.target_size;
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use super::*;
+
+    fn create_snake(app: &mut App) -> (Entity, Entity) {
+        let head = app.world.spawn(
+            (
+                HeadPoint(Vec2::new(50.0, 100.0)),
+                HeadDirection(Direction::Right),
+                TailLength { current_size: 150.0, target_size: 150.0 },
+                Speed(0.5),
+                Acceleration(0.0),
+            )
+        ).id();
+        let tail = app.world.spawn(
+            (
+                TailPoints(VecDeque::from(vec![
+                    (Vec2::new(0.0, 100.0), Direction::Right),
+                    (Vec2::new(0.0, 0.0), Direction::Up),
+                ])),
+                TailParent(head),
+            )
+        ).id();
+        (head, tail)
+    }
+
+    #[test]
+    fn test_shorten_tail() {
+        let mut app = App::new();
+        app.add_systems(Update, update_tails_back);
+        let (head, tail) = create_snake(&mut app);
+
+        // shorten size
+        app.world.entity_mut(head).get_mut::<TailLength>().unwrap().target_size = 130.0;
+        app.update();
+
+        // check that the tail has been shortened
+        assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap(),
+                     &TailPoints(VecDeque::from(vec![
+                          (Vec2::new(0.0, 100.0), Direction::Right),
+                          (Vec2::new(0.0, 20.0), Direction::Up),
+                     ])));
+        assert_eq!(app.world.entity(head).get::<TailLength>().unwrap().current_size, 130.0);
+
+        // shorten size again
+        app.world.entity_mut(head).get_mut::<TailLength>().unwrap().target_size = 50.0;
+        app.update();
+
+        // check that the last point got removed
+        assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap(),
+                   &TailPoints(VecDeque::from(vec![
+                       (Vec2::new(0.0, 100.0), Direction::Right),
+                   ])));
+        assert_eq!(app.world.entity(head).get::<TailLength>().unwrap().current_size, 50.0);
+
+        // shorten size again
+        app.world.entity_mut(head).get_mut::<TailLength>().unwrap().target_size = 30.0;
+        app.update();
+
+        // check that it works even with one segment
+        assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap(),
+                   &TailPoints(VecDeque::from(vec![
+                       (Vec2::new(20.0, 100.0), Direction::Right),
+                   ])));
+        assert_eq!(app.world.entity(head).get::<TailLength>().unwrap().current_size, 30.0);
+    }
+
 }
 
 
