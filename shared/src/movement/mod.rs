@@ -84,10 +84,10 @@ pub fn update_tails_front(
 // 5. update the back of the tails: shorten tail
 pub fn update_tails_back(
     heads: Query<(&HeadPoint, &TailLength, Ref<HeadDirection>), Controlled>,
-    mut query: Query<(&mut TailPoints, &Parent),  Controlled>
+    mut query: Query<(&mut TailPoints, &TailParent),  Controlled>
 ) {
     for (mut tail, parent) in query.iter_mut() {
-        let Ok((head, length, direction)) = heads.get(parent.get()) else {
+        let Ok((head, length, direction)) = heads.get(parent.0) else {
             error!("Snake tail has no parent head");
             continue;
         };
@@ -120,10 +120,12 @@ pub fn update_tails_back(
         }
 
         // drop the tail points
-        let mut drained = tail.0.drain(drop_point..).next().clone();
+        let drained = tail.0.drain(drop_point..).next().clone();
         // add the new point
         if let Some(new_point) = new_point {
-            tail.0.push_back((new_point, drained.unwrap().1));
+            if let Some(drained) = drained {
+                tail.0.push_back((new_point, drained.1));
+            }
         }
     }
 }

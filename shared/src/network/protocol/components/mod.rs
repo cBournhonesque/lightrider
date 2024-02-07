@@ -10,9 +10,12 @@ use super::GameProtocol;
 #[component_protocol(protocol = GameProtocol)]
 pub enum Components {
     // snake
+    // tail
+    TailPoints(snake::TailPoints),
+    TailParent(snake::TailParent),
+    // head
     TailLength(snake::TailLength),
     HeadPoint(snake::HeadPoint),
-    TailPoints(snake::TailPoints),
     Speed(snake::Speed),
     Acceleration(snake::Acceleration),
     // player

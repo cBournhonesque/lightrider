@@ -1,10 +1,9 @@
-use bevy::app::App;
 use bevy::DefaultPlugins;
+use bevy::prelude::*;
 use clap::Parser;
-use shared::movement::MovementPlugin;
+
 use shared::network::config::Transports;
 use shared::SharedPlugin;
-use crate::debug::DebugPlugin;
 
 mod network;
 mod debug;
@@ -32,10 +31,10 @@ pub async fn app(cli: Cli) -> App {
     app.add_plugins(DefaultPlugins);
 
     // networking
-    app.add_plugins(network::build_plugin(cli.port, cli.transport).await);
+    app.add_plugins(network::NetworkPluginGroup::new(cli.port, cli.transport).await.build());
 
     // debug
-    app.add_plugins(DebugPlugin);
+    app.add_plugins(debug::DebugPlugin);
 
     // shared
     app.add_plugins(SharedPlugin);

@@ -33,14 +33,16 @@ impl Default for HeadBundle {
 #[derive(Bundle)]
 pub struct TailBundle {
     pub tail_points: TailPoints,
+    pub tail_parent: TailParent,
 }
 
 impl TailBundle {
-    pub(crate) fn new(head_point: Vec2) -> Self {
+    pub(crate) fn new(parent_entity: Entity, head_point: Vec2) -> Self {
         let mut tail_points = VecDeque::new();
         tail_points.push_back((head_point + Direction::Down.delta() * TAIL_SIZE, Direction::Up));
         Self {
             tail_points: TailPoints(tail_points),
+            tail_parent: TailParent(parent_entity),
         }
     }
 }
@@ -49,10 +51,15 @@ impl TailBundle {
 pub(crate) struct SnakeBundle;
 
 impl SnakeBundle {
+    // pub(crate) fn spawn(commands: &mut Commands) {
+    //     let mut head_id = commands.spawn(HeadBundle::default());
+    //     head_id.with_children(|parent| {
+    //         parent.spawn(TailBundle::new(Vec2::default()));
+    //     });
+    // }
+
     pub(crate) fn spawn(commands: &mut Commands) {
-        let mut head_id = commands.spawn(HeadBundle::default());
-        head_id.with_children(|parent| {
-            parent.spawn(TailBundle::new(Vec2::default()));
-        });
+        let mut head_entity = commands.spawn(HeadBundle::default()).id();
+        commands.spawn(TailBundle::new(head_entity, Vec2::default()));
     }
 }

@@ -7,6 +7,7 @@ use shared::SharedPlugin;
 
 mod network;
 mod render;
+mod debug;
 
 // Use a port of 0 to automatically select a port
 pub const CLIENT_PORT: u16 = 0;
@@ -39,18 +40,14 @@ pub fn app(cli: Cli) -> App {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins);
 
-    // networking
     app.add_plugins(network::NetworkPlugin {
         client_id: cli.client_id,
         client_port: cli.client_port,
         server_addr: (cli.server_addr, cli.server_port).into(),
         transport: cli.transport,
     });
-
-    // render
+    app.add_plugins(debug::DebugPlugin);
     app.add_plugins(render::RenderPlugin);
-
-    // shared
     app.add_plugins(SharedPlugin);
     app
 }

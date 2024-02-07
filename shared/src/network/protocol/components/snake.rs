@@ -40,6 +40,24 @@ pub struct HeadDirection(pub Direction);
 // tail inflection points, from front (point closest to the head) to back (tail end point)
 pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
 
+// TODO: replace this with Parent in bevy 0.13
+#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[message(custom_map)]
+pub struct TailParent(pub Entity);
+
+impl<'a> MapEntities<'a> for TailParent {
+    fn map_entities(&mut self, entity_mapper: Box<dyn EntityMapper + 'a>) {
+        self.0.map_entities(entity_mapper);
+    }
+
+    fn entities(&self) -> bevy::utils::EntityHashSet<Entity> {
+        bevy::utils::EntityHashSet::from_iter(vec![self.0])
+    }
+}
+
+
+
+
 impl TailPoints {
     pub fn pairs<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
         std::iter::once(head).chain(self.0.iter()).tuple_windows().map(|(a, b)| (b, a))
