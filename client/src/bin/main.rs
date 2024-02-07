@@ -1,10 +1,10 @@
-use std::net::Ipv4Addr;
 use clap::Parser;
-use shared::network::config::Transports;
+use client::{app, Cli};
 
 
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
-
+    let mut app = app(cli);
+    app.run();
 }

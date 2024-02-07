@@ -3,8 +3,15 @@ use bevy::app::App;
 use bevy::DefaultPlugins;
 use clap::Parser;
 use shared::network::config::Transports;
+use shared::SharedPlugin;
 
 mod network;
+mod render;
+
+// Use a port of 0 to automatically select a port
+pub const CLIENT_PORT: u16 = 0;
+
+pub const SERVER_PORT: u16 = 5000;
 
 
 #[derive(Parser, PartialEq, Debug)]
@@ -28,15 +35,22 @@ pub struct Cli {
     transport: Transports,
 }
 
-pub fn app(cli: Cli) {
+pub fn app(cli: Cli) -> App {
     let mut app = App::new();
-    app.add_plugin(DefaultPlugins);
+    app.add_plugins(DefaultPlugins);
 
     // networking
-    app.add_plugin(network::config::build_plugin(
-        cli.client_id,
-        cli.client_port,
-        (cli.server_addr, cli.server_port).into(),
-        cli.transport,
-    ));
+    app.add_plugins(network::NetworkPlugin {
+        client_id: cli.client_id,
+        client_port: cli.client_port,
+        server_addr: (cli.server_addr, cli.server_port).into(),
+        transport: cli.transport,
+    });
+
+    // render
+    app.add_plugins(render::RenderPlugin);
+
+    // shared
+    app.add_plugins(SharedPlugin);
+    app
 }

@@ -38,10 +38,10 @@ pub struct HeadDirection(pub Direction);
 
 #[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq)]
 // tail inflection points, from front (point closest to the head) to back (tail end point)
-pub struct TailPoints(pub(crate) VecDeque<(Vec2, Direction)>);
+pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
 
 impl TailPoints {
-    pub(crate) fn pairs<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
+    pub fn pairs<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
         std::iter::once(head).chain(self.0.iter()).tuple_windows().map(|(a, b)| (b, a))
     }
 }

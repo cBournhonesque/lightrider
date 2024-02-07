@@ -102,17 +102,17 @@ pub fn update_tails_back(
         // we need to shorten the tail
         let mut shorten_amount = length.current_size - length.target_size;
         // iterate from the tail to the front
-        let drop_point;
+        let mut drop_point = 0;
         let mut new_point = None;
-        for (i, (from, to)) in tail.pairs(&(head.0, direction.0)).enumerate().rev() {
+        for (i, (from, to)) in tail.pairs(&(head.0, direction.0)).enumerate() {
             let segment_size = from.0.distance(to.0);
 
             if segment_size == shorten_amount {
-                drop_point = i;
+                drop_point = tail.0.len() - i;
             } else if segment_size > shorten_amount {
                 // we need to shorten this segment, and drop all the points past that
                 new_point = Some(from.0 + from.1.delta() * shorten_amount);
-                drop_point = i;
+                drop_point = tail.0.len() - i;
             } else {
                 // we still need to shorten more
                 shorten_amount -= segment_size;
@@ -120,10 +120,10 @@ pub fn update_tails_back(
         }
 
         // drop the tail points
-        let mut drained = tail.0.drain(drop_point..);
+        let mut drained = tail.0.drain(drop_point..).next().clone();
         // add the new point
         if let Some(new_point) = new_point {
-            tail.0.push_back((new_point, drained.next().unwrap().1));
+            tail.0.push_back((new_point, drained.unwrap().1));
         }
     }
 }

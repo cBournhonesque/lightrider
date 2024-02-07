@@ -4,10 +4,12 @@ use clap::Parser;
 use shared::movement::MovementPlugin;
 use shared::network::config::Transports;
 use shared::SharedPlugin;
+use crate::debug::DebugPlugin;
 
 mod network;
 mod debug;
 
+pub const SERVER_PORT: u16 = 5000;
 
 #[derive(Parser, PartialEq, Debug)]
 pub struct Cli {
@@ -27,10 +29,13 @@ pub struct Cli {
 
 pub async fn app(cli: Cli) -> App {
     let mut app = App::new();
-    app.add_plugin(DefaultPlugins);
+    app.add_plugins(DefaultPlugins);
 
     // networking
     app.add_plugins(network::build_plugin(cli.port, cli.transport).await);
+
+    // debug
+    app.add_plugins(DebugPlugin);
 
     // shared
     app.add_plugins(SharedPlugin);

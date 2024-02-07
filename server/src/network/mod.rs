@@ -1,3 +1,5 @@
+pub(crate) mod bundle;
+
 use std::net::{Ipv4Addr, SocketAddr};
 use bevy::prelude::default;
 use bevy::utils::Duration;
@@ -14,7 +16,7 @@ pub(crate) async fn build_plugin(port: u16, transport: Transports) -> ServerPlug
         // if using webtransport, we load the certificate keys
         Transports::WebTransport => {
             let certificate =
-                Certificate::load("../certificates/cert.pem", "../certificates/key.pem")
+                Certificate::load("certificates/cert.pem", "certificates/key.pem")
                     .await
                     .unwrap();
             let digest = certificate.hashes()[0].fmt_as_dotted_hex();
