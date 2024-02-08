@@ -1,4 +1,5 @@
 use bevy::DefaultPlugins;
+use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
 use clap::Parser;
 
@@ -28,7 +29,18 @@ pub struct Cli {
 
 pub async fn app(cli: Cli) -> App {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins);
+    if cli.headless {
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(LogPlugin {
+            level: Level::INFO,
+            filter: "wgpu=error,bevy_ecs=trace".to_string(),
+        });
+    } else {
+        app.add_plugins(DefaultPlugins.set(LogPlugin {
+            level: Level::INFO,
+            filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
+        }));
+    }
 
     // networking
     app.add_plugins(network::NetworkPluginGroup::new(cli.port, cli.transport).await.build());

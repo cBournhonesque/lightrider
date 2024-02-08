@@ -1,6 +1,7 @@
 use std::net::Ipv4Addr;
-use bevy::app::App;
+use bevy::app::{App, PluginGroup};
 use bevy::DefaultPlugins;
+use bevy::log::{Level, LogPlugin};
 use clap::Parser;
 use shared::network::config::Transports;
 use shared::SharedPlugin;
@@ -38,7 +39,10 @@ pub struct Cli {
 
 pub fn app(cli: Cli) -> App {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins);
+    app.add_plugins(DefaultPlugins.set(LogPlugin {
+        level: Level::INFO,
+        filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
+    }));
 
     app.add_plugins(network::NetworkPlugin {
         client_id: cli.client_id,

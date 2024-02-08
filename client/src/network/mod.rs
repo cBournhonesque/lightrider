@@ -4,6 +4,7 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::ClientId;
 use shared::network::config::Transports;
 use crate::network::inputs::NetworkInputsPlugin;
+use crate::network::interpolation::InterpolationPlugin;
 
 pub(crate) mod config;
 mod inputs;
@@ -25,6 +26,7 @@ impl Plugin for NetworkPlugin {
             self.transport,
         ));
         app.add_plugins(NetworkInputsPlugin);
+        app.add_plugins(InterpolationPlugin);
         app.add_systems(Startup, connect);
     }
 }
