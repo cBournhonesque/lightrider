@@ -7,6 +7,7 @@ use crate::network::inputs::NetworkInputsPlugin;
 
 pub(crate) mod config;
 mod inputs;
+mod interpolation;
 
 pub(crate) struct NetworkPlugin {
     pub(crate) client_id: ClientId,

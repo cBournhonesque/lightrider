@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use bevy::prelude::*;
+use derive_more::{Add, Mul};
 use itertools::Itertools;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ impl Direction {
 }
 
 
-#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
+#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect, Add, Mul)]
 pub struct TailLength{
     pub current_size: f32,
     pub target_size: f32,
@@ -35,6 +36,10 @@ pub struct HeadPoint(pub Vec2);
 
 #[derive(Component, Message, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct HeadDirection(pub Direction);
+
+// #[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
+// // tail inflection points, from front (point closest to the head) to back (tail end point)
+// pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
 
 #[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 // tail inflection points, from front (point closest to the head) to back (tail end point)
@@ -66,11 +71,11 @@ impl TailPoints {
 }
 
 
-#[derive(Component, Message, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
+#[derive(Component, Message, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect, Add, Mul)]
 pub struct Speed(pub f32);
 
 
-#[derive(Component, Message, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
+#[derive(Component, Message, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect, Add, Mul)]
 pub struct Acceleration(pub f32);
 
 

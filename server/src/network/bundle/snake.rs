@@ -67,6 +67,7 @@ impl SnakeBundle {
     pub(crate) fn spawn(commands: &mut Commands, client_id: ClientId) {
         let mut replicate = Replicate {
             prediction_target: NetworkTarget::Single(client_id),
+            interpolation_target: NetworkTarget::AllExceptSingle(client_id),
             replication_group: Default::default(),
             ..default()
         };
@@ -76,6 +77,7 @@ impl SnakeBundle {
         ).id();
         let mut replicate = Replicate {
             prediction_target: NetworkTarget::Single(client_id),
+            interpolation_target: NetworkTarget::AllExceptSingle(client_id),
             // we want the tail to be part of the same replication group
             replication_group: ReplicationGroup::new_id(head_entity.to_bits()),
             ..default()

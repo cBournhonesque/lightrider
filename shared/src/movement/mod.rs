@@ -83,11 +83,11 @@ pub fn update_heads(
 
 // 5. update the back of the tails: shorten tail
 pub fn update_tails_back(
-    mut heads: Query<(&HeadPoint, &mut TailLength, Ref<HeadDirection>), Controlled>,
+    mut heads: Query<(&HeadPoint, &mut TailLength), Controlled>,
     mut query: Query<(&mut TailPoints, &TailParent), Controlled>
 ) {
     for (mut tail, parent) in query.iter_mut() {
-        let Ok((head, mut length, direction)) = heads.get_mut(parent.0) else {
+        let Ok((head, mut length)) = heads.get_mut(parent.0) else {
             error!("Update tails back: Snake tail has no parent head: {:?}", parent.0);
             continue;
         };
@@ -102,7 +102,8 @@ pub fn update_tails_back(
         // iterate from the tail to the front
         let mut drop_point = 0;
         let mut new_point = None;
-        for (i, (from, to)) in tail.pairs_back_to_front(&(head.0, direction.0)).enumerate() {
+        // the direction isn't used so we just use Up
+        for (i, (from, to)) in tail.pairs_back_to_front(&(head.0, Direction::Up)).enumerate() {
             let segment_size = from.0.distance(to.0);
 
             if segment_size >= shorten_amount {
@@ -127,6 +128,45 @@ pub fn update_tails_back(
 
         length.current_size = length.target_size;
     }
+}
+
+/// Shorten the tail to match the target size
+pub fn shorten_tail(tail: &mut TailPoints, head: &HeadPoint, tail_length: &mut TailLength) {
+    // if we still need to grow the tail, do nothing
+    if tail_length.target_size >= tail_length.current_size {
+        return;
+    }
+
+    // we need to shorten the tail
+    let mut shorten_amount = tail_length.current_size - tail_length.target_size;
+    // iterate from the tail to the front
+    let mut drop_point = 0;
+    let mut new_point = None;
+    // the direction isn't used so we just use Up
+    for (i, (from, to)) in tail.pairs_back_to_front(&(head.0, Direction::Up)).enumerate() {
+        let segment_size = from.0.distance(to.0);
+
+        if segment_size >= shorten_amount {
+            // we need to shorten this segment, and drop all the points past that
+            drop_point = tail.0.len() - 1 - i;
+            if segment_size > shorten_amount {
+                new_point = Some(from.0 + from.1.delta() * shorten_amount);
+            }
+            break;
+        } else {
+            // we still need to shorten more
+            shorten_amount -= segment_size;
+        }
+    }
+
+    // drop the tail points
+    let drained = tail.0.drain(drop_point..).next().unwrap();
+    // add the new point
+    if let Some(new_point) = new_point {
+        tail.0.push_back((new_point, drained.1));
+    }
+
+    tail_length.current_size = tail_length.target_size;
 }
 
 #[cfg(test)]

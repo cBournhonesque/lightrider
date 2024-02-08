@@ -15,7 +15,7 @@ impl Plugin for SnakeRenderPlugin {
 /// The components should be replicated from the server to the client
 pub(crate) fn draw_snakes(
     mut gizmos: Gizmos,
-    heads: Query<(&HeadPoint), Without<Confirmed>>,
+    heads: Query<&HeadPoint, Without<Confirmed>>,
     tails: Query<(&TailParent, &TailPoints), Without<Confirmed>>,
 ) {
     for (parent, points) in tails.iter() {
