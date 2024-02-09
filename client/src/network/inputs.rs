@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use leafwing_input_manager::prelude::{ActionState, InputMap};
 use lightyear::client::input_leafwing::LeafwingInputPlugin;
 use lightyear::prelude::client::*;
+
 use shared::network::protocol::{GameProtocol, PlayerMovement};
 use shared::network::protocol::prelude::*;
 
@@ -23,7 +24,7 @@ impl Plugin for NetworkInputsPlugin {
 
 fn add_player_inputs(
     mut commands: Commands,
-    predicted_snakes: Query<Entity, (Added<HeadPoint>, With<Predicted>)>
+    predicted_snakes: Query<Entity, (Added<TailPoints>, With<Predicted>)>
 ) {
     for entity in predicted_snakes.iter() {
         commands.entity(entity).insert(

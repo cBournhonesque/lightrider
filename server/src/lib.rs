@@ -8,6 +8,7 @@ use shared::SharedPlugin;
 
 mod network;
 mod debug;
+pub(crate) mod collision;
 
 pub const SERVER_PORT: u16 = 5000;
 
@@ -47,6 +48,9 @@ pub async fn app(cli: Cli) -> App {
 
     // debug
     app.add_plugins(debug::DebugPlugin);
+
+    // collisions
+    app.add_plugins(collision::CollisionPlugin);
 
     // shared
     app.add_plugins(SharedPlugin);

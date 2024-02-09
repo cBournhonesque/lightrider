@@ -1,8 +1,11 @@
 use std::net::SocketAddr;
+
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::ClientId;
+
 use shared::network::config::Transports;
+
 use crate::network::inputs::NetworkInputsPlugin;
 use crate::network::interpolation::InterpolationPlugin;
 

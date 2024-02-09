@@ -1,7 +1,7 @@
-use leafwing_input_manager::prelude::*;
 use bevy::prelude::*;
+use leafwing_input_manager::prelude::*;
 use lightyear::prelude::LeafwingUserAction;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash, Reflect, Actionlike)]
 pub enum PlayerMovement {

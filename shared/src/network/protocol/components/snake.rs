@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
+
 use bevy::prelude::*;
 use derive_more::{Add, Mul};
 use itertools::Itertools;
 use lightyear::prelude::*;
+use parry2d::math::Point;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
@@ -32,25 +34,15 @@ pub struct TailLength{
 }
 
 #[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
-pub struct HeadPoint(pub Vec2);
-
-#[derive(Component, Message, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
-pub struct HeadDirection(pub Direction);
-
-// #[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
-// // tail inflection points, from front (point closest to the head) to back (tail end point)
-// pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
-
-#[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
-// tail inflection points, from front (point closest to the head) to back (tail end point)
+// tail inflection points, from front (head point) to back (tail end point)
 pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
 
 // TODO: replace this with Parent in bevy 0.13
 #[derive(Component, Message, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 #[message(custom_map)]
-pub struct TailParent(pub Entity);
+pub struct HasPlayer(pub Entity);
 
-impl<'a> MapEntities<'a> for TailParent {
+impl<'a> MapEntities<'a> for HasPlayer {
     fn map_entities(&mut self, entity_mapper: Box<dyn EntityMapper + 'a>) {
         self.0.map_entities(entity_mapper);
     }
@@ -61,12 +53,24 @@ impl<'a> MapEntities<'a> for TailParent {
 }
 
 impl TailPoints {
-    pub fn pairs_front_to_back<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
-        std::iter::once(head).chain(self.0.iter()).tuple_windows().map(|(a, b)| (b, a))
+
+    pub fn front(&self) -> &(Vec2, Direction) {
+        self.0.front().unwrap()
     }
 
-    pub fn pairs_back_to_front<'a>(&'a self, head: &'a (Vec2, Direction)) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
-        self.0.iter().rev().chain(std::iter::once(head)).tuple_windows()
+    pub fn front_mut(&mut self) -> &mut (Vec2, Direction) {
+        self.0.front_mut().unwrap()
+    }
+    pub fn pairs_front_to_back<'a>(&'a self) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
+        self.0.iter().tuple_windows().map(|(a, b)| (b, a))
+    }
+
+    pub fn pairs_back_to_front<'a>(&'a self) -> impl Iterator<Item = (&(Vec2, Direction), &(Vec2, Direction))> {
+        self.0.iter().rev().tuple_windows()
+    }
+
+    pub fn points_front_to_back(&self) -> Vec<Point<f32>> {
+        self.0.iter().map(|(v, _)| Point::new(v.x, v.y)).collect()
     }
 }
 
@@ -85,16 +89,16 @@ mod tests {
 
     #[test]
     fn test_tail_pairs() {
-        let head = (Vec2::new(0.0, 0.0), Direction::Right);
         let tail = TailPoints(VecDeque::from(vec![
+            (Vec2::new(0.0, 0.0), Direction::Right),
             (Vec2::new(0.0, 1.0), Direction::Down),
             (Vec2::new(-2.0, 1.0), Direction::Right),
         ]));
-        assert_eq!(tail.pairs_front_to_back(&head).collect_vec(), vec![
+        assert_eq!(tail.pairs_front_to_back().collect_vec(), vec![
             (&(Vec2::new(0.0, 1.0), Direction::Down), &(Vec2::new(0.0, 0.0), Direction::Right)),
             (&(Vec2::new(-2.0, 1.0), Direction::Right), &(Vec2::new(0.0, 1.0), Direction::Down)),
         ]);
-        assert_eq!(tail.pairs_back_to_front(&head).collect_vec(), vec![
+        assert_eq!(tail.pairs_back_to_front().collect_vec(), vec![
             (&(Vec2::new(-2.0, 1.0), Direction::Right), &(Vec2::new(0.0, 1.0), Direction::Down)),
             (&(Vec2::new(0.0, 1.0), Direction::Down), &(Vec2::new(0.0, 0.0), Direction::Right)),
         ]);

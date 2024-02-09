@@ -1,4 +1,4 @@
 use lightyear::prelude::Channel;
 
 #[derive(Channel)]
-pub struct Channel1;
+pub struct GameChannel;

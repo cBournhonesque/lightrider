@@ -1,8 +1,10 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
+
 use bevy::prelude::default;
 use lightyear::prelude::*;
 use lightyear::prelude::client::*;
+
 use shared::network::config::{KEY, PROTOCOL_ID, shared_config, Transports};
 use shared::network::protocol::{GameProtocol, protocol};
 
@@ -35,9 +37,9 @@ pub(crate) fn build_plugin(
         Transports::WebSocket => TransportConfig::WebSocketClient { server_addr },
     };
     let link_conditioner = LinkConditionerConfig {
-        incoming_latency: Duration::from_millis(100),
-        incoming_jitter: Duration::from_millis(40),
-        incoming_loss: 0.05,
+        incoming_latency: Duration::from_millis(40),
+        incoming_jitter: Duration::from_millis(4),
+        incoming_loss: 0.01,
     };
     let io = Io::from_config(
         IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),

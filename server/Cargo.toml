@@ -20,6 +20,7 @@ lightyear = { git = "https://github.com/cBournhonesque/lightyear", branch = "mai
     "websocket",
     "render",
 ] }
+bevy_xpbd_2d = "0.3.3"
 leafwing-input-manager = "0.11.2"
 serde = { version = "1.0.188", features = ["derive"] }
 anyhow = { version = "1.0.75", features = [] }

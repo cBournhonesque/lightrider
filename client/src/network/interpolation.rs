@@ -4,8 +4,9 @@
 use bevy::prelude::*;
 use lightyear::prelude::*;
 use lightyear::prelude::client::*;
+
 use shared::movement::shorten_tail;
-use shared::network::protocol::prelude::{Direction, HeadDirection, HeadPoint, TailLength, TailParent, TailPoints};
+use shared::network::protocol::prelude::{Direction, TailLength, TailPoints};
 
 // TODO: we might not need to do this at all for TailLength, Speed, Acceleration
 //  because we only need to interpolate the visual representation of the snake
@@ -21,63 +22,34 @@ impl Plugin for InterpolationPlugin {
 }
 
 pub(crate) fn interpolate_snake(
-    mut heads: Query<
-        (&mut HeadPoint, &mut HeadDirection, &mut TailLength, &InterpolateStatus<HeadPoint>, &InterpolateStatus<HeadDirection>, &InterpolateStatus<TailLength>)>,
-    mut tails: Query<(&TailParent, &mut TailPoints, &InterpolateStatus<TailPoints>)>
+    mut tails: Query<(&mut TailPoints, &InterpolateStatus<TailPoints>, &mut TailLength, &InterpolateStatus<TailLength>)>
 ) {
-    for (parent, mut tail, tail_status) in tails.iter_mut() {
-        let Ok((mut head_point, mut head_direction, mut length,  head_point_status, head_direction_status, length_status)) = heads.get_mut(parent.0) else {
-            continue;
-        };
-
+    for (mut tail, tail_status, mut length, length_status) in tails.iter_mut() {
         let Some((start_tick, tail_start)) = &tail_status.start else {
             continue;
         };
-        // NOTE: it's not guaranteed that the other components are also doing interpolation,
-        // because the interpolation history is only updated if the component changed
-        // if there's no
-        let Some((_, head_point_start)) = &head_point_status.start else {
-            panic!("we should also have a head point start");
-        };
-        let head_direction_start = head_direction_status.start.as_ref().map_or_else(
-            || head_direction.as_ref(),
-            |(_, dir)| dir
-        );
         let Some((_, length_start)) = &length_status.start else {
             panic!("we should also have a tail length start");
         };
         trace!(
-            ?head_point,
-            ?head_point_status,
             ?tail,
             ?tail_status,
             "interpolate situation"
         );
         if tail_status.current == *start_tick {
             *tail = tail_start.clone();
-            *head_point = head_point_start.clone();
-            *head_direction = head_direction_start.clone();
             *length = length_start.clone();
             continue;
         }
 
-
         let Some((end_tick, tail_end)) = &tail_status.end else {
             continue;
-        };
-
-        let Some((_, head_point_end)) = &head_point_status.end else {
-            panic!("we should also have a head point end");
         };
         let Some((_, length_end)) = &length_status.end else {
             panic!("we should also have a tail length end");
         };
         if tail_status.current == *end_tick {
             *tail = tail_end.clone();
-            *head_point = head_point_end.clone();
-            if let Some((_, head_direction_end)) = &head_direction_status.end {
-                *head_direction = head_direction_end.clone();
-            }
             *length = length_end.clone();
             continue;
         }
@@ -86,8 +58,6 @@ pub(crate) fn interpolate_snake(
         // we need to interpolate between the two tails. It will be similar to the start tail with some added points
         // at the front, and then we will remove points from the back to respect the length
         *tail = tail_start.clone();
-        *head_point = head_point_start.clone();
-        *head_direction = head_direction_start.clone();
 
         // interpolation ratio
         let t = (tail_status.current - *start_tick) as f32
@@ -106,13 +76,14 @@ pub(crate) fn interpolate_snake(
 
         // 1. we need to find in which end tail segment the start head is, and the difference in length
         //    between the two tails
-        for (i, (from, to)) in tail_end.pairs_front_to_back(&(head_point_end.0, Direction::Up)).enumerate() {
+        for (i, (from, to)) in tail_end.pairs_front_to_back().enumerate() {
             // we found the segment on which the head point is
-            if shared::utils::geometry::segment_contains_point(&from.0, &to.0, &head_point_start.0) {
-                tail_diff_length += to.0.distance(head_point_start.0);
+            if shared::utils::geometry::segment_contains_point(&from.0, &to.0, &tail.front().0) {
+                tail_diff_length += to.0.distance(tail.front().0);
                 // if the head point is at a turn point, we need to add a turn point right now before we move the head point
                 // in the later stage (only if it's actually turning!)
-                if head_point_start.0 == from.0 && head_direction.0 != from.1 {
+                if tail.front().0 == from.0 && tail.front().1 != from.1 {
+                    tail.front_mut().1 = from.1;
                     tail.0.push_front(from.clone());
                 }
                 pos_distance_to_move = t * tail_diff_length;
@@ -122,6 +93,9 @@ pub(crate) fn interpolate_snake(
                 tail_diff_length += from.0.distance(to.0);
             }
         }
+        if pos_distance_to_move == 0.0 {
+            continue;
+        }
         if segment_idx == usize::MAX {
             // the difference between start/end is bigger than the length of the snake
             panic!("could not find segment on which the head point is");
@@ -129,28 +103,32 @@ pub(crate) fn interpolate_snake(
 
         // 2. now move the head point by `pos_distance_to_move` while remaining on the end tail path
         length.current_size += pos_distance_to_move;
-        for (from, to) in tail_end.pairs_back_to_front(&(head_point_end.0, Direction::Up)).skip(tail_end.0.len() - 1 - segment_idx) {
-            // if pos_distance_to_move < 1000.0 * f32::EPSILON {
-            //     info!("found final segment, on point start?");
-            //     break;
-            // }
-            let dist = head_point.0.distance(to.0);
+        for (from, to) in tail_end.pairs_back_to_front().skip(tail_end.0.len() - 2 - segment_idx) {
+            let dist = tail.front().0.distance(to.0);
             // the head tail has to go to the next segment
-            if dist < pos_distance_to_move {
-                pos_distance_to_move -= dist;
-                tail.0.push_front(to.clone());
-                head_point.0 = to.0;
+            if dist <= pos_distance_to_move {
+                // move the front of the tail to the end of the segment
+                tail.front_mut().0 = to.0;
+                tail.front_mut().1 = to.1;
+                if dist == pos_distance_to_move {
+                    // we advanced by the correct amount
+                    break;
+                } else {
+                    // add a new point
+                    pos_distance_to_move -= dist;
+                    tail.0.push_front(to.clone());
+                }
             } else {
                 trace!("finished moving head point on the tail path");
                 // we found the segment on which the head point is
-                head_point.0 += from.1.delta() * pos_distance_to_move;
-                head_direction.0 = from.1;
+                tail.front_mut().0 += from.1.delta() * pos_distance_to_move;
+                tail.front_mut().1 = from.1;
                 break;
             }
         }
 
         // 3. then shorten the back of the tail
-        shorten_tail(&mut tail, &head_point, &mut length);
+        shorten_tail(&mut tail, &mut length);
     }
 }
 
@@ -188,75 +166,65 @@ pub(crate) fn interpolate_snake(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+
     use super::*;
 
     #[test]
     fn test_interpolate_single_segment() {
         let mut app = App::new();
-        let head = app.world.spawn( (
-                    HeadPoint(Vec2::new(0.0, 0.0)),
-                    HeadDirection(Direction::Up),
-                    TailLength {
-                        current_size: 100.0,
-                        target_size: 100.0,
-                    },
-                    InterpolateStatus::<HeadPoint> {
-                        start: Some((Tick(0), HeadPoint(Vec2::new(0.0, 0.0)))),
-                        end: Some((Tick(4), HeadPoint(Vec2::new(0.0, 20.0)))),
-                        current: Tick(2),
-                    },
-                    InterpolateStatus::<HeadDirection> {
-                        start: Some((Tick(0), HeadDirection(Direction::Up))),
-                        end: Some((Tick(4), HeadDirection(Direction::Up))),
-                        current: Tick(2),
-                    },
-                    InterpolateStatus::<TailLength> {
-                        start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
-                        end: Some((Tick(4), TailLength { current_size: 100.0, target_size: 100.0 })),
-                        current: Tick(2),
-                    },
-        )).id();
         let tail = app.world.spawn((
-            TailParent(head),
             TailPoints(VecDeque::default()),
             InterpolateStatus::<TailPoints> {
                 start: Some((Tick(0), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, -100.0), Direction::Up)]
+                    [(Vec2::new(0.0, 0.0), Direction::Up),
+                        (Vec2::new(0.0, -100.0), Direction::Up)]
                 )))),
                 end: Some((Tick(4), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, -80.0), Direction::Up)]
+                    [(Vec2::new(0.0, 20.0), Direction::Up),
+                        (Vec2::new(0.0, -80.0), Direction::Up)]
                 )))),
+                current: Tick(2),
+            },
+            TailLength {
+                current_size: 100.0,
+                target_size: 100.0,
+            },
+            InterpolateStatus::<TailLength> {
+                start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
+                end: Some((Tick(4), TailLength { current_size: 100.0, target_size: 100.0 })),
                 current: Tick(2),
             },
         )).id();
 
         app.add_systems(Update, interpolate_snake);
         app.update();
-        assert_eq!(app.world.entity(head).get::<HeadPoint>().unwrap().0, Vec2::new(0.0, 10.0));
         assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap().0, VecDeque::from(
-            [(Vec2::new(0.0, -90.0), Direction::Up)]
+            [(Vec2::new(0.0, 10.0), Direction::Up),
+                (Vec2::new(0.0, -90.0), Direction::Up)]
         ));
     }
 
     #[test]
     fn test_interpolate_turn_big_move() {
         let mut app = App::new();
-        let head = app.world.spawn( (
-            HeadPoint(Vec2::new(0.0, 0.0)),
-            HeadDirection(Direction::Up),
+        let tail = app.world.spawn((
+            TailPoints(VecDeque::default()),
+            InterpolateStatus::<TailPoints> {
+                start: Some((Tick(0), TailPoints(VecDeque::from(
+                    [
+                        (Vec2::new(0.0, 0.0), Direction::Up),
+                        (Vec2::new(0.0, -120.0), Direction::Up)]
+                )))),
+                end: Some((Tick(4), TailPoints(VecDeque::from(
+                    [(Vec2::new(50.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, -20.0), Direction::Up)]
+                )))),
+                current: Tick(3),
+            },
             TailLength {
                 current_size: 120.0,
                 target_size: 120.0,
-            },
-            InterpolateStatus::<HeadPoint> {
-                start: Some((Tick(0), HeadPoint(Vec2::new(0.0, 0.0)))),
-                end: Some((Tick(4), HeadPoint(Vec2::new(50.0, 50.0)))),
-                current: Tick(3),
-            },
-            InterpolateStatus::<HeadDirection> {
-                start: Some((Tick(0), HeadDirection(Direction::Up))),
-                end: Some((Tick(4), HeadDirection(Direction::Right))),
-                current: Tick(3),
             },
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
@@ -264,26 +232,13 @@ mod tests {
                 current: Tick(3),
             },
         )).id();
-        let tail = app.world.spawn((
-            TailParent(head),
-            TailPoints(VecDeque::default()),
-            InterpolateStatus::<TailPoints> {
-                start: Some((Tick(0), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, -120.0), Direction::Up)]
-                )))),
-                end: Some((Tick(4), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, 50.0), Direction::Right),
-                        (Vec2::new(0.0, -20.0), Direction::Up)]
-                )))),
-                current: Tick(3),
-            },
-        )).id();
 
         app.add_systems(Update, interpolate_snake);
         app.update();
-        assert_eq!(app.world.entity(head).get::<HeadPoint>().unwrap().0, Vec2::new(25.0, 50.0));
         assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap().0, VecDeque::from(
-            [(Vec2::new(0.0, 50.0), Direction::Right),
+            [
+                (Vec2::new(25.0, 50.0), Direction::Right),
+                (Vec2::new(0.0, 50.0), Direction::Right),
                 (Vec2::new(0.0, -45.0), Direction::Up)]
         ));
     }
@@ -291,22 +246,26 @@ mod tests {
     #[test]
     fn test_interpolate_turn_small_move() {
         let mut app = App::new();
-        let head = app.world.spawn( (
-            HeadPoint(Vec2::new(0.0, 0.0)),
-            HeadDirection(Direction::Up),
+        let tail = app.world.spawn((
+            TailPoints(VecDeque::default()),
+            InterpolateStatus::<TailPoints> {
+                start: Some((Tick(0), TailPoints(VecDeque::from(
+                    [
+                        (Vec2::new(40.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, -10.0), Direction::Up)]
+                )))),
+                end: Some((Tick(4), TailPoints(VecDeque::from(
+                    [
+                        (Vec2::new(50.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, 0.0), Direction::Up)]
+                )))),
+                current: Tick(3),
+            },
             TailLength {
                 current_size: 100.0,
                 target_size: 100.0,
-            },
-            InterpolateStatus::<HeadPoint> {
-                start: Some((Tick(0), HeadPoint(Vec2::new(40.0, 50.0)))),
-                end: Some((Tick(4), HeadPoint(Vec2::new(50.0, 50.0)))),
-                current: Tick(3),
-            },
-            InterpolateStatus::<HeadDirection> {
-                start: Some((Tick(0), HeadDirection(Direction::Right))),
-                end: Some((Tick(4), HeadDirection(Direction::Right))),
-                current: Tick(3),
             },
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
@@ -314,27 +273,13 @@ mod tests {
                 current: Tick(3),
             },
         )).id();
-        let tail = app.world.spawn((
-            TailParent(head),
-            TailPoints(VecDeque::default()),
-            InterpolateStatus::<TailPoints> {
-                start: Some((Tick(0), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, 50.0), Direction::Right),
-                        (Vec2::new(0.0, -10.0), Direction::Up)]
-                )))),
-                end: Some((Tick(4), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, 50.0), Direction::Right),
-                        (Vec2::new(0.0, 0.0), Direction::Up)]
-                )))),
-                current: Tick(3),
-            },
-        )).id();
 
         app.add_systems(Update, interpolate_snake);
         app.update();
-        assert_eq!(app.world.entity(head).get::<HeadPoint>().unwrap().0, Vec2::new(47.5, 50.0));
         assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap().0, VecDeque::from(
-            [(Vec2::new(0.0, 50.0), Direction::Right),
+            [
+                (Vec2::new(47.5, 50.0), Direction::Right),
+                (Vec2::new(0.0, 50.0), Direction::Right),
                 (Vec2::new(0.0, -2.5), Direction::Up)]
         ));
     }
@@ -342,22 +287,24 @@ mod tests {
     #[test]
     fn test_interpolate_on_turn_point() {
         let mut app = App::new();
-        let head = app.world.spawn( (
-            HeadPoint(Vec2::new(0.0, 0.0)),
-            HeadDirection(Direction::Up),
+        let tail = app.world.spawn((
+            TailPoints(VecDeque::default()),
+            InterpolateStatus::<TailPoints> {
+                start: Some((Tick(0), TailPoints(VecDeque::from(
+                    [(Vec2::new(0.0, 0.0), Direction::Up),
+                        (Vec2::new(0.0, -100.0), Direction::Up)]
+                )))),
+                end: Some((Tick(4), TailPoints(VecDeque::from(
+                    [
+                        (Vec2::new(50.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, 50.0), Direction::Right),
+                        (Vec2::new(0.0, 0.0), Direction::Up)]
+                )))),
+                current: Tick(2),
+            },
             TailLength {
                 current_size: 100.0,
                 target_size: 100.0,
-            },
-            InterpolateStatus::<HeadPoint> {
-                start: Some((Tick(0), HeadPoint(Vec2::new(0.0, 0.0)))),
-                end: Some((Tick(4), HeadPoint(Vec2::new(50.0, 50.0)))),
-                current: Tick(2),
-            },
-            InterpolateStatus::<HeadDirection> {
-                start: Some((Tick(0), HeadDirection(Direction::Up))),
-                end: Some((Tick(4), HeadDirection(Direction::Right))),
-                current: Tick(2),
             },
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
@@ -365,48 +312,38 @@ mod tests {
                 current: Tick(2),
             },
         )).id();
-        let tail = app.world.spawn((
-            TailParent(head),
-            TailPoints(VecDeque::default()),
-            InterpolateStatus::<TailPoints> {
-                start: Some((Tick(0), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, -100.0), Direction::Up)]
-                )))),
-                end: Some((Tick(4), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, 50.0), Direction::Right),
-                        (Vec2::new(0.0, 0.0), Direction::Up)]
-                )))),
-                current: Tick(2),
-            },
-        )).id();
 
         app.add_systems(Update, interpolate_snake);
         app.update();
-        assert_eq!(app.world.entity(head).get::<HeadPoint>().unwrap().0, Vec2::new(0.0, 50.0));
         assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap().0, VecDeque::from(
-            [(Vec2::new(0.0, -50.0), Direction::Up)]
+            [
+                (Vec2::new(0.0, 50.0), Direction::Right),
+                (Vec2::new(0.0, -50.0), Direction::Up)]
         ));
     }
 
     #[test]
     fn test_interpolate_immediate_turn() {
         let mut app = App::new();
-        let head = app.world.spawn( (
-            HeadPoint(Vec2::new(0.0, 0.0)),
-            HeadDirection(Direction::Up),
+        let tail = app.world.spawn((
+            TailPoints(VecDeque::default()),
+            InterpolateStatus::<TailPoints> {
+                start: Some((Tick(0), TailPoints(VecDeque::from(
+                    [
+                        (Vec2::new(0.0, 0.0), Direction::Up),
+                        (Vec2::new(0.0, -100.0), Direction::Up)]
+                )))),
+                end: Some((Tick(4), TailPoints(VecDeque::from(
+                    [
+                        (Vec2::new(50.0, 50.0), Direction::Right),
+                        (Vec2::new(50.0, 0.0), Direction::Up),
+                        (Vec2::new(0.0, 0.0), Direction::Right)]
+                )))),
+                current: Tick(2),
+            },
             TailLength {
                 current_size: 100.0,
                 target_size: 100.0,
-            },
-            InterpolateStatus::<HeadPoint> {
-                start: Some((Tick(0), HeadPoint(Vec2::new(0.0, 0.0)))),
-                end: Some((Tick(4), HeadPoint(Vec2::new(50.0, 50.0)))),
-                current: Tick(2),
-            },
-            InterpolateStatus::<HeadDirection> {
-                start: Some((Tick(0), HeadDirection(Direction::Up))),
-                end: Some((Tick(4), HeadDirection(Direction::Right))),
-                current: Tick(2),
             },
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
@@ -414,26 +351,13 @@ mod tests {
                 current: Tick(2),
             },
         )).id();
-        let tail = app.world.spawn((
-            TailParent(head),
-            TailPoints(VecDeque::default()),
-            InterpolateStatus::<TailPoints> {
-                start: Some((Tick(0), TailPoints(VecDeque::from(
-                    [(Vec2::new(0.0, -100.0), Direction::Up)]
-                )))),
-                end: Some((Tick(4), TailPoints(VecDeque::from(
-                    [(Vec2::new(50.0, 0.0), Direction::Up),
-                        (Vec2::new(0.0, 0.0), Direction::Right)]
-                )))),
-                current: Tick(2),
-            },
-        )).id();
 
         app.add_systems(Update, interpolate_snake);
         app.update();
-        assert_eq!(app.world.entity(head).get::<HeadPoint>().unwrap().0, Vec2::new(50.0, 0.0));
         assert_eq!(app.world.entity(tail).get::<TailPoints>().unwrap().0, VecDeque::from(
-            [(Vec2::new(0.0, 0.0), Direction::Right),
+            [
+                (Vec2::new(50.0, 0.0), Direction::Up),
+                (Vec2::new(0.0, 0.0), Direction::Right),
                 (Vec2::new(0.0, -50.0), Direction::Up)]
         ));
     }

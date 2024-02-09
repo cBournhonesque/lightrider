@@ -1,6 +1,6 @@
 use clap::Parser;
-use client::{app, Cli};
 
+use client::{app, Cli};
 
 #[tokio::main]
 async fn main() {

@@ -1,3 +1,4 @@
+pub use movement::PlayerMovement;
+
 mod movement;
 
-pub use movement::PlayerMovement;

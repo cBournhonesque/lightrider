@@ -1,8 +1,10 @@
 use std::net::Ipv4Addr;
+
 use bevy::app::{App, PluginGroup};
 use bevy::DefaultPlugins;
 use bevy::log::{Level, LogPlugin};
 use clap::Parser;
+
 use shared::network::config::Transports;
 use shared::SharedPlugin;
 

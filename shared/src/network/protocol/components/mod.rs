@@ -1,33 +1,27 @@
 use lightyear::prelude::component_protocol;
+// TODO: why is this import needed?
 use leafwing_input_manager::prelude::ActionState;
+
+use super::GameProtocol;
 
 pub mod snake;
 pub mod player;
 
-use super::GameProtocol;
-
-
 #[component_protocol(protocol = GameProtocol)]
 pub enum Components {
     // snake
-    // tail
     #[sync(full, lerp = "NullInterpolator")]
     TailPoints(snake::TailPoints),
-    #[sync(once)]
-    TailParent(snake::TailParent),
-    // head
     #[sync(full, lerp = "NullInterpolator")]
     TailLength(snake::TailLength),
-    #[sync(full, lerp = "NullInterpolator")]
-    HeadPoint(snake::HeadPoint),
-    #[sync(full, lerp = "NullInterpolator")]
-    HeadDirection(snake::HeadDirection),
     #[sync(full, lerp = "NullInterpolator")]
     Speed(snake::Speed),
     #[sync(full, lerp = "NullInterpolator")]
     Acceleration(snake::Acceleration),
-    // player
     #[sync(once)]
+    HasPlayer(snake::HasPlayer),
+    // player
+    #[sync(simple)]
     Player(player::Player),
 }
 

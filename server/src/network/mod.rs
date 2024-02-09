@@ -1,16 +1,16 @@
-pub(crate) mod bundle;
-mod config;
-mod events;
-mod inputs;
-
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
-
 use lightyear::prelude::server::*;
-use shared::network::config::{Transports};
-use shared::network::protocol::{GameProtocol};
+
+use shared::network::config::Transports;
+use shared::network::protocol::GameProtocol;
+
 use crate::network::inputs::NetworkInputsPlugin;
 
+pub(crate) mod bundle;
+mod config;
+mod connection_events;
+mod inputs;
 
 pub(crate) struct NetworkPluginGroup {
     pub(crate) lightyear: ServerPlugin<GameProtocol>,
@@ -40,8 +40,12 @@ impl Plugin for NetworkPlugin {
         // plugins
         app.add_plugins(NetworkInputsPlugin);
 
+        // resources
+        app.init_resource::<connection_events::Global>();
+
         // systems
-        app.add_systems(Update, events::handle_connections);
+        app.add_systems(Update, (connection_events::handle_connections, connection_events::handle_disconnections));
+
     }
 }
 
