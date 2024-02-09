@@ -1,6 +1,8 @@
 use bevy::prelude::*;
+use bevy::utils::EntityHashSet;
 use leafwing_input_manager::prelude::ActionState;
 use lightyear::prelude::*;
+use crate::collision::collider::{MAX_FRICTION_DISTANCE, snake_friction, SnakeFrictionEvent};
 
 use crate::network::protocol::components::snake::Direction;
 use crate::network::protocol::prelude::*;
@@ -14,10 +16,16 @@ pub enum SimulationSet {
     Movement,
 }
 
+pub const MIN_SPEED: f32 = 1.0;
+pub const MAX_SPEED: f32 = 4.0;
+
 
 impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
+        // events
+        app.add_event::<SnakeFrictionEvent>();
 
+        // sets
         app.configure_sets(FixedUpdate, SimulationSet::Movement.in_set(FixedUpdateSet::Main));
 
         // 1. turn heads if we received inputs -> done automatically during replication
@@ -26,7 +34,7 @@ impl Plugin for MovementPlugin {
         // 4. update heads: integrate acceleration into velocity, integrate velocity into position
         // 5. update the back of the tails: shorten tail
         app.add_systems(FixedUpdate,
-                        (turn_heads, update_tails)
+                        (turn_heads, update_acceleration.after(snake_friction), update_tails)
                             .chain()
                             .in_set(SimulationSet::Movement)
         );
@@ -59,8 +67,32 @@ pub fn turn_heads(
     }
 }
 
+pub const BASE_ACCELERATION: f32 = -0.01;
+pub const ACCELERATION_RATIO: f32 = 2.0;
+
 // 2. update acceleration (are there close snakes?)
-// TODO
+// - we start accelerating when we are close to another snake
+// - otherwise we keep decelerating until we reach minimum speed
+// - i'd like to add some easing; i.e have the change in acceleration not take place instantly
+pub fn update_acceleration(
+    mut events: EventReader<SnakeFrictionEvent>,
+    mut snakes: Query<(Entity, &mut Acceleration), Controlled>
+) {
+    let mut accelerating_snakes = EntityHashSet::default();
+    for event in events.read() {
+        let Ok((_, mut acceleration)) = snakes.get_mut(event.main) else {
+            continue;
+        };
+        accelerating_snakes.insert(event.main);
+        acceleration.set_if_neq(Acceleration(BASE_ACCELERATION.abs() * ACCELERATION_RATIO * (MAX_FRICTION_DISTANCE - event.distance) / MAX_FRICTION_DISTANCE));
+    }
+    // TODO: we'd like to add easing to this
+    for (entity, mut acceleration) in snakes.iter_mut() {
+        if !accelerating_snakes.contains(&entity) {
+            acceleration.set_if_neq(Acceleration(BASE_ACCELERATION));
+        }
+    }
+}
 
 // 3. update front of the tail: possibly add a new inflection point if necessary
 // 4. update acceleration and speed
@@ -78,7 +110,12 @@ pub fn update_tails(
 
         // 4. update acceleration and speed
         // update velocity
-        speed.0 += acceleration.0;
+        // do not update speed if we are at min speed and acceleration is negative
+        // do not update speed if we are at max speed and acceleration is positive
+        if !((acceleration.0 < 0.0 && speed.0 == MIN_SPEED) || (acceleration.0 > 0.0 && speed.0 == MAX_SPEED)) {
+            speed.0 += acceleration.0;
+            speed.0 = speed.0.max(MIN_SPEED).min(MAX_SPEED);
+        }
 
         // update position
         tail.0.front_mut().map(|(pos, dir)| *pos += dir.delta() * speed.0);

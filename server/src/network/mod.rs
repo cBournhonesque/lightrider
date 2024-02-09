@@ -7,7 +7,6 @@ use shared::network::protocol::GameProtocol;
 
 use crate::network::inputs::NetworkInputsPlugin;
 
-pub(crate) mod bundle;
 mod config;
 mod connection_events;
 mod inputs;

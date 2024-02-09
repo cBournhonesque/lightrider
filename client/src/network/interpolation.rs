@@ -17,7 +17,7 @@ pub struct InterpolationPlugin;
 
 impl Plugin for InterpolationPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, interpolate_snake);
+        app.add_systems(Update, interpolate_snake.in_set(InterpolationSet::Interpolate));
     }
 }
 

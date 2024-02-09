@@ -3,12 +3,13 @@ use lightyear::prelude::NetworkTarget;
 use tracing::error;
 use shared::network::protocol::prelude::*;
 use shared::network::protocol::ServerConnectionManager;
-use crate::collision::collider::ColliderSet;
+use shared::collision::collider::ColliderSet;
 
 pub struct DeathPlugin;
 
 impl Plugin for DeathPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(Update, handle_collision.after(ColliderSet::ComputeCollision));
         app.add_systems(Update, handle_collision.after(ColliderSet::ComputeCollision));
     }
 }

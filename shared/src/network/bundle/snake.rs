@@ -7,18 +7,18 @@ use bevy_xpbd_2d::prelude::{CollisionLayers, Position, Rotation};
 use leafwing_input_manager::prelude::ActionState;
 use lightyear::prelude::{ClientId, NetworkTarget, ReplicationGroup};
 
-use shared::network::protocol::prelude::*;
-use shared::network::protocol::prelude::Direction;
-use shared::network::protocol::Replicate;
+use crate::network::protocol::prelude::*;
+use crate::network::protocol::prelude::Direction;
+use crate::network::protocol::Replicate;
 
 use crate::collision::layers::CollideLayer;
+use crate::movement::MIN_SPEED;
 
-pub const TAIL_SIZE: f32 = 100.0;
+pub const TAIL_SIZE: f32 = 200.0;
 
-pub const START_SPEED: f32 = 0.5;
 
 #[derive(Bundle)]
-pub(crate) struct SnakeBundle {
+pub struct SnakeBundle {
     // main
     pub tail_length: TailLength,
     pub speed: Speed,
@@ -48,7 +48,7 @@ impl Default for SnakeBundle {
                 current_size: TAIL_SIZE,
                 target_size: TAIL_SIZE,
             },
-            speed: Speed(START_SPEED),
+            speed: Speed(MIN_SPEED),
             acceleration: Acceleration(0.0),
             position: Position::default(),
             rotation: Rotation::default(),
@@ -67,7 +67,7 @@ impl SnakeBundle {
     //     });
     // }
 
-    pub(crate) fn spawn(commands: &mut Commands, client_id: ClientId) -> Entity {
+    pub fn spawn(commands: &mut Commands, client_id: ClientId) -> Entity {
         let mut replicate = Replicate {
             prediction_target: NetworkTarget::Single(client_id),
             interpolation_target: NetworkTarget::AllExceptSingle(client_id),

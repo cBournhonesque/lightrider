@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::transform::TransformSystem;
 use lightyear::prelude::client::*;
 
 use shared::network::protocol::prelude::*;
@@ -7,7 +8,7 @@ pub(crate) struct SnakeRenderPlugin;
 
 impl Plugin for SnakeRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, draw_snakes);
+        app.add_systems(PostUpdate, draw_snakes.before(TransformSystem::TransformPropagate));
     }
 }
 
@@ -16,7 +17,11 @@ impl Plugin for SnakeRenderPlugin {
 pub(crate) fn draw_snakes(
     mut gizmos: Gizmos,
     tails: Query<&TailPoints, Without<Confirmed>>,
+    interp_snake: Query<&TailPoints, With<Interpolated>>,
 ) {
+    for points in interp_snake.iter() {
+        info!(front = ?points.front());
+    }
     for points in tails.iter() {
         // draw the head
         gizmos.rect_2d(

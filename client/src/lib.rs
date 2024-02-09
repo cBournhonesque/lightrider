@@ -12,6 +12,8 @@ pub(crate) mod network;
 mod render;
 mod debug;
 mod collision;
+mod camera;
+mod inputs;
 
 // Use a port of 0 to automatically select a port
 pub const CLIENT_PORT: u16 = 0;
@@ -53,6 +55,8 @@ pub fn app(cli: Cli) -> App {
         server_addr: (cli.server_addr, cli.server_port).into(),
         transport: cli.transport,
     });
+    app.add_plugins(inputs::LocalInputsPlugin);
+    app.add_plugins(camera::CameraPlugin);
     app.add_plugins(collision::CollisionPlugin);
     app.add_plugins(debug::DebugPlugin);
     app.add_plugins(render::RenderPlugin);

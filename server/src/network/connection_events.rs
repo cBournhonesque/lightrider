@@ -5,8 +5,8 @@ use lightyear::server::events::{ConnectEvent, DisconnectEvent};
 
 use shared::network::protocol::prelude::*;
 
-use crate::network::bundle::player::PlayerBundle;
-use crate::network::bundle::snake::SnakeBundle;
+use shared::network::bundle::player::PlayerBundle;
+use shared::network::bundle::snake::SnakeBundle;
 
 #[derive(Resource, Debug, Default)]
 pub struct Global {

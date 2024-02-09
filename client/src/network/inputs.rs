@@ -7,6 +7,7 @@ use lightyear::prelude::client::*;
 
 use shared::network::protocol::{GameProtocol, PlayerMovement};
 use shared::network::protocol::prelude::*;
+use crate::inputs::LocalInput;
 
 pub struct NetworkInputsPlugin;
 
@@ -20,7 +21,7 @@ impl Plugin for NetworkInputsPlugin {
         // TODO: I only want to run this system if the player is dead!
         //  need to allow the user to configure the state in which the system runs
         //  maybe provide an optional SystemSet as input, in which case all the plugin's systems will be added to that set?
-        app.add_plugins(LeafwingInputPlugin::<GameProtocol, GameAction>::new(LeafwingInputConfig {
+        app.add_plugins(LeafwingInputPlugin::<GameProtocol, DeadGameAction>::new(LeafwingInputConfig {
             send_diffs_only: true,
             ..default()
         }));
@@ -46,9 +47,13 @@ fn add_game_inputs(
             commands.entity(entity).insert(
                 (
                     InputMap::new([
-                    (KeyCode::Return, GameAction::Spawn),
-                ]),
-                    ActionState::<GameAction>::default(),
+                        (KeyCode::Return, DeadGameAction::Spawn),
+                    ]),
+                    InputMap::new([
+                        (KeyCode::T, LocalInput::ToggleCamera),
+                    ]),
+                    ActionState::<DeadGameAction>::default(),
+                    ActionState::<LocalInput>::default(),
                     Owned
                 )
             );

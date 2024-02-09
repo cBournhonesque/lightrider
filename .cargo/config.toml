@@ -1,0 +1,9 @@
+[build]
+rustflags = ["--cfg", "web_sys_unstable_apis"]
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-Clink-arg=-fuse-ld=/opt/homebrew/opt/llvm/bin/ld64.lld", # Use LLD Linker
+    "-Zshare-generics=y",                                      # (Nightly) Make the current crate share its generic instantiations
+    "-Zthreads=0",                                             # (Nightly) Use improved multithreading with the recommended amount of threads.
+]

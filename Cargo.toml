@@ -5,3 +5,28 @@ members = [
   "server",
   "shared",
 ]
+
+[workspace.dependencies]
+lightyear = { git = "https://github.com/cBournhonesque/lightyear", branch = "main", features = [
+  "leafwing",
+  "webtransport",
+  "websocket",
+  "render",
+] }
+leafwing-input-manager = "0.11.2"
+serde = { version = "1.0.188", features = ["derive"] }
+anyhow = { version = "1.0.75", features = [] }
+tracing = "0.1"
+tracing-subscriber = "0.3.17"
+bevy = { version = "0.12", features = ["bevy_core_pipeline", "dynamic_linking"] }
+derive_more = { version = "0.99", features = ["add", "mul"] }
+clap = { version = "4.4", features = ["derive"] }
+bevy_xpbd_2d = "0.3.3"
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3

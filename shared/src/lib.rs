@@ -1,5 +1,7 @@
 use bevy::app::{App, Plugin};
 
+pub mod collision;
+
 pub mod network;
 pub mod movement;
 pub mod utils;

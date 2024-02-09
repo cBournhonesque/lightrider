@@ -1,7 +1,6 @@
 use bevy::prelude::{Entity, Event};
-use lightyear::prelude::{ClientId, EntityMapper, MapEntities, Message};
+use lightyear::prelude::{EntityMapper, MapEntities, Message};
 use serde::{Deserialize, Serialize};
-use crate::network::protocol::prelude::Player;
 
 #[derive(Message, Event, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[message(custom_map)]

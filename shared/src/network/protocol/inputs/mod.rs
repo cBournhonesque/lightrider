@@ -1,5 +1,5 @@
 pub use movement::PlayerMovement;
-pub use game::GameAction;
+pub use game::DeadGameAction;
 
 mod movement;
 mod game;

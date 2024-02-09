@@ -3,6 +3,7 @@ use bevy::prelude::Plugin;
 
 use protocol::prelude::*;
 
+pub mod bundle;
 pub mod protocol;
 pub mod config;
 

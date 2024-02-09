@@ -4,8 +4,15 @@ use lightyear::prelude::LeafwingUserAction;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash, Reflect, Actionlike)]
-pub enum GameAction {
+pub enum DeadGameAction {
     Spawn,
 }
 
-impl LeafwingUserAction for GameAction {}
+impl LeafwingUserAction for DeadGameAction {}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash, Reflect, Actionlike)]
+pub enum AliveGameAction {
+    ToggleCamera,
+}
+
+impl LeafwingUserAction for AliveGameAction {}

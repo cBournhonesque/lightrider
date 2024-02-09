@@ -4,10 +4,10 @@
 //! - respawning logic
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
-use leafwing_input_manager::plugin::ToggleActions;
+use lightyear::client::input_leafwing::ToggleActions;
 use lightyear::client::events::MessageEvent;
 use lightyear::client::prediction::Predicted;
-use shared::network::protocol::{GameAction, PlayerMovement};
+use shared::network::protocol::{DeadGameAction, PlayerMovement};
 use shared::network::protocol::prelude::{HasPlayer, SnakeCollision};
 use crate::network::inputs::Owned;
 
@@ -58,6 +58,10 @@ fn handle_death_message(
             next_state.set(GameState::Dead);
         }
     }
+}
+
+// During dead state, show the death screen to the user
+fn show_death_screen() {
 
 }
 
@@ -65,7 +69,7 @@ fn handle_death_message(
 // 2. server
 fn enable_dead_actions(
     mut movement_toggle: ResMut<ToggleActions<PlayerMovement>>,
-    mut action_toggle: ResMut<ToggleActions<GameAction>>,
+    mut action_toggle: ResMut<ToggleActions<DeadGameAction>>,
 ) {
     trace!("Enable dead actions");
     movement_toggle.enabled = false;
@@ -74,7 +78,7 @@ fn enable_dead_actions(
 
 fn enable_alive_actions(
     mut movement_toggle: ResMut<ToggleActions<PlayerMovement>>,
-    mut action_toggle: ResMut<ToggleActions<GameAction>>,
+    mut action_toggle: ResMut<ToggleActions<DeadGameAction>>,
 ) {
     trace!("Enable alive actions");
     movement_toggle.enabled = true;

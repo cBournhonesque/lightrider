@@ -1,64 +1,26 @@
+//! We compute collisions causing death only on the server
 use bevy::prelude::*;
 use bevy_xpbd_2d::parry::shape::SharedShape;
-use bevy_xpbd_2d::PhysicsStepSet;
 use bevy_xpbd_2d::prelude::*;
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
+use shared::collision::collider::ColliderSet;
 
 use shared::network::protocol::prelude::{SnakeCollision, TailPoints};
 
-use crate::collision::layers::CollideLayer;
+use shared::collision::layers::CollideLayer;
 
 pub struct ColliderPlugin;
 
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy, Reflect)]
-pub enum ColliderSet {
-    // update colliders
-    UpdateColliders,
-    // compute all collision information
-    ComputeCollision,
-}
-
 impl Plugin for ColliderPlugin {
     fn build(&self, app: &mut App) {
-        // plugins
-        app.add_plugins(PhysicsSetupPlugin::new(Update));
-        app.add_plugins(SpatialQueryPlugin::new(Update));
         // events
-        app.add_event::<SnakeFrictionEvent>();
-        // sets
-        app.configure_sets(Update, (ColliderSet::UpdateColliders, PhysicsStepSet::SpatialQuery, ColliderSet::ComputeCollision).chain());
+        app.add_event::<SnakeCollision>();
+
         // systems
-        app.add_systems(Update, (
-            update_collider.in_set(ColliderSet::UpdateColliders),
-            (snake_collisions, snake_friction)
-                .in_set(ColliderSet::ComputeCollision),
-        ));
-
-        // reflect
-        app.register_type::<ColliderSet>();
+        app.add_systems(Update, snake_collisions.in_set(ColliderSet::ComputeCollision));
     }
 }
 
-/// Update the collider for each snake that moves
-pub(crate) fn update_collider(
-    mut tails: Query<(Ref<TailPoints>, &mut Collider)>
-) {
-    for (tail, mut collider) in tails.iter_mut() {
-        if tail.is_changed() && !tail.is_added() {
-            let points = tail.points_front_to_back();
-            trace!(?points, "Updating collider");
-            *collider = Collider::from(SharedShape::polyline(points, None));
-        }
-    }
-}
-
-
-#[derive(Event, Debug, PartialEq)]
-pub struct SnakeFrictionEvent {
-    pub main: Entity,
-    pub other: Entity,
-    pub distance: f32,
-}
 
 // NOTE: IMPORTANT
 // because we do the ray cast with a small offset, we need to make sure that the collision distance is big enough
@@ -68,7 +30,6 @@ pub struct SnakeFrictionEvent {
 //  - or another solution is to start the raycast a bit further away? (but allow multiple hits)
 // Collision of 1 pixel.
 pub const COLLISION_DISTANCE: f32 = 1.0;
-pub const MAX_FRICTION_DISTANCE: f32 = 5.0;
 
 pub(crate) fn snake_collisions(
     spatial_query: SpatialQuery,
@@ -102,52 +63,6 @@ pub(crate) fn snake_collisions(
     }
 }
 
-pub(crate) fn snake_friction(
-    spatial_query: SpatialQuery,
-    tails: Query<(Entity, &TailPoints)>,
-    mut writer: EventWriter<SnakeFrictionEvent>,
-) {
-    for (entity, tail) in tails.iter() {
-        let filter = SpatialQueryFilter::new()
-            .with_masks([CollideLayer::Player])
-            .without_entities([entity]);
-        trace!(head = ?tail.front().0, direction = ?tail.front().1, "Friction Ray cast");
-        let left_ray_cast = spatial_query.cast_ray(
-            tail.front().0,
-            tail.front().1.delta().perp(),
-            MAX_FRICTION_DISTANCE,
-            false,
-            filter.clone()
-        );
-        let right_ray_cast = spatial_query.cast_ray(
-            tail.front().0,
-            -tail.front().1.delta().perp(),
-            MAX_FRICTION_DISTANCE,
-            false,
-            filter
-        );
-        if left_ray_cast.is_some() || right_ray_cast.is_some() {
-            let (distance, other) = left_ray_cast.map_or_else(
-                || (right_ray_cast.unwrap().time_of_impact, right_ray_cast.unwrap().entity),
-                |l| right_ray_cast.map_or_else(
-                    || (l.time_of_impact, l.entity),
-                    |r| if l.time_of_impact < r.time_of_impact {
-                        (l.time_of_impact, l.entity)
-                    } else {
-                        (r.time_of_impact, r.entity)
-                    }
-                )
-            );
-            info!(?entity, ?distance, ?other, "Friction!");
-            writer.send(SnakeFrictionEvent {
-                main: entity,
-                other,
-                distance,
-            });
-        }
-    }
-
-}
 
 #[cfg(test)]
 mod tests {
@@ -156,8 +71,7 @@ mod tests {
 
     use bevy::prelude::*;
     use shared::network::protocol::prelude::Direction;
-
-    use crate::network::bundle::snake::SnakeBundle;
+    use shared::network::bundle::snake::SnakeBundle;
 
     use super::*;
 
@@ -166,6 +80,7 @@ mod tests {
         let mut app = App::new();
 
         app.add_plugins(MinimalPlugins);
+        app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: vertical, pointing up
         let snake1 = app.world.spawn(SnakeBundle::default()).id();
@@ -194,6 +109,7 @@ mod tests {
         let mut app = App::new();
 
         app.add_plugins(MinimalPlugins);
+        app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: [0, -100] -> [0, 0]
         let snake1 = app.world.spawn(SnakeBundle::default()).id();
@@ -221,6 +137,7 @@ mod tests {
         let mut app = App::new();
 
         app.add_plugins(MinimalPlugins);
+        app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: [0, -100] -> [0, 0]
         let snake1 = app.world.spawn(SnakeBundle::default()).id();
@@ -244,6 +161,7 @@ mod tests {
     fn test_no_collision() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
+        app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: [0, -100] -> [0, 0]
         let snake1 = app.world.spawn(SnakeBundle::default()).id();
@@ -267,6 +185,7 @@ mod tests {
     fn test_self_collision() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
+        app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         let snake = app.world.spawn(SnakeBundle::default()).id();
         let points = TailPoints(VecDeque::from([
