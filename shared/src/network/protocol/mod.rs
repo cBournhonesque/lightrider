@@ -2,7 +2,7 @@ use bevy::prelude::default;
 use lightyear::prelude::*;
 
 pub use components::{Components, ComponentsKind};
-pub use inputs::PlayerMovement;
+pub use inputs::{PlayerMovement, GameAction};
 pub use messages::Messages;
 
 pub mod components;
@@ -17,9 +17,10 @@ pub mod prelude {
     pub use super::components::player::*;
     pub use super::components::snake::*;
     // messages
-    pub use super::messages::snake::SnakeCollision;
+    pub use super::messages::snake::*;
     // inputs
     pub use super::inputs::PlayerMovement;
+    pub use super::inputs::GameAction;
     // channels
     pub use super::channels::GameChannel;
     // reexports
@@ -31,6 +32,7 @@ protocolize!(
     Message = Messages,
     Component = Components,
     LeafwingInput1 = PlayerMovement,
+    LeafwingInput2 = GameAction,
 );
 
 pub fn protocol() -> GameProtocol {

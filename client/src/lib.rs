@@ -8,9 +8,10 @@ use clap::Parser;
 use shared::network::config::Transports;
 use shared::SharedPlugin;
 
-mod network;
+pub(crate) mod network;
 mod render;
 mod debug;
+mod collision;
 
 // Use a port of 0 to automatically select a port
 pub const CLIENT_PORT: u16 = 0;
@@ -52,6 +53,7 @@ pub fn app(cli: Cli) -> App {
         server_addr: (cli.server_addr, cli.server_port).into(),
         transport: cli.transport,
     });
+    app.add_plugins(collision::CollisionPlugin);
     app.add_plugins(debug::DebugPlugin);
     app.add_plugins(render::RenderPlugin);
     app.add_plugins(SharedPlugin);

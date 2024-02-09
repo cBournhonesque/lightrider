@@ -10,9 +10,8 @@ use crate::network::inputs::NetworkInputsPlugin;
 use crate::network::interpolation::InterpolationPlugin;
 
 pub(crate) mod config;
-mod inputs;
+pub(crate) mod inputs;
 mod interpolation;
-
 pub(crate) struct NetworkPlugin {
     pub(crate) client_id: ClientId,
     pub(crate) client_port: u16,

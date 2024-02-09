@@ -11,6 +11,8 @@ pub struct NetworkPlugin;
 
 impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
+        // events
+        app.add_event::<SnakeCollision>();
         // registry
         app.register_type::<TailLength>()
             .register_type::<TailPoints>()

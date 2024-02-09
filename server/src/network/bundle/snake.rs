@@ -15,6 +15,8 @@ use crate::collision::layers::CollideLayer;
 
 pub const TAIL_SIZE: f32 = 100.0;
 
+pub const START_SPEED: f32 = 0.5;
+
 #[derive(Bundle)]
 pub(crate) struct SnakeBundle {
     // main
@@ -46,7 +48,7 @@ impl Default for SnakeBundle {
                 current_size: TAIL_SIZE,
                 target_size: TAIL_SIZE,
             },
-            speed: Speed(0.5),
+            speed: Speed(START_SPEED),
             acceleration: Acceleration(0.0),
             position: Position::default(),
             rotation: Rotation::default(),
@@ -72,7 +74,8 @@ impl SnakeBundle {
             replication_group: ReplicationGroup::new_id(client_id),
             ..default()
         };
-        replicate.add_target::<ActionState<PlayerMovement>>(NetworkTarget::AllExceptSingle(client_id));
+        // we do not need to replicate the player's actions
+        replicate.disable_component::<ActionState<PlayerMovement>>();
         let head_entity = commands.spawn(
             (
                 SnakeBundle::default(),
