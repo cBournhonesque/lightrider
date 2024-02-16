@@ -36,10 +36,6 @@ pub(crate) async fn build_plugin(port: u16, transport: Transports) -> ServerPlug
         incoming_jitter: Duration::from_millis(0),
         incoming_loss: 0.0,
     };
-    let io = Io::from_config(
-        IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),
-    );
-
     // Step 2: define the server configuration
     let config = ServerConfig {
         shared: shared_config(),
@@ -47,11 +43,12 @@ pub(crate) async fn build_plugin(port: u16, transport: Transports) -> ServerPlug
             config: NetcodeConfig::default()
                 .with_protocol_id(PROTOCOL_ID)
                 .with_key(KEY),
+            io: IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),
         },
         ..default()
     };
 
     // Step 3: create the plugin
-    let plugin_config = PluginConfig::new(config, io, protocol());
+    let plugin_config = PluginConfig::new(config, protocol());
     ServerPlugin::new(plugin_config)
 }

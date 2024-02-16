@@ -33,7 +33,6 @@ pub(crate) fn build_plugin(
             #[cfg(target_family = "wasm")]
             certificate_digest,
         },
-        #[cfg(not(target_family = "wasm"))]
         Transports::WebSocket => TransportConfig::WebSocketClient { server_addr },
     };
     let link_conditioner = LinkConditionerConfig {
@@ -41,14 +40,12 @@ pub(crate) fn build_plugin(
         incoming_jitter: Duration::from_millis(4),
         incoming_loss: 0.01,
     };
-    let io = Io::from_config(
-        IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),
-    );
     let config = ClientConfig {
         shared: shared_config(),
         net: NetConfig::Netcode {
             auth,
             config: NetcodeConfig::default(),
+            io: IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),
         },
         interpolation: InterpolationConfig {
             delay: InterpolationDelay::default().with_send_interval_ratio(2.0),
@@ -57,5 +54,5 @@ pub(crate) fn build_plugin(
         },
         ..default()
     };
-    ClientPlugin::new(PluginConfig::new(config, io, protocol()))
+    ClientPlugin::new(PluginConfig::new(config, protocol()))
 }

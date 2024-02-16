@@ -12,6 +12,8 @@ use crate::network::interpolation::InterpolationPlugin;
 pub(crate) mod config;
 pub(crate) mod inputs;
 mod interpolation;
+mod connect;
+
 pub(crate) struct NetworkPlugin {
     pub(crate) client_id: ClientId,
     pub(crate) client_port: u16,
