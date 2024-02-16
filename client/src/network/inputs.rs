@@ -2,7 +2,6 @@ use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::{ActionState, InputMap};
 use lightyear::client::input_leafwing::LeafwingInputPlugin;
-use lightyear::connection::netcode::NetcodeClient;
 use lightyear::prelude::client::*;
 
 use shared::network::protocol::{GameProtocol, PlayerMovement};

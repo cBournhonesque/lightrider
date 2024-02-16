@@ -14,6 +14,7 @@ mod debug;
 mod collision;
 mod camera;
 mod inputs;
+mod menu;
 
 // Use a port of 0 to automatically select a port
 pub const CLIENT_PORT: u16 = 0;

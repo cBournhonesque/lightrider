@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use lightyear::prelude::client::*;
 
-use shared::movement::shorten_tail;
+use shared::movement::{shorten_tail};
 use shared::network::protocol::prelude::{Direction, TailLength, TailPoints};
 
 // TODO: we might not need to do this at all for TailLength, Speed, Acceleration
@@ -22,37 +22,38 @@ impl Plugin for InterpolationPlugin {
 }
 
 pub(crate) fn interpolate_snake(
-    mut tails: Query<(&mut TailPoints, &InterpolateStatus<TailPoints>, &mut TailLength, &InterpolateStatus<TailLength>)>
+    mut tails: Query<(&mut TailPoints, Ref<InterpolateStatus<TailPoints>>, &mut TailLength, Ref<InterpolateStatus<TailLength>>)>
 ) {
     for (mut tail, tail_status, mut length, length_status) in tails.iter_mut() {
+        if !tail_status.is_changed() && !length_status.is_changed() {
+            // nothing changed, no need to interpolate?
+            continue;
+        }
         let Some((start_tick, tail_start)) = &tail_status.start else {
             continue;
         };
         let Some((_, length_start)) = &length_status.start else {
             panic!("we should also have a tail length start");
         };
+        let end = tail_status.end.as_ref().map(|x| x.0);
+        info!(
+            current = ?tail_status.current_tick,
+            start = ?start_tick,
+            end = ?end,
+            "interpolate ticks"
+        );
         trace!(
             ?tail,
             ?tail_status,
             "interpolate situation"
         );
-        if tail_status.current == *start_tick {
-            *tail = tail_start.clone();
-            *length = length_start.clone();
-            continue;
-        }
-
         let Some((end_tick, tail_end)) = &tail_status.end else {
             continue;
         };
         let Some((_, length_end)) = &length_status.end else {
             panic!("we should also have a tail length end");
         };
-        if tail_status.current == *end_tick {
-            *tail = tail_end.clone();
-            *length = length_end.clone();
-            continue;
-        }
+        info!(start = ?tail_start.front(), end = ?tail_end.front(), "Updating tail");
         assert_ne!(start_tick, end_tick);
 
         // we need to interpolate between the two tails. It will be similar to the start tail with some added points
@@ -60,8 +61,7 @@ pub(crate) fn interpolate_snake(
         *tail = tail_start.clone();
 
         // interpolation ratio
-        let t = (tail_status.current - *start_tick) as f32
-            / (*end_tick - *start_tick) as f32;
+        let t = tail_status.interpolation_fraction().unwrap();
 
         // linear interpolation for the length
         *length = length_start.clone() * (1.0 - t) + length_end.clone() * t;
@@ -141,18 +141,18 @@ pub(crate) fn interpolate_snake(
 //     for (mut component, status) in query.iter_mut() {
 //         // NOTE: it is possible that we reach start_tick when end_tick is not set
 //         if let Some((start_tick, start_value)) = &status.start {
-//             if status.current == *start_tick {
+//             if status.current_tick == *start_tick {
 //                 *component = start_value;
 //                 continue;
 //             }
 //             if let Some((end_tick, end_value)) = &status.end {
-//                 if status.current == *end_tick {
+//                 if status.current_tick == *end_tick {
 //                     *component = end_value;
 //                     continue;
 //                 }
 //                 if start_tick != end_tick {
 //                     let t =
-//                         (status.current - *start_tick) as f32 / (*end_tick - *start_tick) as f32;
+//                         (status.current_tick - *start_tick) as f32 / (*end_tick - *start_tick) as f32;
 //                     let value = LinearInterpolator::lerp(start_value, end_value, t);
 //                     *component = value;
 //                 } else {
@@ -183,7 +183,8 @@ mod tests {
                     [(Vec2::new(0.0, 20.0), Direction::Up),
                         (Vec2::new(0.0, -80.0), Direction::Up)]
                 )))),
-                current: Tick(2),
+                current_tick: Tick(2),
+                current_overstep: 0.0,
             },
             TailLength {
                 current_size: 100.0,
@@ -192,7 +193,8 @@ mod tests {
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
                 end: Some((Tick(4), TailLength { current_size: 100.0, target_size: 100.0 })),
-                current: Tick(2),
+                current_tick: Tick(2),
+                current_overstep: 0.0,
             },
         )).id();
 
@@ -220,7 +222,8 @@ mod tests {
                         (Vec2::new(0.0, 50.0), Direction::Right),
                         (Vec2::new(0.0, -20.0), Direction::Up)]
                 )))),
-                current: Tick(3),
+                current_tick: Tick(3),
+                current_overstep: 0.0,
             },
             TailLength {
                 current_size: 120.0,
@@ -229,7 +232,8 @@ mod tests {
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
                 end: Some((Tick(4), TailLength { current_size: 100.0, target_size: 100.0 })),
-                current: Tick(3),
+                current_tick: Tick(3),
+                current_overstep: 0.0,
             },
         )).id();
 
@@ -261,7 +265,8 @@ mod tests {
                         (Vec2::new(0.0, 50.0), Direction::Right),
                         (Vec2::new(0.0, 0.0), Direction::Up)]
                 )))),
-                current: Tick(3),
+                current_tick: Tick(3),
+                current_overstep: 0.0,
             },
             TailLength {
                 current_size: 100.0,
@@ -270,7 +275,8 @@ mod tests {
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
                 end: Some((Tick(4), TailLength { current_size: 100.0, target_size: 100.0 })),
-                current: Tick(3),
+                current_tick: Tick(3),
+                current_overstep: 0.0,
             },
         )).id();
 
@@ -300,7 +306,8 @@ mod tests {
                         (Vec2::new(0.0, 50.0), Direction::Right),
                         (Vec2::new(0.0, 0.0), Direction::Up)]
                 )))),
-                current: Tick(2),
+                current_tick: Tick(2),
+                current_overstep: 0.0,
             },
             TailLength {
                 current_size: 100.0,
@@ -309,7 +316,8 @@ mod tests {
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
                 end: Some((Tick(4), TailLength { current_size: 100.0, target_size: 100.0 })),
-                current: Tick(2),
+                current_tick: Tick(2),
+                current_overstep: 0.0,
             },
         )).id();
 
@@ -339,7 +347,8 @@ mod tests {
                         (Vec2::new(50.0, 0.0), Direction::Up),
                         (Vec2::new(0.0, 0.0), Direction::Right)]
                 )))),
-                current: Tick(2),
+                current_tick: Tick(2),
+                current_overstep: 0.0,
             },
             TailLength {
                 current_size: 100.0,
@@ -348,7 +357,8 @@ mod tests {
             InterpolateStatus::<TailLength> {
                 start: Some((Tick(0), TailLength { current_size: 100.0, target_size: 100.0 })),
                 end: Some((Tick(4), TailLength { current_size: 100.0, target_size: 100.0 })),
-                current: Tick(2),
+                current_tick: Tick(2),
+                current_overstep: 0.0,
             },
         )).id();
 

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::render::camera::ScalingMode;
 use bevy::transform::TransformSystem;
 use leafwing_input_manager::prelude::ActionState;
-use lightyear::prelude::client::Predicted;
+use lightyear::prelude::client::{InterpolationSet, Predicted};
 use shared::network::protocol::prelude::TailPoints;
 use crate::inputs::LocalInput;
 use crate::network::inputs::Owned;
@@ -31,6 +31,7 @@ impl Plugin for CameraPlugin {
         // we could run during update, because the predicted movement is updated in FixedUpdate
         app.add_systems(PostUpdate, (toggle_camera, follow_camera
             .before(TransformSystem::TransformPropagate)
+            .after(InterpolationSet::VisualInterpolation)
             .run_if(in_state(CameraState::Follow))));
 
     }

@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use bevy::transform::TransformSystem;
 use lightyear::prelude::client::*;
+use lightyear::prelude::{TickManager};
+use shared::network::protocol::GameProtocol;
 
 use shared::network::protocol::prelude::*;
 
@@ -8,7 +10,28 @@ pub(crate) struct SnakeRenderPlugin;
 
 impl Plugin for SnakeRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, draw_snakes.before(TransformSystem::TransformPropagate));
+        // Plugins
+        // Visually interpolate the tails since they are updated during FixedUpdate
+        app.add_plugins(VisualInterpolationPlugin::<TailPoints, GameProtocol>::default());
+        // Draw the snakes after visual interpolation is computed
+        app.add_systems(PostUpdate, draw_snakes
+            .before(TransformSystem::TransformPropagate)
+            .after(InterpolationSet::VisualInterpolation)
+        );
+        // Add visual interpolation after the component gets added on the predicted entity
+        app.add_systems(PreUpdate, add_visual_interpolation_to_predicted_snake.after(
+            PredictionSet::SpawnHistoryFlush
+        ));
+    }
+}
+
+/// Adds visual interpolation to the predicted tails
+fn add_visual_interpolation_to_predicted_snake(
+    mut commands: Commands,
+    query: Query<Entity, (With<Predicted>, Added<TailPoints>)>
+) {
+    for entity in query.iter() {
+        commands.entity(entity).insert(VisualInterpolateStatus::<TailPoints>::default());
     }
 }
 
@@ -18,9 +41,15 @@ pub(crate) fn draw_snakes(
     mut gizmos: Gizmos,
     tails: Query<&TailPoints, Without<Confirmed>>,
     interp_snake: Query<&TailPoints, With<Interpolated>>,
+    predicted_snake: Query<&TailPoints, With<Predicted>>,
+    tick: Res<TickManager>,
 ) {
+    let tick = tick.tick();
     for points in interp_snake.iter() {
-        info!(front = ?points.front());
+        info!(?tick, front = ?points.front(), "interp snake");
+    }
+    for points in predicted_snake.iter() {
+        info!(?tick, front = ?points.front(), "predicted snake");
     }
     for points in tails.iter() {
         // draw the head
