@@ -35,11 +35,13 @@ pub async fn app(cli: Cli) -> App {
         app.add_plugins(LogPlugin {
             level: Level::INFO,
             filter: "wgpu=error,bevy_ecs=trace".to_string(),
+            update_subscriber: None,
         });
     } else {
         app.add_plugins(DefaultPlugins.set(LogPlugin {
             level: Level::INFO,
             filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
+            update_subscriber: None,
         }));
     }
 

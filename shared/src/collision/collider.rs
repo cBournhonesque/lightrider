@@ -70,20 +70,19 @@ pub(crate) fn snake_friction(
     mut writer: EventWriter<SnakeFrictionEvent>,
 ) {
     for (entity, tail) in tails.iter() {
-        let filter = SpatialQueryFilter::new()
-            .with_masks([CollideLayer::Player])
-            .without_entities([entity]);
+        let filter = SpatialQueryFilter::from_mask(CollideLayer::Player)
+            .with_excluded_entities([entity]);
         trace!(head = ?tail.front().0, direction = ?tail.front().1, "Friction Ray cast");
         let left_ray_cast = spatial_query.cast_ray(
             tail.front().0,
-            tail.front().1.delta().perp(),
+            Direction2d::new_unchecked(tail.front().1.delta().perp()),
             MAX_FRICTION_DISTANCE,
             false,
             filter.clone()
         );
         let right_ray_cast = spatial_query.cast_ray(
             tail.front().0,
-            -tail.front().1.delta().perp(),
+            Direction2d::new_unchecked(-tail.front().1.delta().perp()),
             MAX_FRICTION_DISTANCE,
             false,
             filter

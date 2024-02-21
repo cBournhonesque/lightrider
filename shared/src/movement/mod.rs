@@ -1,7 +1,6 @@
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use bevy::utils::EntityHashSet;
 use leafwing_input_manager::prelude::ActionState;
-use lightyear::prelude::*;
 use crate::collision::collider::{MAX_FRICTION_DISTANCE, snake_friction, SnakeFrictionEvent};
 
 use crate::network::protocol::components::snake::Direction;
@@ -26,7 +25,7 @@ impl Plugin for MovementPlugin {
         app.add_event::<SnakeFrictionEvent>();
 
         // sets
-        app.configure_sets(FixedUpdate, SimulationSet::Movement.in_set(FixedUpdateSet::Main));
+        app.configure_sets(FixedUpdate, SimulationSet::Movement);
 
         // 1. turn heads if we received inputs -> done automatically during replication
         // 2. update acceleration (are there close snakes?)
@@ -47,19 +46,19 @@ pub fn turn_heads(
 ) {
     for (mut tail, input) in query.iter_mut() {
         let direction = tail.0.front().unwrap().1;
-        if input.pressed(PlayerMovement::Up) {
+        if input.pressed(&PlayerMovement::Up) {
             if direction != Direction::Down && direction != Direction::Up {
                 tail.0.front_mut().unwrap().1 = Direction::Up;
             }
-        } else if input.pressed(PlayerMovement::Down) {
+        } else if input.pressed(&PlayerMovement::Down) {
             if direction != Direction::Down && direction != Direction::Up {
                 tail.0.front_mut().unwrap().1 = Direction::Down;
             }
-        } else if input.pressed(PlayerMovement::Left) {
+        } else if input.pressed(&PlayerMovement::Left) {
             if direction != Direction::Left && direction != Direction::Right {
                 tail.0.front_mut().unwrap().1 = Direction::Left;
             }
-        } else if input.pressed(PlayerMovement::Right) {
+        } else if input.pressed(&PlayerMovement::Right) {
             if direction != Direction::Left && direction != Direction::Right {
                 tail.0.front_mut().unwrap().1 = Direction::Right;
             }

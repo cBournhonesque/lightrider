@@ -24,7 +24,7 @@ impl Plugin for DeathPlugin {
     fn build(&self, app: &mut App) {
 
         // states
-        app.add_state::<GameState>();
+        app.init_state::<GameState>();
 
         // systems
         // TODO: toggling the actions is not enough, ideally we would disable/enable the entire input plugin

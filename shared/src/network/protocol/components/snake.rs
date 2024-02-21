@@ -43,13 +43,10 @@ pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
 #[message(custom_map)]
 pub struct HasPlayer(pub Entity);
 
-impl<'a> MapEntities<'a> for HasPlayer {
-    fn map_entities(&mut self, entity_mapper: Box<dyn EntityMapper + 'a>) {
-        self.0.map_entities(entity_mapper);
-    }
+impl LightyearMapEntities for HasPlayer {
+    fn map_entities<M: EntityMapper>(&mut self, entity_mapper: &mut M) {
+        self.0 = entity_mapper.map_entity(self.0);
 
-    fn entities(&self) -> bevy::utils::EntityHashSet<Entity> {
-        bevy::utils::EntityHashSet::from_iter(vec![self.0])
     }
 }
 

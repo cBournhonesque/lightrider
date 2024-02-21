@@ -1,5 +1,5 @@
-use bevy::prelude::{Entity, Event};
-use lightyear::prelude::{EntityMapper, MapEntities, Message};
+use bevy::prelude::{Entity, EntityMapper, Event};
+use lightyear::prelude::{LightyearMapEntities, Message};
 use serde::{Deserialize, Serialize};
 
 #[derive(Message, Event, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -9,17 +9,10 @@ pub struct SnakeCollision {
     pub killed: Entity,
 }
 
-impl<'a> MapEntities<'a> for SnakeCollision {
+impl LightyearMapEntities for SnakeCollision {
     // TODO: we cannot use map_entities(entity_mapper) twice! Need to rework the trait
-    fn map_entities(&mut self, entity_mapper: Box<dyn EntityMapper + 'a>) {
-        if let Some(e) = entity_mapper.map(self.killer) {
-            self.killer = e;
-        }
-        self.killed.map_entities(entity_mapper);
-    }
-
-    fn entities(&self) -> bevy::utils::EntityHashSet<Entity> {
-
-        bevy::utils::EntityHashSet::from_iter(vec![self.killer, self.killed])
+    fn map_entities<M: EntityMapper>(&mut self, entity_mapper: &mut M) {
+        self.killer = entity_mapper.map_entity(self.killer);
+        self.killed = entity_mapper.map_entity(self.killed);
     }
 }

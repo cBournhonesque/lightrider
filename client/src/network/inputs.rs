@@ -46,10 +46,10 @@ fn add_game_inputs(
             commands.entity(entity).insert(
                 (
                     InputMap::new([
-                        (KeyCode::Return, DeadGameAction::Spawn),
+                        (DeadGameAction::Spawn, KeyCode::Enter),
                     ]),
                     InputMap::new([
-                        (KeyCode::T, LocalInput::ToggleCamera),
+                        (LocalInput::ToggleCamera, KeyCode::KeyT),
                     ]),
                     ActionState::<DeadGameAction>::default(),
                     ActionState::<LocalInput>::default(),
@@ -68,14 +68,14 @@ fn add_movement_inputs(
     for entity in predicted_snakes.iter() {
         commands.entity(entity).insert(
             (InputMap::new([
-                (KeyCode::Right, PlayerMovement::Right),
-                (KeyCode::D, PlayerMovement::Right),
-                (KeyCode::Left, PlayerMovement::Left),
-                (KeyCode::A, PlayerMovement::Left),
-                (KeyCode::Up, PlayerMovement::Up),
-                (KeyCode::W, PlayerMovement::Up),
-                (KeyCode::Down, PlayerMovement::Down),
-                (KeyCode::S, PlayerMovement::Down),
+                (PlayerMovement::Right, KeyCode::ArrowRight),
+                (PlayerMovement::Right, KeyCode::KeyD),
+                (PlayerMovement::Left, KeyCode::ArrowLeft),
+                (PlayerMovement::Left, KeyCode::KeyA),
+                (PlayerMovement::Up, KeyCode::ArrowUp),
+                (PlayerMovement::Up, KeyCode::KeyW),
+                (PlayerMovement::Down, KeyCode::ArrowDown),
+                (PlayerMovement::Down, KeyCode::KeyS),
             ]), ActionState::<PlayerMovement>::default())
         );
     }

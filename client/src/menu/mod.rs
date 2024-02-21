@@ -25,8 +25,8 @@ enum AppState {
     Connected,
 }
 
-pub fn start_connection(keys: Res<Input<KeyCode>>) {
-    if keys.just_pressed(KeyCode::Return) {
+pub fn start_connection(keys: Res<ButtonInput<KeyCode>>) {
+    if keys.just_pressed(KeyCode::Enter) {
         // move to Connecting?
         // next state = Connecting
     }

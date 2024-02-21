@@ -19,9 +19,9 @@ pub(crate) async fn build_plugin(port: u16, transport: Transports) -> ServerPlug
                 Certificate::load("certificates/cert.pem", "certificates/key.pem")
                     .await
                     .unwrap();
-            let digest = certificate.hashes()[0].fmt_as_dotted_hex();
-            dbg!(
-                    "Generated self-signed certificate with digest: {:?}",
+            let digest = &certificate.hashes()[0];
+            println!(
+                    "Generated self-signed certificate with digest: {}",
                     digest
                 );
             TransportConfig::WebTransportServer {

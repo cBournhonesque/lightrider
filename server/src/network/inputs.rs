@@ -27,7 +27,7 @@ fn handle_game_action(
     mut players: Query<(Entity, &mut Player, &ActionState<DeadGameAction>)>
 ) {
     for (player_entity, mut player, action_state) in players.iter_mut() {
-        if action_state.just_pressed(DeadGameAction::Spawn) {
+        if action_state.just_pressed(&DeadGameAction::Spawn) {
             info!(?player, "Respawning player");
             let client_id = player.id;
             // respawn the snake

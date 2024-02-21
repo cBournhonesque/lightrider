@@ -38,14 +38,13 @@ pub(crate) fn snake_collisions(
 ) {
     for (entity, tail) in tails.iter() {
         // the player can collide with itself!
-        let filter = SpatialQueryFilter::new()
-            .with_masks([CollideLayer::Player]);
+        let filter = SpatialQueryFilter::from_mask(CollideLayer::Player);
         trace!(head = ?tail.front().0, direction = ?tail.front().1, "Collision Ray cast");
         if let Some(collision) = spatial_query.cast_ray(
             // NOTE: important!
             // offset the head by epsilon to avoid a self-collision on the head
             tail.front().0 + tail.front().1.delta() * COLLISION_DISTANCE / 1000.0,
-            tail.front().1.delta(),
+            Direction2d::new_unchecked(tail.front().1.delta()),
             COLLISION_DISTANCE,
             false,
             filter

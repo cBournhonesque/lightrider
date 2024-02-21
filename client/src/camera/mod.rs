@@ -21,7 +21,7 @@ pub enum CameraState {
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         // state
-        app.add_state::<CameraState>();
+        app.init_state::<CameraState>();
         // follow
         app.add_systems(OnEnter(CameraState::Follow), enter_follow_camera);
 
@@ -43,7 +43,7 @@ fn toggle_camera(
     query: Query<&ActionState<LocalInput>, With<Owned>>,
 ) {
     if let Ok(action_state) = query.get_single() {
-        if action_state.just_pressed(LocalInput::ToggleCamera) {
+        if action_state.just_pressed(&LocalInput::ToggleCamera) {
             match current_state.get() {
                 CameraState::Follow => next_state.set(CameraState::Full),
                 CameraState::Full => next_state.set(CameraState::Follow),

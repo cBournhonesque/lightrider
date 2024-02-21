@@ -1,9 +1,8 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
-use bevy_xpbd_2d::components::Collider;
 use bevy_xpbd_2d::parry::shape::SharedShape;
-use bevy_xpbd_2d::prelude::{CollisionLayers, Position, Rotation};
+use bevy_xpbd_2d::prelude::{Collider, CollisionLayers, Position, Rotation};
 use leafwing_input_manager::prelude::ActionState;
 use lightyear::prelude::{ClientId, NetworkTarget, ReplicationGroup};
 
