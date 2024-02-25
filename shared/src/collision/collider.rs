@@ -23,8 +23,9 @@ pub enum ColliderSet {
 impl Plugin for ColliderPlugin {
     fn build(&self, app: &mut App) {
         // plugins
-        // the time we set here doesn't matter because we only use the spatial query plugin
-        // we still need to set FixedOnce so that the physics plugin runs once per frame
+        // NOTE: we need to set the PhysicsTime to FixedOnce so that the physics plugin runs once per frame
+        // (it will run once every time the parent schedule runs once (here, Update))
+        //  the time we set here doesn't matter because we only use the spatial query plugin
         app.insert_resource(Time::new_with(Physics::fixed_once_hz(60.0)));
         app.add_plugins(PhysicsSetupPlugin::new(Update));
         app.add_plugins(SpatialQueryPlugin::new(Update));
