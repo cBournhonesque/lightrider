@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use bevy::prelude::default;
-use lightyear::prelude::{Io, IoConfig, LinkConditionerConfig, TransportConfig};
+use lightyear::prelude::{IoConfig, LinkConditionerConfig, TransportConfig};
 use lightyear::prelude::server::{Certificate, NetcodeConfig, NetConfig, PluginConfig, ServerConfig, ServerPlugin};
 
 use shared::network::config::{KEY, PROTOCOL_ID, shared_config, Transports};

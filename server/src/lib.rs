@@ -5,10 +5,12 @@ use clap::Parser;
 
 use shared::network::config::Transports;
 use shared::SharedPlugin;
+use crate::food::FoodPlugin;
 
 mod network;
 mod debug;
 pub(crate) mod collision;
+mod food;
 
 pub const SERVER_PORT: u16 = 5000;
 
@@ -56,5 +58,8 @@ pub async fn app(cli: Cli) -> App {
 
     // shared
     app.add_plugins(SharedPlugin);
+
+    // food
+    app.add_plugins(FoodPlugin);
     app
 }

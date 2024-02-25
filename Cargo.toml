@@ -22,6 +22,8 @@ bevy = { version = "0.13", features = ["bevy_core_pipeline", "dynamic_linking"] 
 derive_more = { version = "0.99", features = ["add", "mul"] }
 clap = { version = "4.4", features = ["derive"] }
 bevy_xpbd_2d = { version = "0.4", features = ["parry-f32"] }
+bevy_turborand = "0.8"
+bevy-inspector-egui = "0.23.2"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

@@ -7,6 +7,8 @@ use super::GameProtocol;
 
 pub mod snake;
 pub mod player;
+pub mod food;
+pub mod common;
 
 #[component_protocol(protocol = GameProtocol)]
 pub enum Components {
@@ -24,6 +26,12 @@ pub enum Components {
     // player
     #[sync(simple)]
     Player(player::Player),
+    // food
+    #[sync(once)]
+    FoodMarker(food::FoodMarker),
+    // common
+    #[sync(simple)]
+    Position(common::Position),
 }
 
 

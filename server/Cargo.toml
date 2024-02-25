@@ -24,9 +24,10 @@ tracing-subscriber.workspace = true
 bevy.workspace = true
 clap.workspace = true
 bevy_xpbd_2d.workspace = true
+bevy_turborand.workspace = true
+bevy-inspector-egui.workspace = true
 parry2d = "0.13.6"
 derive_more = { version = "0.99", features = ["add", "mul"] }
-bevy-inspector-egui = "0.22.1"
 cfg-if = "1.0.0"
 
 [target."cfg(not(target_family = \"wasm\"))".dependencies]

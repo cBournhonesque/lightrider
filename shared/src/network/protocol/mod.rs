@@ -16,8 +16,11 @@ pub mod prelude {
     // components
     pub use super::components::player::*;
     pub use super::components::snake::*;
+    pub use super::components::food::*;
+    pub use super::components::common::*;
     // messages
     pub use super::messages::snake::*;
+    pub use super::messages::food::*;
     // inputs
     pub use super::inputs::PlayerMovement;
     pub use super::inputs::DeadGameAction;

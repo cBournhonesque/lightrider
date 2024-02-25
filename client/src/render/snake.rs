@@ -46,10 +46,10 @@ pub(crate) fn draw_snakes(
 ) {
     let tick = tick.tick();
     for points in interp_snake.iter() {
-        info!(?tick, front = ?points.front(), "interp snake");
+        // info!(?tick, front = ?points.front(), "interp snake");
     }
     for points in predicted_snake.iter() {
-        info!(?tick, front = ?points.front(), "predicted snake");
+        // info!(?tick, front = ?points.front(), "predicted snake");
     }
     for points in tails.iter() {
         // draw the head

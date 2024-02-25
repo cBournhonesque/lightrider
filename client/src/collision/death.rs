@@ -61,8 +61,19 @@ fn handle_death_message(
 }
 
 // During dead state, show the death screen to the user
-fn show_death_screen() {
-
+fn show_death_screen(mut commands: Commands) {
+    // commands.spawn(NodeBundle {
+    //     style: Style {
+    //         display: Display::Flex,
+    //         position_type: PositionType::Absolute,
+    //         flex_direction: FlexDirection::Column,
+    //         justify_content: JustifyContent::Center,
+    //         align_items: AlignItems::Center,
+    //         ..Default::default()
+    //     },
+    //     ..Default::default()
+    // })
+    // })
 }
 
 // 1. press spawn, send message to server
@@ -86,6 +97,7 @@ fn enable_alive_actions(
 }
 
 
+// TODO: receive an event instead
 /// When we receive a new predicted snake from the server, that means we respawn!
 /// Switch the game state
 fn set_alive_state(

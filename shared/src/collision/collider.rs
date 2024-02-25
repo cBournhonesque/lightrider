@@ -8,6 +8,7 @@ use tracing::{trace};
 use crate::network::protocol::prelude::{TailPoints};
 
 use crate::collision::layers::CollideLayer;
+use crate::movement::SimulationSet;
 
 pub struct ColliderPlugin;
 
@@ -22,12 +23,16 @@ pub enum ColliderSet {
 impl Plugin for ColliderPlugin {
     fn build(&self, app: &mut App) {
         // plugins
+        // the time we set here doesn't matter because we only use the spatial query plugin
+        // we still need to set FixedOnce so that the physics plugin runs once per frame
+        app.insert_resource(Time::new_with(Physics::fixed_once_hz(60.0)));
         app.add_plugins(PhysicsSetupPlugin::new(Update));
         app.add_plugins(SpatialQueryPlugin::new(Update));
         // events
         app.add_event::<SnakeFrictionEvent>();
         // sets
-        app.configure_sets(Update, (ColliderSet::UpdateColliders, PhysicsStepSet::SpatialQuery, ColliderSet::ComputeCollision).chain());
+        // we update the collider positions after we ran the movement systems
+        app.configure_sets(Update, (SimulationSet::Movement, ColliderSet::UpdateColliders, PhysicsStepSet::SpatialQuery, ColliderSet::ComputeCollision).chain());
         // systems
         app.add_systems(Update, (
             update_collider.in_set(ColliderSet::UpdateColliders),
