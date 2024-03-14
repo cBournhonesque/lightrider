@@ -1,4 +1,3 @@
-use bevy::DefaultPlugins;
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
 use clap::Parser;

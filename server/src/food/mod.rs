@@ -81,6 +81,9 @@ fn despawn_food(
 ) {
     for event in events.read() {
         if let Some(mut entity_command) = commands.get_entity(event.food) {
+            // TODO: provide a way to stop replicating the entity via a command!
+            //  (so that we don't have to wait for the handle_replicate_remove system to run)
+            //  probably via a command?
             // stop replicating the food
             entity_command.remove::<Replicate>();
             // despawn the food on the server side only (on the client side, we will run an animation)

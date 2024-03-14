@@ -11,7 +11,6 @@ pub const SERVER_SEND_HZ: f64 = 32.0;
 
 pub fn shared_config() -> SharedConfig {
     SharedConfig {
-        enable_replication: true,
         client_send_interval: Duration::default(),
         server_send_interval: Duration::from_secs_f64(1.0 / SERVER_SEND_HZ),
         tick: TickConfig {

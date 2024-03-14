@@ -39,12 +39,12 @@ pub(crate) async fn build_plugin(port: u16, transport: Transports) -> ServerPlug
     // Step 2: define the server configuration
     let config = ServerConfig {
         shared: shared_config(),
-        net: NetConfig::Netcode {
+        net: vec![NetConfig::Netcode {
             config: NetcodeConfig::default()
                 .with_protocol_id(PROTOCOL_ID)
                 .with_key(KEY),
             io: IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),
-        },
+        }],
         ..default()
     };
 
