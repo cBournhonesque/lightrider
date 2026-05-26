@@ -21,6 +21,7 @@ use crate::bot::BotMarker;
 use crate::config::GameConfig;
 use crate::movement::SimulationSet;
 use crate::network::protocol::prelude::*;
+use crate::utils::query::SimulationAuthority;
 
 pub const LIGHTYEAR_DEBUG_FILE_ENV: &str = "LIGHTYEAR_DEBUG_FILE";
 const LIGHTYEAR_DEBUG_TARGET: &str = "lightyear_debug";
@@ -384,6 +385,7 @@ type SnakeTraceItem<'a> = (
     Has<Predicted>,
     Has<Interpolated>,
     Has<Replicated>,
+    Has<SimulationAuthority>,
     Has<Controlled>,
     Option<&'a ControlledBy>,
     Has<BotMarker>,
@@ -417,6 +419,7 @@ fn trace_snake_sample(
         is_predicted,
         is_interpolated,
         is_replicated,
+        has_simulation_authority,
         is_controlled,
         controlled_by,
         is_bot,
@@ -475,6 +478,7 @@ fn trace_snake_sample(
             is_predicted = is_predicted,
             is_interpolated = is_interpolated,
             is_replicated = is_replicated,
+            has_simulation_authority = has_simulation_authority,
             is_controlled = is_controlled,
             has_controlled_by = controlled_by.is_some(),
             is_bot = is_bot,

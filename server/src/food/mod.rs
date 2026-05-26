@@ -156,8 +156,11 @@ impl Plugin for FoodPlugin {
 mod tests {
     #![allow(unused_variables)]
     use bevy::prelude::*;
+    use lightyear::prelude::{Interpolated, Replicated};
+    use shared::movement::MovementPlugin;
     use shared::network::bundle::snake::SnakeBundle;
     use shared::network::protocol::prelude::Direction;
+    use shared::utils::SimulationAuthority;
     use std::collections::VecDeque;
 
     use super::*;
@@ -288,6 +291,44 @@ mod tests {
                     + GameConfig::default().food.tail_growth
             ))
         );
+        assert!(app.world().get_entity(food).is_err());
+        assert_eq!(
+            app.world()
+                .entity(snake)
+                .get::<TailLength>()
+                .unwrap()
+                .target_size,
+            shared::config::MovementConfig::default().starting_tail_length
+                + GameConfig::default().food.tail_growth
+        );
+    }
+
+    #[test]
+    fn replicated_authoritative_snake_can_pick_up_food_after_moving() {
+        let mut app = App::new();
+
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<GameConfig>();
+        app.add_plugins(MovementPlugin);
+        app.add_plugins(shared::collision::CollisionPlugin);
+        app.add_plugins(FoodPlugin);
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeBundle::default(),
+                Replicated,
+                Interpolated,
+                SimulationAuthority,
+            ))
+            .id();
+        let food = app
+            .world_mut()
+            .spawn(FoodBundle::new(Position(Vec2::new(0.0, 1.0))))
+            .id();
+
+        run_fixed_update(&mut app);
+
         assert!(app.world().get_entity(food).is_err());
         assert_eq!(
             app.world()

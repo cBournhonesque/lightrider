@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeClient;
-use lightyear::prelude::client::{ClientPlugins, WebTransportClientIo};
+use lightyear::prelude::client::{
+    ClientPlugins, InputDelayConfig, InputTimelineConfig, WebTransportClientIo,
+};
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -50,6 +52,7 @@ fn spawn_client(mut commands: Commands, config: Res<ClientConnectionConfig>) -> 
         PeerAddr(config.server_addr),
         ReplicationReceiver::default(),
         PredictionManager::default(),
+        InputTimelineConfig::default().with_input_delay(InputDelayConfig::balanced()),
         Name::from("Client"),
     ));
 

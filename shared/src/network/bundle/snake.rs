@@ -7,6 +7,7 @@ use crate::network::protocol::prelude::Direction;
 use crate::network::protocol::prelude::*;
 
 use crate::config::MovementConfig;
+use crate::utils::query::SimulationAuthority;
 
 pub const TAIL_SIZE: f32 = 200.0;
 
@@ -116,6 +117,7 @@ impl SnakeBundle {
         commands
             .spawn((
                 SnakeBundle::new_in_room(config, room),
+                SimulationAuthority,
                 Replicate::to_clients(NetworkTarget::All),
                 InterpolationTarget::to_clients(NetworkTarget::All),
             ))
@@ -133,6 +135,7 @@ impl SnakeBundle {
         commands
             .spawn((
                 SnakeBundle::new_at(config, room, position, direction),
+                SimulationAuthority,
                 Replicate::to_clients(NetworkTarget::All),
                 InterpolationTarget::to_clients(NetworkTarget::All),
             ))
@@ -143,6 +146,7 @@ impl SnakeBundle {
         commands
             .spawn((
                 bundle,
+                SimulationAuthority,
                 Replicate::to_clients(NetworkTarget::All),
                 PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
                 InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(client_id)),

@@ -193,6 +193,9 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+    use crate::network::bundle::snake::SnakeBundle;
+    use crate::utils::query::SimulationAuthority;
+    use lightyear::prelude::{Interpolated, Replicated};
 
     fn create_snake(app: &mut App) -> Entity {
         app.world_mut()
@@ -210,6 +213,19 @@ mod tests {
                 Acceleration(0.0),
             ))
             .id()
+    }
+
+    fn run_fixed_update(app: &mut App) {
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    fn head_position(app: &App, snake: Entity) -> Vec2 {
+        app.world()
+            .entity(snake)
+            .get::<TailPoints>()
+            .unwrap()
+            .front()
+            .0
     }
 
     #[test]
@@ -247,6 +263,49 @@ mod tests {
         assert!((boost_acceleration(-0.01, 2.0, 20.0, 20.0) - 0.0).abs() < f32::EPSILON);
         assert!((boost_acceleration(-0.01, 2.0, 20.0, 0.0) - 0.02).abs() < f32::EPSILON);
         assert!((boost_acceleration(-0.01, 2.0, 20.0, 10.0) - 0.01).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn replicated_interpolated_authoritative_snake_moves() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<GameConfig>();
+        app.add_plugins(MovementPlugin);
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeBundle::default(),
+                Replicated,
+                Interpolated,
+                SimulationAuthority,
+            ))
+            .id();
+        let before = head_position(&app, snake);
+
+        run_fixed_update(&mut app);
+
+        let after = head_position(&app, snake);
+        assert_ne!(after, before);
+    }
+
+    #[test]
+    fn replicated_interpolated_remote_snake_does_not_move_without_authority() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<GameConfig>();
+        app.add_plugins(MovementPlugin);
+
+        let snake = app
+            .world_mut()
+            .spawn((SnakeBundle::default(), Replicated, Interpolated))
+            .id();
+        let before = head_position(&app, snake);
+
+        run_fixed_update(&mut app);
+
+        let after = head_position(&app, snake);
+        assert_eq!(after, before);
     }
 
     fn shorten_snake_entity(app: &mut App, snake: Entity) {

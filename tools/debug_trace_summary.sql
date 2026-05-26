@@ -20,6 +20,7 @@ SELECT
     fields.tail_length_current::DOUBLE AS tail_length_current,
     fields.is_predicted::BOOLEAN AS is_predicted,
     fields.is_interpolated::BOOLEAN AS is_interpolated,
+    coalesce(fields.has_simulation_authority::BOOLEAN, false) AS has_simulation_authority,
     fields.is_controlled::BOOLEAN AS is_controlled,
     fields.is_bot::BOOLEAN AS is_bot
 FROM debug_events
@@ -34,6 +35,116 @@ SELECT 'snake_samples_by_schedule' AS section, role, schedule, sample_point, cou
 FROM snake_heads
 GROUP BY role, schedule, sample_point
 ORDER BY role, schedule, sample_point;
+
+WITH fixed_last AS (
+    SELECT *
+    FROM snake_heads
+    WHERE schedule = 'FixedLast'
+),
+movement AS (
+    SELECT
+        role,
+        process_id,
+        entity,
+        player_id_bits,
+        is_predicted,
+        is_interpolated,
+        has_simulation_authority,
+        is_controlled,
+        is_bot,
+        tick_id,
+        sqrt(
+            pow(head_x - lag(head_x) OVER entity_ticks, 2)
+            + pow(head_y - lag(head_y) OVER entity_ticks, 2)
+        ) AS step_distance
+    FROM fixed_last
+    WINDOW entity_ticks AS (
+        PARTITION BY role, process_id, entity, player_id_bits
+        ORDER BY tick_id
+    )
+),
+movement_by_entity AS (
+    SELECT
+        role,
+        process_id,
+        entity,
+        player_id_bits,
+        any_value(is_predicted) AS is_predicted,
+        any_value(is_interpolated) AS is_interpolated,
+        any_value(has_simulation_authority) AS has_simulation_authority,
+        any_value(is_controlled) AS is_controlled,
+        any_value(is_bot) AS is_bot,
+        count(*) AS samples,
+        sum(CASE WHEN step_distance > 0.001 THEN 1 ELSE 0 END) AS moved_ticks,
+        sum(coalesce(step_distance, 0.0)) AS total_distance,
+        max(coalesce(step_distance, 0.0)) AS max_step_distance
+    FROM movement
+    GROUP BY role, process_id, entity, player_id_bits
+)
+SELECT
+    'snake_movement_by_entity' AS section,
+    role,
+    process_id,
+    entity,
+    player_id_bits,
+    is_predicted,
+    is_interpolated,
+    has_simulation_authority,
+    is_controlled,
+    is_bot,
+    samples,
+    moved_ticks,
+    total_distance,
+    max_step_distance
+FROM movement_by_entity
+ORDER BY role, process_id, entity
+LIMIT 50;
+
+WITH fixed_last AS (
+    SELECT *
+    FROM snake_heads
+    WHERE schedule = 'FixedLast'
+),
+movement AS (
+    SELECT
+        role,
+        process_id,
+        entity,
+        player_id_bits,
+        tick_id,
+        sqrt(
+            pow(head_x - lag(head_x) OVER entity_ticks, 2)
+            + pow(head_y - lag(head_y) OVER entity_ticks, 2)
+        ) AS step_distance
+    FROM fixed_last
+    WINDOW entity_ticks AS (
+        PARTITION BY role, process_id, entity, player_id_bits
+        ORDER BY tick_id
+    )
+),
+movement_by_entity AS (
+    SELECT
+        role,
+        process_id,
+        entity,
+        player_id_bits,
+        count(*) AS samples,
+        sum(CASE WHEN step_distance > 0.001 THEN 1 ELSE 0 END) AS moved_ticks
+    FROM movement
+    GROUP BY role, process_id, entity, player_id_bits
+)
+SELECT
+    'stationary_server_snakes' AS section,
+    role,
+    process_id,
+    entity,
+    player_id_bits,
+    samples,
+    moved_ticks
+FROM movement_by_entity
+WHERE role = 'server' AND samples >= 3 AND moved_ticks = 0
+ORDER BY process_id, entity
+LIMIT 50;
 
 SELECT
     'invariant_violations' AS section,

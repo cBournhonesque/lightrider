@@ -243,6 +243,11 @@ Status: complete enough for local load/latency smoke work.
 
 ### 2026-05-26
 
+- Fixed a Lightyear-main runtime regression where authoritative server snakes were not moving. Main now adds replication/interpolation marker components to source entities, so the old shared `Simulated` filter excluded server-owned snakes. Added a local `SimulationAuthority` marker to server snake sources and updated the simulation filter to include it while still excluding remote interpolated client copies.
+- Added regression tests for this marker behavior: authoritative replicated/interpolated snakes move, remote interpolated copies do not, and replicated authoritative snakes can move into and ingest food.
+- Added balanced `InputTimelineConfig`/`InputDelayConfig` on the client, following Lightyear's BEI example. This removed the initial `server_late_input_mismatch` rows seen when the first client input packet arrived one tick behind the server.
+- Expanded `tools/debug_trace_summary.sql` with `snake_movement_by_entity` and `stationary_server_snakes` sections so frozen authoritative simulation is visible in DuckDB summaries instead of only counting `snake_head` rows.
+- Verification: `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 1`, and `CARGO_INCREMENTAL=0 just trace-local 1 6 config/test.ron 5055` pass/complete. The trace emitted moving server bot/player rows, zero `stationary_server_snakes`, zero invariant violations, and zero `server_late_input_mismatch` rows. Note: the local filesystem was full during testing; removing generated Cargo incremental artifacts freed enough space to continue.
 - Switched the workspace Lightyear dependency from crates.io `0.26.4` to `https://github.com/cBournhonesque/lightyear.git` branch `main`, currently locked to commit `64c71437` in `Cargo.lock`.
 - Aligned the direct `bevy_enhanced_input` dependency to `0.24.4`, matching Lightyear main's `input_bei` integration, and replaced deprecated `ActionState` usage with `TriggerState`.
 - Adapted to Lightyear main's room-visibility API: the server now uses `RoomAllocator` plus `Rooms::single(...)` membership components instead of the removed `Room`/`RoomEvent`/`RoomTarget` API. The old `ReplicationGroup::new_from_entity()` inserts were removed because main no longer exposes that component.
