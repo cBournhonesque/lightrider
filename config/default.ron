@@ -32,6 +32,10 @@
         count: 0,
         input_interval_ticks: 10,
     ),
+    respawn: (
+        player_cooldown_seconds: 1.0,
+        bot_cooldown_seconds: 1.0,
+    ),
     network: (
         server_port: 5000,
         artificial_latency_ms: 0,
@@ -41,5 +45,7 @@
     debug: (
         lightyear_debug: false,
         json_snapshots: false,
+        snake_trace_sample_interval_ticks: 1,
+        invariant_checks: true,
     ),
 )

@@ -1,3 +1,4 @@
+use crate::collision::death::DeathView;
 use crate::inputs::ToggleCamera;
 use bevy::camera::{Projection, ScalingMode};
 use bevy::prelude::*;
@@ -52,7 +53,9 @@ fn toggle_camera(
 ///
 /// System to make the camera follow the head of the player, or the head of the killer
 fn follow_camera(
+    death_view: Res<DeathView>,
     predicted: Query<&TailPoints, With<Predicted>>,
+    tails: Query<&TailPoints>,
     mut camera_query: Query<&mut Transform, With<Camera>>,
 ) {
     // how much we stick to the new position
@@ -64,9 +67,14 @@ fn follow_camera(
             // *camera_pos = Transform::from_translation(camera_pos.translation.mul_add(Vec3::splat(1.0 - lerp), Vec3::from((head, 0.0)) * lerp));
             camera_pos.translation.x = head.x;
             camera_pos.translation.y = head.y;
+        } else if let Some(killer_snake) = death_view.killer_snake {
+            if let Ok(pos) = tails.get(killer_snake) {
+                let head = pos.front().0;
+                camera_pos.translation.x = head.x;
+                camera_pos.translation.y = head.y;
+            }
         }
     }
-    // player is dead: camera follows killer's head
 }
 
 /// Switch camera to follow view, reset the projection

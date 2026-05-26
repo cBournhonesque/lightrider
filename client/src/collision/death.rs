@@ -5,9 +5,16 @@
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use lightyear::prelude::{Client, Controlled, MessageReceiver, Predicted};
-use shared::network::protocol::prelude::{HasPlayer, Player, PlayerDeath};
+use shared::config::GameConfig;
+use shared::network::protocol::prelude::{DeathReason, HasPlayer, Player, PlayerDeath};
 
 pub(crate) struct DeathPlugin;
+
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub(crate) struct DeathView {
+    pub(crate) killer_snake: Option<Entity>,
+    pub(crate) respawn_allowed_at_seconds: f32,
+}
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States, Reflect)]
 enum GameState {
@@ -20,6 +27,7 @@ impl Plugin for DeathPlugin {
     fn build(&self, app: &mut App) {
         // states
         app.init_state::<GameState>();
+        app.init_resource::<DeathView>();
 
         // systems
         // TODO: toggling the actions is not enough, ideally we would disable/enable the entire input plugin
@@ -28,13 +36,17 @@ impl Plugin for DeathPlugin {
         app.add_systems(Update, set_alive_state.run_if(in_state(GameState::Dead)));
 
         // alive
-        app.add_systems(OnEnter(GameState::Alive), enable_alive_actions);
+        app.add_systems(
+            OnEnter(GameState::Alive),
+            (enable_alive_actions, clear_death_view),
+        );
 
         // all
         app.add_systems(Update, handle_death_message);
 
         // reflect
         app.register_type::<GameState>();
+        app.register_type::<DeathView>();
     }
 }
 
@@ -42,6 +54,9 @@ impl Plugin for DeathPlugin {
 // 2. if it's someone else's death, play death animation
 fn handle_death_message(
     mut next_state: ResMut<NextState<GameState>>,
+    mut death_view: ResMut<DeathView>,
+    config: Res<GameConfig>,
+    time: Res<Time>,
     mut receivers: Query<&mut MessageReceiver<PlayerDeath>, With<Client>>,
     player: Query<Entity, (With<Player>, With<Controlled>)>,
 ) {
@@ -55,8 +70,23 @@ fn handle_death_message(
         trace!(?message, "Received death message");
         if message.killed_player == player {
             debug!("I died");
+            death_view.killer_snake = death_camera_target(&message);
+            death_view.respawn_allowed_at_seconds =
+                time.elapsed_secs() + config.respawn.player_cooldown_seconds.max(0.0);
             next_state.set(GameState::Dead);
         }
+    }
+}
+
+fn death_camera_target(message: &PlayerDeath) -> Option<Entity> {
+    match message.reason {
+        DeathReason::Collision
+            if message.killer_player != message.killed_player
+                && message.killer_snake != message.killed_snake =>
+        {
+            Some(message.killer_snake)
+        }
+        DeathReason::Collision | DeathReason::Boundary | DeathReason::Suicide => None,
     }
 }
 
@@ -85,6 +115,10 @@ fn enable_dead_actions() {
 
 fn enable_alive_actions() {
     trace!("Enable alive actions");
+}
+
+fn clear_death_view(mut death_view: ResMut<DeathView>) {
+    *death_view = DeathView::default();
 }
 
 // TODO: receive an event instead

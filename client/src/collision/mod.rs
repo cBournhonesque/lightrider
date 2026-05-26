@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-mod death;
+pub(crate) mod death;
 
 pub struct CollisionPlugin;
 

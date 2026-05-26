@@ -77,13 +77,11 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<components::snake::Acceleration>()
             .add_prediction();
         app.register_component::<components::snake::HasPlayer>()
-            .add_map_entities()
             .add_prediction();
         app.register_component::<inputs::SnakeInput>()
             .add_prediction();
 
-        app.register_component::<components::player::Player>()
-            .add_map_entities();
+        app.register_component::<components::player::Player>();
         app.register_component::<components::player::PlayerScore>();
         app.register_component::<components::player::PlayerRank>();
         app.register_component::<components::player::PlayerStatus>();

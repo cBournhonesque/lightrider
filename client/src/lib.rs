@@ -5,13 +5,13 @@ use std::time::Duration;
 use bevy::app::{App, PluginGroup, ScheduleRunnerPlugin};
 use bevy::diagnostic::DiagnosticsPlugin;
 use bevy::input::InputPlugin;
-use bevy::log::{Level, LogPlugin};
 use bevy::state::app::StatesPlugin;
 use bevy::transform::TransformPlugin;
 use bevy::{DefaultPlugins, MinimalPlugins};
 use clap::{Parser, ValueEnum};
 
 use shared::config::GameConfig;
+use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
 use shared::network::protocol::prelude::RoomJoinMode;
 use shared::SharedPlugin;
 
@@ -78,6 +78,11 @@ pub fn app(cli: Cli) -> App {
     let mut app = App::new();
     let config = load_config(cli.config.as_deref());
     let bot_decision_interval_ticks = config.fake_clients.input_interval_ticks;
+    let log_plugin = if cli.headless {
+        runtime_log_plugin(&config, "wgpu=error,bevy_ecs=trace")
+    } else {
+        runtime_log_plugin(&config, "wgpu=error,bevy_render=info,bevy_ecs=trace")
+    };
     app.insert_resource(config);
     if cli.headless {
         app.add_plugins((
@@ -88,18 +93,10 @@ pub fn app(cli: Cli) -> App {
             InputPlugin,
             StatesPlugin,
             DiagnosticsPlugin,
-            LogPlugin {
-                level: Level::INFO,
-                filter: "wgpu=error,bevy_ecs=trace".to_string(),
-                ..Default::default()
-            },
+            log_plugin,
         ));
     } else {
-        app.add_plugins(DefaultPlugins.set(LogPlugin {
-            level: Level::INFO,
-            filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
-            ..Default::default()
-        }));
+        app.add_plugins(DefaultPlugins.set(log_plugin));
     }
 
     app.add_plugins(network::NetworkPlugin {
@@ -109,6 +106,7 @@ pub fn app(cli: Cli) -> App {
         certificate_digest: cli.certificate_digest,
     });
     app.add_plugins(SharedPlugin);
+    app.add_plugins(RuntimeDebugPlugin::client());
     app.add_plugins(collision::CollisionPlugin);
     app.add_plugins(rooms::ClientRoomsPlugin { mode: cli.room });
     if cli.mode == ClientMode::Bot {

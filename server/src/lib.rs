@@ -1,10 +1,11 @@
-use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
 use clap::Parser;
 use std::path::PathBuf;
 
 use crate::food::FoodPlugin;
 use shared::config::GameConfig;
+use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
 use shared::SharedPlugin;
 
 mod bots;
@@ -12,6 +13,7 @@ pub(crate) mod collision;
 mod debug;
 mod food;
 mod network;
+mod respawn;
 pub(crate) mod rooms;
 mod spawning;
 
@@ -34,20 +36,19 @@ pub struct Cli {
 
 pub async fn app(cli: Cli) -> App {
     let mut app = App::new();
-    app.insert_resource(load_config(cli.config.as_deref()));
+    let config = load_config(cli.config.as_deref());
+    let log_plugin = if cli.headless {
+        runtime_log_plugin(&config, "wgpu=error,bevy_ecs=trace")
+    } else {
+        runtime_log_plugin(&config, "wgpu=error,bevy_render=info,bevy_ecs=trace")
+    };
+    app.insert_resource(config);
     if cli.headless {
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(LogPlugin {
-            level: Level::INFO,
-            filter: "wgpu=error,bevy_ecs=trace".to_string(),
-            ..Default::default()
-        });
+        app.add_plugins(StatesPlugin);
+        app.add_plugins(log_plugin);
     } else {
-        app.add_plugins(DefaultPlugins.set(LogPlugin {
-            level: Level::INFO,
-            filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
-            ..Default::default()
-        }));
+        app.add_plugins(DefaultPlugins.set(log_plugin));
     }
 
     // networking
@@ -55,6 +56,7 @@ pub async fn app(cli: Cli) -> App {
 
     // shared
     app.add_plugins(SharedPlugin);
+    app.add_plugins(RuntimeDebugPlugin::server());
 
     // rooms
     app.add_plugins(rooms::ServerRoomsPlugin);

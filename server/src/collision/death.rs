@@ -1,8 +1,11 @@
+use crate::respawn::{respawn_delay_seconds, RespawnReadyAt};
 use crate::rooms::{remove_replicated_entity_from_room, RoomDirectory};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use lightyear::prelude::{ControlledBy, NetworkTarget, Server, ServerMultiMessageSender};
+use shared::bot::BotMarker;
 use shared::collision::collider::ColliderSet;
+use shared::config::GameConfig;
 use shared::network::protocol::prelude::*;
 use tracing::error;
 
@@ -23,7 +26,9 @@ pub fn handle_collision(
     mut sender: ServerMultiMessageSender,
     server: Single<&Server>,
     rooms: Res<RoomDirectory>,
-    mut players: Query<(&mut Player, &mut PlayerStatus)>,
+    config: Res<GameConfig>,
+    time: Res<Time>,
+    mut players: Query<(&mut Player, &mut PlayerStatus, Has<BotMarker>)>,
     human_players: Query<(), With<ControlledBy>>,
     snakes: Query<(&HasPlayer, &RoomId)>,
     mut commands: Commands,
@@ -46,7 +51,8 @@ pub fn handle_collision(
             error!(?collision_event, "snake collision crossed room boundaries");
             continue;
         }
-        let Ok((mut killed, mut killed_status)) = players.get_mut(killed_player.0) else {
+        let Ok((mut killed, mut killed_status, killed_is_bot)) = players.get_mut(killed_player.0)
+        else {
             error!("player could not be found");
             continue;
         };
@@ -85,5 +91,11 @@ pub fn handle_collision(
         commands.entity(collision_event.killed).try_despawn();
         killed.snake = None;
         *killed_status = PlayerStatus::Dead;
+        commands
+            .entity(killed_player.0)
+            .insert(RespawnReadyAt::from_now(
+                time.elapsed_secs_f64(),
+                respawn_delay_seconds(&config, killed_is_bot),
+            ));
     }
 }

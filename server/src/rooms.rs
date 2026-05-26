@@ -3,7 +3,8 @@ use bevy_turborand::prelude::*;
 use lightyear::connection::client::{Connected, Disconnected};
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
-    MessageReceiver, RemoteId, Room, RoomEvent, RoomPlugin as LightyearRoomPlugin, RoomTarget,
+    MessageReceiver, RemoteId, RoomAllocator, RoomId as LightyearRoomId,
+    RoomPlugin as LightyearRoomPlugin, Rooms,
 };
 
 use shared::config::GameConfig;
@@ -18,13 +19,13 @@ pub(crate) struct ClientRoom {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RoomAssignment {
     pub(crate) game_room: RoomId,
-    pub(crate) lightyear_room: Entity,
+    pub(crate) lightyear_room: LightyearRoomId,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RoomState {
     pub(crate) game_room: RoomId,
-    pub(crate) lightyear_room: Entity,
+    pub(crate) lightyear_room: LightyearRoomId,
     human_count: usize,
 }
 
@@ -46,7 +47,7 @@ impl RoomDirectory {
         })
     }
 
-    pub(crate) fn lightyear_room(&self, game_room: RoomId) -> Option<Entity> {
+    pub(crate) fn lightyear_room(&self, game_room: RoomId) -> Option<LightyearRoomId> {
         self.rooms
             .iter()
             .find(|room| room.game_room == game_room)
@@ -56,6 +57,7 @@ impl RoomDirectory {
     pub(crate) fn assign_auto(
         &mut self,
         commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
         config: &GameConfig,
         roll: usize,
     ) -> RoomAssignment {
@@ -68,24 +70,25 @@ impl RoomDirectory {
             AutoRoomSelection::Existing(index) | AutoRoomSelection::Fallback(index) => {
                 self.assignment_at(index)
             }
-            AutoRoomSelection::Create => self.create_room(commands, config, None),
+            AutoRoomSelection::Create => self.create_room(commands, room_allocator, config, None),
         }
     }
 
     pub(crate) fn assign_for_mode(
         &mut self,
         commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
         config: &GameConfig,
         mode: RoomJoinMode,
         roll: usize,
     ) -> RoomAssignment {
         match mode {
-            RoomJoinMode::Auto => self.assign_auto(commands, config, roll),
+            RoomJoinMode::Auto => self.assign_auto(commands, room_allocator, config, roll),
             RoomJoinMode::New => {
                 if self.rooms.len() < config.rooms.max_rooms.max(1) {
-                    self.create_room(commands, config, None)
+                    self.create_room(commands, room_allocator, config, None)
                 } else {
-                    self.assign_auto(commands, config, roll)
+                    self.assign_auto(commands, room_allocator, config, roll)
                 }
             }
             RoomJoinMode::Specific(room_id) => {
@@ -93,9 +96,9 @@ impl RoomDirectory {
                 {
                     self.assignment_at(existing)
                 } else if self.rooms.len() < config.rooms.max_rooms.max(1) {
-                    self.create_room(commands, config, Some(room_id))
+                    self.create_room(commands, room_allocator, config, Some(room_id))
                 } else {
-                    self.assign_auto(commands, config, roll)
+                    self.assign_auto(commands, room_allocator, config, roll)
                 }
             }
         }
@@ -132,14 +135,14 @@ impl RoomDirectory {
     fn create_room(
         &mut self,
         commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
         config: &GameConfig,
         requested: Option<RoomId>,
     ) -> RoomAssignment {
         let game_room = requested.unwrap_or_else(|| RoomId(self.next_room_id));
         self.next_room_id = self.next_room_id.max(game_room.0.saturating_add(1));
-        let lightyear_room = commands
-            .spawn((Room::default(), Name::from(format!("Room {}", game_room.0))))
-            .id();
+        let lightyear_room = room_allocator.allocate();
+        commands.spawn(Name::from(format!("Room {}", game_room.0)));
         spawn_room_map(commands, config, game_room);
         self.rooms.push(RoomState {
             game_room,
@@ -206,10 +209,11 @@ impl Plugin for ServerRoomsPlugin {
 fn ensure_initial_room(
     mut commands: Commands,
     config: Res<GameConfig>,
+    mut room_allocator: ResMut<RoomAllocator>,
     mut directory: ResMut<RoomDirectory>,
 ) {
     if directory.is_empty() {
-        directory.create_room(&mut commands, &config, None);
+        directory.create_room(&mut commands, &mut room_allocator, &config, None);
     }
 }
 
@@ -217,6 +221,7 @@ fn handle_room_join_requests(
     mut commands: Commands,
     config: Res<GameConfig>,
     mut directory: ResMut<RoomDirectory>,
+    mut room_allocator: ResMut<RoomAllocator>,
     mut rng: ResMut<GlobalRng>,
     mut clients: Query<
         (
@@ -234,7 +239,13 @@ fn handle_room_join_requests(
         let mut current_room = client_room.map(|room| room.room);
         for request in receiver.receive() {
             let roll = rng.usize(..);
-            let assignment = directory.assign_for_mode(&mut commands, &config, request.mode, roll);
+            let assignment = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                request.mode,
+                roll,
+            );
             if Some(assignment.game_room) == current_room {
                 continue;
             }
@@ -316,21 +327,12 @@ pub(crate) fn move_client_to_room(
     room_components: &mut Query<&mut RoomId>,
 ) {
     if let Some(current_room) = current_room {
-        if let Some(current_lightyear_room) = directory.lightyear_room(current_room) {
-            commands.trigger(RoomEvent {
-                room: current_lightyear_room,
-                target: RoomTarget::RemoveSender(client_entity),
-            });
-        }
         directory.move_human(current_room, assignment.game_room);
     } else {
         directory.register_human(assignment.game_room);
     }
 
-    commands.trigger(RoomEvent {
-        room: assignment.lightyear_room,
-        target: RoomTarget::AddSender(client_entity),
-    });
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, client_entity);
     commands.entity(client_entity).insert(ClientRoom {
         room: assignment.game_room,
     });
@@ -339,61 +341,40 @@ pub(crate) fn move_client_to_room(
     else {
         return;
     };
-    move_replicated_entity_to_room(
-        commands,
-        directory,
-        player_entity,
-        current_room,
-        assignment.lightyear_room,
-    );
+    move_replicated_entity_to_room(commands, player_entity, assignment.lightyear_room);
     if let Ok(mut player_room) = room_components.get_mut(player_entity) {
         *player_room = assignment.game_room;
     }
 
     if let Some(snake_entity) = player.snake {
         if let Ok(mut snake_room) = room_components.get_mut(snake_entity) {
-            move_replicated_entity_to_room(
-                commands,
-                directory,
-                snake_entity,
-                current_room,
-                assignment.lightyear_room,
-            );
+            move_replicated_entity_to_room(commands, snake_entity, assignment.lightyear_room);
             *snake_room = assignment.game_room;
         }
     }
 }
 
-pub(crate) fn add_replicated_entity_to_room(commands: &mut Commands, room: Entity, entity: Entity) {
-    commands.trigger(RoomEvent {
-        room,
-        target: RoomTarget::AddEntity(entity),
-    });
+pub(crate) fn add_replicated_entity_to_room(
+    commands: &mut Commands,
+    room: LightyearRoomId,
+    entity: Entity,
+) {
+    commands.entity(entity).insert(Rooms::single(room));
 }
 
 pub(crate) fn remove_replicated_entity_from_room(
     commands: &mut Commands,
-    room: Entity,
+    _room: LightyearRoomId,
     entity: Entity,
 ) {
-    commands.trigger(RoomEvent {
-        room,
-        target: RoomTarget::RemoveEntity(entity),
-    });
+    commands.entity(entity).remove::<Rooms>();
 }
 
 fn move_replicated_entity_to_room(
     commands: &mut Commands,
-    directory: &RoomDirectory,
     entity: Entity,
-    current_room: Option<RoomId>,
-    lightyear_room: Entity,
+    lightyear_room: LightyearRoomId,
 ) {
-    if let Some(current_room) = current_room {
-        if let Some(current_lightyear_room) = directory.lightyear_room(current_room) {
-            remove_replicated_entity_from_room(commands, current_lightyear_room, entity);
-        }
-    }
     add_replicated_entity_to_room(commands, lightyear_room, entity);
 }
 

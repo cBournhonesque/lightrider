@@ -3,6 +3,7 @@ use bevy::app::{App, Plugin};
 pub mod bot;
 pub mod collision;
 pub mod config;
+pub mod debug;
 
 pub mod map;
 pub mod movement;

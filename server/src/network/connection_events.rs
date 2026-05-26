@@ -24,35 +24,114 @@ pub(crate) fn handle_new_client_of(trigger: On<Add, ClientOf>, mut commands: Com
 }
 
 pub(crate) fn handle_connected(
-    trigger: On<Add, Connected>,
-    clients: Query<&RemoteId, With<ClientOf>>,
+    _trigger: On<Add, Connected>,
+    clients: Query<
+        (Entity, &RemoteId, Option<&ClientRoom>),
+        (With<ClientOf>, With<Connected>, With<ReplicationSender>),
+    >,
+    pending_clients: Query<(), (With<ClientOf>, Without<ReplicationSender>)>,
     config: Res<GameConfig>,
+    mut room_allocator: ResMut<RoomAllocator>,
     mut directory: ResMut<RoomDirectory>,
     mut rng: ResMut<GlobalRng>,
     mut commands: Commands,
 ) {
-    let Ok(client_id) = clients.get(trigger.entity) else {
+    spawn_ready_clients(
+        &clients,
+        &pending_clients,
+        &config,
+        &mut room_allocator,
+        &mut directory,
+        &mut rng,
+        &mut commands,
+    );
+}
+
+pub(crate) fn handle_replication_sender_ready(
+    _trigger: On<Add, ReplicationSender>,
+    clients: Query<
+        (Entity, &RemoteId, Option<&ClientRoom>),
+        (With<ClientOf>, With<Connected>, With<ReplicationSender>),
+    >,
+    pending_clients: Query<(), (With<ClientOf>, Without<ReplicationSender>)>,
+    config: Res<GameConfig>,
+    mut room_allocator: ResMut<RoomAllocator>,
+    mut directory: ResMut<RoomDirectory>,
+    mut rng: ResMut<GlobalRng>,
+    mut commands: Commands,
+) {
+    spawn_ready_clients(
+        &clients,
+        &pending_clients,
+        &config,
+        &mut room_allocator,
+        &mut directory,
+        &mut rng,
+        &mut commands,
+    );
+}
+
+fn spawn_ready_clients(
+    clients: &Query<
+        (Entity, &RemoteId, Option<&ClientRoom>),
+        (With<ClientOf>, With<Connected>, With<ReplicationSender>),
+    >,
+    pending_clients: &Query<(), (With<ClientOf>, Without<ReplicationSender>)>,
+    config: &GameConfig,
+    room_allocator: &mut RoomAllocator,
+    directory: &mut RoomDirectory,
+    rng: &mut GlobalRng,
+    commands: &mut Commands,
+) {
+    if !pending_clients.is_empty() {
         return;
-    };
-    let client_id = client_id.0;
-    let assignment = directory.assign_auto(&mut commands, &config, rng.usize(..));
+    }
+
+    let ready_clients = clients
+        .iter()
+        .filter_map(|(client_entity, client_id, client_room)| {
+            client_room
+                .is_none()
+                .then_some((client_entity, client_id.0))
+        })
+        .collect::<Vec<_>>();
+    for (client_entity, client_id) in ready_clients {
+        spawn_ready_client(
+            client_entity,
+            client_id,
+            config,
+            room_allocator,
+            directory,
+            rng,
+            commands,
+        );
+    }
+}
+
+fn spawn_ready_client(
+    client_entity: Entity,
+    client_id: PeerId,
+    config: &GameConfig,
+    room_allocator: &mut RoomAllocator,
+    directory: &mut RoomDirectory,
+    rng: &mut GlobalRng,
+    commands: &mut Commands,
+) {
+    let assignment = directory.assign_auto(commands, room_allocator, config, rng.usize(..));
     directory.register_human(assignment.game_room);
     info!(
         "Client {client_id:?} connected to room {}",
         assignment.game_room.0,
     );
-    commands.entity(trigger.entity).insert(ClientRoom {
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, client_entity);
+    commands.entity(client_entity).insert(ClientRoom {
         room: assignment.game_room,
-    });
-    commands.trigger(RoomEvent {
-        room: assignment.lightyear_room,
-        target: RoomTarget::AddSender(trigger.entity),
     });
 
     let (spawn_position, spawn_direction) =
-        snake_spawn_pose(&config, assignment.game_room, client_id.to_bits());
+        snake_spawn_pose(config, assignment.game_room, client_id.to_bits());
     let head_entity = SnakeBundle::spawn_with_room_at(
-        &mut commands,
+        commands,
         client_id,
         &config.movement,
         assignment.game_room,
@@ -67,7 +146,7 @@ pub(crate) fn handle_connected(
         },
         assignment.game_room,
     )
-    .spawn(&mut commands, client_id);
+    .spawn(commands, client_id);
     commands
         .entity(player_entity)
         .insert(PlayerScore::from_length(
@@ -75,15 +154,15 @@ pub(crate) fn handle_connected(
         ));
 
     let controlled_by = ControlledBy {
-        owner: trigger.entity,
+        owner: client_entity,
         lifetime: Default::default(),
     };
     commands
         .entity(head_entity)
         .insert((HasPlayer(player_entity), controlled_by));
     commands.entity(player_entity).insert(controlled_by);
-    add_replicated_entity_to_room(&mut commands, assignment.lightyear_room, player_entity);
-    add_replicated_entity_to_room(&mut commands, assignment.lightyear_room, head_entity);
-    spawn_snake_input_actions(&mut commands, head_entity, client_id, true);
-    spawn_player_input_actions(&mut commands, player_entity, client_id, true);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, player_entity);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, head_entity);
+    spawn_snake_input_actions(commands, head_entity, client_id, true);
+    spawn_player_input_actions(commands, player_entity, client_id, true);
 }

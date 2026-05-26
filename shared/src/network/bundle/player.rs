@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use lightyear::prelude::{NetworkTarget, PeerId, Replicate, ReplicationGroup};
+use lightyear::prelude::{NetworkTarget, PeerId, Replicate};
 
 use crate::network::protocol::prelude::{
     Player, PlayerInput, PlayerRank, PlayerScore, PlayerStatus, RoomId,
@@ -33,11 +33,7 @@ impl PlayerBundle {
 
     pub fn spawn(self, commands: &mut Commands, _client_id: PeerId) -> Entity {
         commands
-            .spawn((
-                self,
-                Replicate::to_clients(NetworkTarget::All),
-                ReplicationGroup::new_from_entity(),
-            ))
+            .spawn((self, Replicate::to_clients(NetworkTarget::All)))
             .id()
     }
 }

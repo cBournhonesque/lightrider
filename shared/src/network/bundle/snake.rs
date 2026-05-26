@@ -1,9 +1,7 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
-use lightyear::prelude::{
-    InterpolationTarget, NetworkTarget, PeerId, PredictionTarget, Replicate, ReplicationGroup,
-};
+use lightyear::prelude::{InterpolationTarget, NetworkTarget, PeerId, PredictionTarget, Replicate};
 
 use crate::network::protocol::prelude::Direction;
 use crate::network::protocol::prelude::*;
@@ -120,7 +118,6 @@ impl SnakeBundle {
                 SnakeBundle::new_in_room(config, room),
                 Replicate::to_clients(NetworkTarget::All),
                 InterpolationTarget::to_clients(NetworkTarget::All),
-                ReplicationGroup::new_from_entity(),
             ))
             .id()
     }
@@ -138,7 +135,6 @@ impl SnakeBundle {
                 SnakeBundle::new_at(config, room, position, direction),
                 Replicate::to_clients(NetworkTarget::All),
                 InterpolationTarget::to_clients(NetworkTarget::All),
-                ReplicationGroup::new_from_entity(),
             ))
             .id()
     }
@@ -150,7 +146,6 @@ impl SnakeBundle {
                 Replicate::to_clients(NetworkTarget::All),
                 PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
                 InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(client_id)),
-                ReplicationGroup::new_from_entity(),
             ))
             .id()
     }

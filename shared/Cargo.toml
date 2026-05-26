@@ -17,6 +17,7 @@ publish = false
 lightyear.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 ron.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

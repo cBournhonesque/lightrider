@@ -1,8 +1,9 @@
 use bevy::prelude::*;
-use lightyear::prelude::PeerId;
+use lightyear::prelude::{PeerId, RoomId as LightyearRoomId};
 
+use crate::respawn::RespawnReadyAt;
 use crate::rooms::{add_replicated_entity_to_room, RoomAssignment, RoomDirectory};
-use crate::spawning::snake_spawn_pose;
+use crate::spawning::snake_spawn_pose_avoiding;
 use shared::bot::{BotController, BotMarker};
 use shared::config::GameConfig;
 use shared::movement::{turn_tail, SimulationSet};
@@ -45,8 +46,10 @@ fn maintain_bots(
     mut commands: Commands,
     config: Res<GameConfig>,
     directory: Res<RoomDirectory>,
+    time: Res<Time>,
     mut ids: ResMut<BotIdAllocator>,
     bot_players: Query<&RoomId, (With<Player>, With<BotMarker>)>,
+    tails: Query<(&TailPoints, &RoomId)>,
     mut dead_bots: Query<
         (
             Entity,
@@ -54,6 +57,7 @@ fn maintain_bots(
             &mut PlayerScore,
             &mut PlayerStatus,
             &RoomId,
+            Option<&RespawnReadyAt>,
         ),
         With<BotMarker>,
     >,
@@ -69,30 +73,51 @@ fn maintain_bots(
             .filter(|bot_room| **bot_room == room.game_room)
             .count();
         for _ in existing..config.bots.target_count_per_room {
-            spawn_bot(&mut commands, &config, *room, &mut ids);
+            let obstacle_tails = tails
+                .iter()
+                .filter(|(_, tail_room)| **tail_room == room.game_room)
+                .map(|(tail, _)| tail);
+            spawn_bot(&mut commands, &config, *room, &mut ids, obstacle_tails);
         }
     }
 
-    for (player_entity, mut player, mut score, mut status, room) in &mut dead_bots {
+    for (player_entity, mut player, mut score, mut status, room, respawn_ready_at) in &mut dead_bots
+    {
         if player.snake.is_some() && *status == PlayerStatus::Alive {
+            continue;
+        }
+        if respawn_ready_at.is_some_and(|ready_at| !ready_at.is_ready(time.elapsed_secs_f64())) {
             continue;
         }
         let Some(lightyear_room) = directory.lightyear_room(*room) else {
             continue;
         };
-        let snake = spawn_bot_snake(&mut commands, &config, *room, lightyear_room, player.id);
+        let obstacle_tails = tails
+            .iter()
+            .filter(|(_, tail_room)| **tail_room == *room)
+            .map(|(tail, _)| tail);
+        let snake = spawn_bot_snake(
+            &mut commands,
+            &config,
+            *room,
+            lightyear_room,
+            player.id,
+            obstacle_tails,
+        );
         commands.entity(snake).insert(HasPlayer(player_entity));
+        commands.entity(player_entity).remove::<RespawnReadyAt>();
         player.snake = Some(snake);
         *score = PlayerScore::from_length(config.movement.starting_tail_length);
         *status = PlayerStatus::Alive;
     }
 }
 
-fn spawn_bot(
+fn spawn_bot<'a>(
     commands: &mut Commands,
     config: &GameConfig,
     assignment: RoomAssignment,
     ids: &mut BotIdAllocator,
+    obstacle_tails: impl IntoIterator<Item = &'a TailPoints>,
 ) {
     let bot_id = ids.next();
     let snake = spawn_bot_snake(
@@ -101,6 +126,7 @@ fn spawn_bot(
         assignment.game_room,
         assignment.lightyear_room,
         bot_id,
+        obstacle_tails,
     );
     let player = PlayerBundle::new_in_room(
         Player {
@@ -119,14 +145,16 @@ fn spawn_bot(
     add_replicated_entity_to_room(commands, assignment.lightyear_room, player);
 }
 
-fn spawn_bot_snake(
+fn spawn_bot_snake<'a>(
     commands: &mut Commands,
     config: &GameConfig,
     room: RoomId,
-    lightyear_room: Entity,
+    lightyear_room: LightyearRoomId,
     bot_id: PeerId,
+    obstacle_tails: impl IntoIterator<Item = &'a TailPoints>,
 ) -> Entity {
-    let (spawn_position, spawn_direction) = snake_spawn_pose(config, room, bot_id.to_bits());
+    let (spawn_position, spawn_direction) =
+        snake_spawn_pose_avoiding(config, room, bot_id.to_bits(), obstacle_tails);
     let snake = SnakeBundle::spawn_server_owned_at(
         commands,
         bot_id.to_bits(),

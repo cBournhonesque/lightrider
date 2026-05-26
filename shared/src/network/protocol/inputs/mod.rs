@@ -49,7 +49,7 @@ pub fn spawn_player_input_actions(
     let mut action = commands.spawn((
         ActionOf::<PlayerInput>::new(player_entity),
         Action::<SpawnPlayer>::new(),
-        bindings![KeyCode::Enter],
+        bindings![KeyCode::Enter, KeyCode::Space],
         action_prespawn(client_id, 1, player_entity, is_server),
     ));
     configure_action_entity(

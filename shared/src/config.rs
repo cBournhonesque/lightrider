@@ -16,6 +16,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<RoomConfig>();
         app.register_type::<BotConfig>();
         app.register_type::<FakeClientConfig>();
+        app.register_type::<RespawnConfig>();
         app.register_type::<NetworkConfig>();
         app.register_type::<DebugConfig>();
     }
@@ -30,6 +31,7 @@ pub struct GameConfig {
     pub rooms: RoomConfig,
     pub bots: BotConfig,
     pub fake_clients: FakeClientConfig,
+    pub respawn: RespawnConfig,
     pub network: NetworkConfig,
     pub debug: DebugConfig,
 }
@@ -43,6 +45,7 @@ impl Default for GameConfig {
             rooms: RoomConfig::default(),
             bots: BotConfig::default(),
             fake_clients: FakeClientConfig::default(),
+            respawn: RespawnConfig::default(),
             network: NetworkConfig::default(),
             debug: DebugConfig::default(),
         }
@@ -195,6 +198,22 @@ impl Default for FakeClientConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
+#[serde(default)]
+pub struct RespawnConfig {
+    pub player_cooldown_seconds: f32,
+    pub bot_cooldown_seconds: f32,
+}
+
+impl Default for RespawnConfig {
+    fn default() -> Self {
+        Self {
+            player_cooldown_seconds: 1.0,
+            bot_cooldown_seconds: 1.0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Reflect)]
 #[serde(default)]
 pub struct NetworkConfig {
@@ -220,6 +239,8 @@ impl Default for NetworkConfig {
 pub struct DebugConfig {
     pub lightyear_debug: bool,
     pub json_snapshots: bool,
+    pub snake_trace_sample_interval_ticks: u32,
+    pub invariant_checks: bool,
 }
 
 impl Default for DebugConfig {
@@ -227,6 +248,8 @@ impl Default for DebugConfig {
         Self {
             lightyear_debug: false,
             json_snapshots: false,
+            snake_trace_sample_interval_ticks: 1,
+            invariant_checks: true,
         }
     }
 }

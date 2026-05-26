@@ -4,10 +4,10 @@ use crate::config::ArenaConfig;
 use crate::network::protocol::prelude::{Direction, TailPoints};
 use crate::utils::geometry::ray_segment_intersection;
 
-const LOOKAHEAD_DISTANCE: f32 = 220.0;
-const DANGER_DISTANCE: f32 = 45.0;
-const MIN_SAFE_TURN_DISTANCE: f32 = 90.0;
-const MIN_SEGMENT_BEFORE_VOLUNTARY_TURN: f32 = 70.0;
+const LOOKAHEAD_DISTANCE: f32 = 420.0;
+const DANGER_DISTANCE: f32 = 140.0;
+const MIN_SAFE_TURN_DISTANCE: f32 = 180.0;
+const MIN_SEGMENT_BEFORE_VOLUNTARY_TURN: f32 = 140.0;
 
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 pub struct BotMarker;
@@ -68,7 +68,7 @@ impl BotController {
         }
 
         let (left, right) = legal_turns(current);
-        let preferred = match self.next_u32() % 10 {
+        let preferred = match self.next_u32() % 24 {
             0 => left,
             1 => right,
             _ => current,

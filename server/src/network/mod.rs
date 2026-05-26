@@ -38,5 +38,6 @@ impl Plugin for NetworkPlugin {
         app.add_observer(connection_events::handle_new_client);
         app.add_observer(connection_events::handle_new_client_of);
         app.add_observer(connection_events::handle_connected);
+        app.add_observer(connection_events::handle_replication_sender_ready);
     }
 }

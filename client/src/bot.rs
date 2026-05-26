@@ -1,7 +1,7 @@
 use bevy::ecs::relationship::Relationship;
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::{
-    ActionMock, ActionState, ActionValue, EnhancedInputSystems, MockSpan,
+    ActionMock, ActionValue, EnhancedInputSystems, MockSpan, TriggerState,
 };
 use lightyear::prelude::input::bei::{Action, ActionOf, InputMarker};
 use lightyear::prelude::Controlled;
@@ -65,7 +65,7 @@ fn ensure_move_action_mocks(
 ) {
     for action in &actions {
         commands.entity(action).insert(ActionMock::new(
-            ActionState::Fired,
+            TriggerState::Fired,
             Vec2::Y,
             MockSpan::Manual,
         ));
@@ -84,9 +84,11 @@ fn ensure_spawn_action_mocks(
     >,
 ) {
     for action in &actions {
-        commands
-            .entity(action)
-            .insert(ActionMock::new(ActionState::Fired, true, MockSpan::Manual));
+        commands.entity(action).insert(ActionMock::new(
+            TriggerState::Fired,
+            true,
+            MockSpan::Manual,
+        ));
     }
 }
 
@@ -122,7 +124,7 @@ fn update_move_action_mocks(
         .iter_mut()
         .filter(|(action_of, _)| action_of.get() == snake)
     {
-        mock.state = ActionState::Fired;
+        mock.state = TriggerState::Fired;
         mock.value = value;
         mock.span = MockSpan::Manual;
         mock.enabled = true;
