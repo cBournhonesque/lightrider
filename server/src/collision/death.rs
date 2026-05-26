@@ -1,51 +1,89 @@
+use crate::rooms::{remove_replicated_entity_from_room, RoomDirectory};
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use lightyear::prelude::NetworkTarget;
-use tracing::error;
-use shared::network::protocol::prelude::*;
-use shared::network::protocol::ServerConnectionManager;
+use lightyear::prelude::{ControlledBy, NetworkTarget, Server, ServerMultiMessageSender};
 use shared::collision::collider::ColliderSet;
+use shared::network::protocol::prelude::*;
+use tracing::error;
 
 pub struct DeathPlugin;
 
 impl Plugin for DeathPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, handle_collision.after(ColliderSet::ComputeCollision));
-        app.add_systems(Update, handle_collision.after(ColliderSet::ComputeCollision));
+        app.init_resource::<RoomDirectory>();
+        app.add_systems(
+            FixedUpdate,
+            handle_collision.after(ColliderSet::ComputeCollision),
+        );
     }
 }
 
-
 pub fn handle_collision(
-    mut reader: EventReader<SnakeCollision>,
-    mut connection_manager: ResMut<ServerConnectionManager>,
-    mut players: Query<&mut Player>,
-    snakes: Query<&HasPlayer>,
+    mut reader: MessageReader<SnakeCollision>,
+    mut sender: ServerMultiMessageSender,
+    server: Single<&Server>,
+    rooms: Res<RoomDirectory>,
+    mut players: Query<(&mut Player, &mut PlayerStatus)>,
+    human_players: Query<(), With<ControlledBy>>,
+    snakes: Query<(&HasPlayer, &RoomId)>,
     mut commands: Commands,
 ) {
+    let server = server.into_inner();
+    let mut killed_snakes = EntityHashSet::default();
     for collision_event in reader.read() {
-        let Ok(killed_player) = snakes.get(collision_event.killed) else {
+        if !killed_snakes.insert(collision_event.killed) {
+            continue;
+        }
+        let Ok((killed_player, killed_room)) = snakes.get(collision_event.killed) else {
             error!("snake does not have HasPlayer component");
             continue;
         };
-        let Ok(killer_player) = snakes.get(collision_event.killer) else {
+        let Ok((killer_player, killer_room)) = snakes.get(collision_event.killer) else {
             error!("snake does not have HasPlayer component");
             continue;
         };
-        let Ok(mut killed) = players.get_mut(killed_player.0) else {
+        if killed_room != killer_room {
+            error!(?collision_event, "snake collision crossed room boundaries");
+            continue;
+        }
+        let Ok((mut killed, mut killed_status)) = players.get_mut(killed_player.0) else {
             error!("player could not be found");
             continue;
         };
         info!(?collision_event, "Collision event!");
 
-        // we are sending this message so that the client can render the kill effects
-        // TODO: send message to room instead!
-        let _ = connection_manager.send_message_to_target::<GameChannel, _>(SnakeCollision {
-            killer: killer_player.0,
-            killed: killed_player.0,
-        }, NetworkTarget::All).map_err(|e| error!(?e, "Failed to send message"));
+        let involves_human =
+            human_players.contains(killed_player.0) || human_players.contains(killer_player.0);
+        if involves_human {
+            // We only notify clients for human-involved deaths for now. Room-scoped
+            // replicated despawns are enough for bot-only churn, and this avoids sending
+            // mapped entity messages before a late-joining client has seen those bot entities.
+            let _ = sender
+                .send::<_, GameChannel>(
+                    &PlayerDeath {
+                        killer_player: killer_player.0,
+                        killed_player: killed_player.0,
+                        killer_snake: collision_event.killer,
+                        killed_snake: collision_event.killed,
+                        room: *killed_room,
+                        reason: collision_event.reason,
+                    },
+                    server,
+                    &NetworkTarget::All,
+                )
+                .map_err(|e| error!(?e, "Failed to send message"));
+        }
 
         // despawn dead snake and remove snake from player
-        commands.entity(collision_event.killed).despawn_recursive();
+        if let Some(lightyear_room) = rooms.lightyear_room(*killed_room) {
+            remove_replicated_entity_from_room(
+                &mut commands,
+                lightyear_room,
+                collision_event.killed,
+            );
+        }
+        commands.entity(collision_event.killed).try_despawn();
         killed.snake = None;
+        *killed_status = PlayerStatus::Dead;
     }
 }

@@ -1,18 +1,10 @@
-use bevy::prelude::Reflect;
-use leafwing_input_manager::Actionlike;
-use lightyear::prelude::LeafwingUserAction;
+use bevy::prelude::*;
+use lightyear::prelude::input::bei::InputAction;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash, Reflect, Actionlike)]
-pub enum DeadGameAction {
-    Spawn,
-}
+#[derive(Component, Serialize, Deserialize, Reflect, Clone, Debug, PartialEq)]
+pub struct PlayerInput;
 
-impl LeafwingUserAction for DeadGameAction {}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash, Reflect, Actionlike)]
-pub enum AliveGameAction {
-    ToggleCamera,
-}
-
-impl LeafwingUserAction for AliveGameAction {}
+#[derive(Debug, InputAction)]
+#[action_output(bool)]
+pub struct SpawnPlayer;

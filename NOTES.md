@@ -1,4 +1,8 @@
-# To Debug
+# Lightrider Notes
+
+The durable project design, implementation plan, agent notes, and changelog live in `THOUGHTS.md`.
+
+## To Debug
 
 ## P2
 

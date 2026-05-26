@@ -1,54 +1,63 @@
 use std::net::{Ipv4Addr, SocketAddr};
-use std::time::Duration;
 
-use bevy::prelude::default;
-use lightyear::prelude::{IoConfig, LinkConditionerConfig, TransportConfig};
-use lightyear::prelude::server::{Certificate, NetcodeConfig, NetConfig, PluginConfig, ServerConfig, ServerPlugin};
+use bevy::prelude::*;
+use lightyear::connection::server::Start;
+use lightyear::netcode::NetcodeServer;
+use lightyear::prelude::server::{ClientOf, NetcodeConfig, ServerPlugins, WebTransportServerIo};
+use lightyear::prelude::*;
 
-use shared::network::config::{KEY, PROTOCOL_ID, shared_config, Transports};
-use shared::network::protocol::{GameProtocol, protocol};
+use shared::config::GameConfig;
+use shared::network::config::{KEY, PROTOCOL_ID};
 
-pub(crate) async fn build_plugin(port: u16, transport: Transports) -> ServerPlugin<GameProtocol> {
-    // Step 1: create the io (transport + link conditioner)
-    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
-    let transport_config = match transport {
-        Transports::Udp => TransportConfig::UdpSocket(server_addr),
-        // if using webtransport, we load the certificate keys
-        Transports::WebTransport => {
-            let certificate =
-                Certificate::load("certificates/cert.pem", "certificates/key.pem")
-                    .await
-                    .unwrap();
-            let digest = &certificate.hashes()[0];
-            println!(
-                    "Generated self-signed certificate with digest: {}",
-                    digest
-                );
-            TransportConfig::WebTransportServer {
-                server_addr,
-                certificate,
-            }
-        }
-        Transports::WebSocket => TransportConfig::WebSocketServer { server_addr },
-    };
-    let link_conditioner = LinkConditionerConfig {
-        incoming_latency: Duration::from_millis(0),
-        incoming_jitter: Duration::from_millis(0),
-        incoming_loss: 0.0,
-    };
-    // Step 2: define the server configuration
-    let config = ServerConfig {
-        shared: shared_config(),
-        net: vec![NetConfig::Netcode {
-            config: NetcodeConfig::default()
-                .with_protocol_id(PROTOCOL_ID)
-                .with_key(KEY),
-            io: IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),
-        }],
-        ..default()
-    };
+#[derive(Resource, Clone, Copy)]
+pub(crate) struct ServerConnectionConfig {
+    pub(crate) port: u16,
+}
 
-    // Step 3: create the plugin
-    let plugin_config = PluginConfig::new(config, protocol());
-    ServerPlugin::new(plugin_config)
+pub(crate) struct ServerConnectionPlugin {
+    pub(crate) config: ServerConnectionConfig,
+}
+
+impl Plugin for ServerConnectionPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<GameConfig>();
+        let tick_duration = app
+            .world()
+            .resource::<GameConfig>()
+            .movement
+            .tick_duration();
+        app.add_plugins(ServerPlugins { tick_duration });
+        app.register_required_components::<ClientOf, ReplicationSender>();
+        app.insert_resource(self.config);
+        app.add_systems(Startup, start_server);
+    }
+}
+
+fn start_server(mut commands: Commands, config: Res<ServerConnectionConfig>) {
+    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), config.port);
+    info!("Starting WebTransport server on {server_addr}");
+    let mut server = commands.spawn((
+        NetcodeServer::new(NetcodeConfig {
+            protocol_id: PROTOCOL_ID,
+            private_key: KEY,
+            ..default()
+        }),
+        LocalAddr(server_addr),
+        Name::from("Server"),
+    ));
+
+    let identity = Identity::self_signed(vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ])
+    .expect("self-signed WebTransport certificate should be valid");
+    let digest = identity.certificate_chain().as_slice()[0].hash();
+    info!("Generated self-signed WebTransport certificate digest: {digest}");
+    server.insert(WebTransportServerIo {
+        certificate: identity,
+    });
+
+    let server = server.id();
+    commands.trigger(Start { entity: server });
 }

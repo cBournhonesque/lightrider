@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use lightyear::prelude::client::*;
+use lightyear::prelude::Replicated;
 
 use shared::network::protocol::prelude::*;
 
@@ -11,23 +11,15 @@ impl Plugin for SnakeRenderPlugin {
     }
 }
 
-
 /// System that draws the boxed of the player positions.
 /// The components should be replicated from the server to the client
-pub(crate) fn draw_snakes(
-    mut gizmos: Gizmos,
-    tails: Query<&TailPoints, Without<Confirmed>>,
-) {
+pub(crate) fn draw_snakes(mut gizmos: Gizmos, tails: Query<&TailPoints, Without<Replicated>>) {
+    let color = Color::srgb(0.0, 0.25, 1.0);
     for points in tails.iter() {
         // draw the head
-        gizmos.rect_2d(
-            points.front().0,
-            0.0,
-            Vec2::ONE * 10.0,
-            Color::BLUE
-        );
+        gizmos.rect_2d(points.front().0, Vec2::ONE * 10.0, color);
         points.pairs_front_to_back().for_each(|(start, end)| {
-            gizmos.line_2d(start.0, end.0, Color::BLUE);
+            gizmos.line_2d(start.0, end.0, color);
             if start.0.x != end.0.x && start.0.y != end.0.y {
                 info!("DIAGONAL");
             }

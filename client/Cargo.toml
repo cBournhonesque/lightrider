@@ -3,7 +3,7 @@ name = "client"
 version = "0.1.0"
 authors = ["Charles Bournhonesque <charlesbour@gmail.com>"]
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.89"
 description = "Client for the lightrider game"
 readme = "README.md"
 repository = "https://github.com/cBournhonesque/lightrider"
@@ -12,10 +12,14 @@ categories = ["game-development", "network-programming"]
 license = "MIT OR Apache-2.0"
 publish = false
 
+[[bin]]
+name = "lightrider-client"
+path = "src/bin/main.rs"
+
 [dependencies]
 shared = { path = "../shared" }
 lightyear.workspace = true
-leafwing-input-manager.workspace = true
+bevy_enhanced_input.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

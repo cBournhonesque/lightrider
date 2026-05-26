@@ -1,20 +1,16 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
-use bevy_xpbd_2d::parry::shape::SharedShape;
-use bevy_xpbd_2d::prelude::{Collider, CollisionLayers, Position, Rotation};
-use leafwing_input_manager::prelude::ActionState;
-use lightyear::prelude::{ClientId, NetworkTarget, ReplicationGroup};
+use lightyear::prelude::{
+    InterpolationTarget, NetworkTarget, PeerId, PredictionTarget, Replicate, ReplicationGroup,
+};
 
-use crate::network::protocol::prelude::*;
 use crate::network::protocol::prelude::Direction;
-use crate::network::protocol::Replicate;
+use crate::network::protocol::prelude::*;
 
-use crate::collision::layers::CollideLayer;
-use crate::movement::MIN_SPEED;
+use crate::config::MovementConfig;
 
 pub const TAIL_SIZE: f32 = 200.0;
-
 
 #[derive(Bundle)]
 pub struct SnakeBundle {
@@ -23,37 +19,48 @@ pub struct SnakeBundle {
     pub speed: Speed,
     pub acceleration: Acceleration,
     pub tail_points: TailPoints,
-    // physics
-    // NOTE: position/rotation are necessary for spatial queries (to compute an isometry). Otherwise we don't really use them
-    //  so let's leave them at default
-    pub position: Position,
-    pub rotation: Rotation,
-    pub collider: Collider,
-    pub collider_layers: CollisionLayers,
-    // we need to include the action-state so that client inputs are replicated to the server
-    pub action: ActionState<PlayerMovement>,
+    pub input: SnakeInput,
+    pub room: RoomId,
 }
 
 impl Default for SnakeBundle {
     fn default() -> Self {
+        Self::new(&MovementConfig::default())
+    }
+}
+
+impl SnakeBundle {
+    pub fn new(config: &MovementConfig) -> Self {
+        Self::new_in_room(config, RoomId::default())
+    }
+
+    pub fn new_in_room(config: &MovementConfig, room: RoomId) -> Self {
+        Self::new_at(config, room, Vec2::ZERO, Direction::Up)
+    }
+
+    pub fn new_at(
+        config: &MovementConfig,
+        room: RoomId,
+        position: Vec2,
+        direction: Direction,
+    ) -> Self {
         let tail_points = TailPoints(VecDeque::from([
-            (Vec2::new(0.0, 0.0), Direction::Up),
-            (Vec2::new(0.0, 0.0) + Direction::Down.delta() * TAIL_SIZE, Direction::Up),
+            (position, direction),
+            (
+                position - direction.delta() * config.starting_tail_length,
+                direction,
+            ),
         ]));
-        let collider = Collider::from(SharedShape::polyline(tail_points.points_front_to_back(), None));
         Self {
             tail_points,
             tail_length: TailLength {
-                current_size: TAIL_SIZE,
-                target_size: TAIL_SIZE,
+                current_size: config.starting_tail_length,
+                target_size: config.starting_tail_length,
             },
-            speed: Speed(MIN_SPEED),
+            speed: Speed(config.min_speed),
             acceleration: Acceleration(0.0),
-            position: Position::default(),
-            rotation: Rotation::default(),
-            collider,
-            collider_layers: CollisionLayers::new([CollideLayer::Player], [CollideLayer::Player, CollideLayer::Wall, CollideLayer::Food]),
-            action: ActionState::default(),
+            input: SnakeInput,
+            room,
         }
     }
 }
@@ -66,21 +73,85 @@ impl SnakeBundle {
     //     });
     // }
 
-    pub fn spawn(commands: &mut Commands, client_id: ClientId) -> Entity {
-        let mut replicate = Replicate {
-            prediction_target: NetworkTarget::Single(client_id),
-            interpolation_target: NetworkTarget::AllExceptSingle(client_id),
-            replication_group: ReplicationGroup::new_id(client_id),
-            ..default()
-        };
-        // we do not need to replicate the player's actions
-        replicate.disable_component::<ActionState<PlayerMovement>>();
-        let head_entity = commands.spawn(
-            (
-                SnakeBundle::default(),
-                replicate,
-            )
-        ).id();
-        head_entity
+    pub fn spawn(commands: &mut Commands, client_id: PeerId) -> Entity {
+        Self::spawn_bundle(commands, client_id, SnakeBundle::default())
+    }
+
+    pub fn spawn_with_movement_config(
+        commands: &mut Commands,
+        client_id: PeerId,
+        config: &MovementConfig,
+    ) -> Entity {
+        Self::spawn_bundle(commands, client_id, SnakeBundle::new(config))
+    }
+
+    pub fn spawn_with_room(
+        commands: &mut Commands,
+        client_id: PeerId,
+        config: &MovementConfig,
+        room: RoomId,
+    ) -> Entity {
+        Self::spawn_bundle(commands, client_id, SnakeBundle::new_in_room(config, room))
+    }
+
+    pub fn spawn_with_room_at(
+        commands: &mut Commands,
+        client_id: PeerId,
+        config: &MovementConfig,
+        room: RoomId,
+        position: Vec2,
+        direction: Direction,
+    ) -> Entity {
+        Self::spawn_bundle(
+            commands,
+            client_id,
+            SnakeBundle::new_at(config, room, position, direction),
+        )
+    }
+
+    pub fn spawn_server_owned(
+        commands: &mut Commands,
+        _group_id: u64,
+        config: &MovementConfig,
+        room: RoomId,
+    ) -> Entity {
+        commands
+            .spawn((
+                SnakeBundle::new_in_room(config, room),
+                Replicate::to_clients(NetworkTarget::None),
+                InterpolationTarget::to_clients(NetworkTarget::All),
+                ReplicationGroup::new_from_entity(),
+            ))
+            .id()
+    }
+
+    pub fn spawn_server_owned_at(
+        commands: &mut Commands,
+        _group_id: u64,
+        config: &MovementConfig,
+        room: RoomId,
+        position: Vec2,
+        direction: Direction,
+    ) -> Entity {
+        commands
+            .spawn((
+                SnakeBundle::new_at(config, room, position, direction),
+                Replicate::to_clients(NetworkTarget::None),
+                InterpolationTarget::to_clients(NetworkTarget::All),
+                ReplicationGroup::new_from_entity(),
+            ))
+            .id()
+    }
+
+    fn spawn_bundle(commands: &mut Commands, client_id: PeerId, bundle: SnakeBundle) -> Entity {
+        commands
+            .spawn((
+                bundle,
+                Replicate::to_clients(NetworkTarget::None),
+                PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
+                InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(client_id)),
+                ReplicationGroup::new_from_entity(),
+            ))
+            .id()
     }
 }

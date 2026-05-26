@@ -1,14 +1,10 @@
 use bevy::prelude::*;
-use leafwing_input_manager::prelude::*;
-use lightyear::prelude::LeafwingUserAction;
+use lightyear::prelude::input::bei::InputAction;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash, Reflect, Actionlike)]
-pub enum PlayerMovement {
-    Up,
-    Down,
-    Left,
-    Right,
-}
+#[derive(Component, Serialize, Deserialize, Reflect, Clone, Debug, PartialEq)]
+pub struct SnakeInput;
 
-impl LeafwingUserAction for PlayerMovement {}
+#[derive(Debug, InputAction)]
+#[action_output(Vec2)]
+pub struct MoveSnake;

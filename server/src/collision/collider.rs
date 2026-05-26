@@ -1,30 +1,27 @@
-//! We compute collisions causing death only on the server
+//! We compute collisions causing death only on the server.
 use bevy::prelude::*;
-use bevy_xpbd_2d::parry::shape::SharedShape;
-use bevy_xpbd_2d::prelude::*;
-use tracing::{debug, trace};
 use shared::collision::collider::ColliderSet;
-
-use shared::network::protocol::prelude::{SnakeCollision, TailPoints};
-
-use shared::collision::layers::CollideLayer;
+use shared::config::GameConfig;
+use shared::network::protocol::prelude::{DeathReason, RoomId, SnakeCollision, TailPoints};
+use shared::utils::geometry::ray_segment_intersection;
+use tracing::{debug, trace};
 
 pub struct ColliderPlugin;
 
 impl Plugin for ColliderPlugin {
     fn build(&self, app: &mut App) {
-        // events
-        app.add_event::<SnakeCollision>();
-
-        // systems
-        app.add_systems(Update, snake_collisions.in_set(ColliderSet::ComputeCollision));
+        app.init_resource::<GameConfig>();
+        app.add_message::<SnakeCollision>();
+        app.add_systems(
+            FixedUpdate,
+            (snake_collisions, boundary_collisions).in_set(ColliderSet::ComputeCollision),
+        );
     }
 }
 
-
 // NOTE: IMPORTANT
 // because we do the ray cast with a small offset, we need to make sure that the collision distance is big enough
-// that the snake cannot 'jump' over the obstable in one movement update
+// that the snake cannot 'jump' over the obstacle in one movement update
 // TODO: this might be problematic for fast moving snakes
 //  - a solution might be to run the fixed update many times?
 //  - or another solution is to start the raycast a bit further away? (but allow multiple hits)
@@ -32,36 +29,86 @@ impl Plugin for ColliderPlugin {
 pub const COLLISION_DISTANCE: f32 = 1.0;
 
 pub(crate) fn snake_collisions(
-    spatial_query: SpatialQuery,
-    tails: Query<(Entity, &TailPoints)>,
-    mut writer: EventWriter<SnakeCollision>,
+    tails: Query<(Entity, &TailPoints, &RoomId)>,
+    mut writer: MessageWriter<SnakeCollision>,
 ) {
-    for (entity, tail) in tails.iter() {
-        // the player can collide with itself!
-        let filter = SpatialQueryFilter::from_mask(CollideLayer::Player);
-        trace!(head = ?tail.front().0, direction = ?tail.front().1, "Collision Ray cast");
-        if let Some(collision) = spatial_query.cast_ray(
-            // NOTE: important!
-            // offset the head by epsilon to avoid a self-collision on the head
-            tail.front().0 + tail.front().1.delta() * COLLISION_DISTANCE / 1000.0,
-            Direction2d::new_unchecked(tail.front().1.delta()),
-            COLLISION_DISTANCE,
-            false,
-            filter
-        ) {
-            trace!(normal = ?collision.normal.dot(tail.front().1.delta()), "Possible collision: {:?}", collision);
-            // only send the event if the collision is perpendicular
-            if collision.normal.dot(tail.front().1.delta()) != 0.0 {
-                debug!(?collision, "Collision!");
-                writer.send(SnakeCollision {
-                    killed: entity,
-                    killer: collision.entity,
-                });
-            }
+    for (entity, tail, room) in tails.iter() {
+        let direction = tail.front().1.delta();
+        let origin = tail.front().0 + direction * COLLISION_DISTANCE / 1000.0;
+        trace!(head = ?tail.front().0, direction = ?tail.front().1, "Collision ray cast");
+        if let Some(killer) = nearest_collision(origin, direction, entity, room, &tails) {
+            debug!(?entity, ?killer, "Collision");
+            writer.write(SnakeCollision {
+                killed: entity,
+                killer,
+                reason: if killer == entity {
+                    DeathReason::Suicide
+                } else {
+                    DeathReason::Collision
+                },
+            });
         }
     }
 }
 
+pub(crate) fn boundary_collisions(
+    config: Res<GameConfig>,
+    tails: Query<(Entity, &TailPoints)>,
+    mut writer: MessageWriter<SnakeCollision>,
+) {
+    for (entity, tail) in &tails {
+        if !arena_contains(tail.front().0, config.arena.width, config.arena.height) {
+            writer.write(SnakeCollision {
+                killed: entity,
+                killer: entity,
+                reason: DeathReason::Boundary,
+            });
+        }
+    }
+}
+
+pub(crate) fn arena_contains(position: Vec2, width: f32, height: f32) -> bool {
+    let half_width = width * 0.5;
+    let half_height = height * 0.5;
+    position.x >= -half_width
+        && position.x <= half_width
+        && position.y >= -half_height
+        && position.y <= half_height
+}
+
+fn nearest_collision(
+    origin: Vec2,
+    direction: Vec2,
+    main: Entity,
+    room: &RoomId,
+    tails: &Query<(Entity, &TailPoints, &RoomId)>,
+) -> Option<Entity> {
+    let mut nearest: Option<(f32, Entity)> = None;
+    for (other_entity, other_tail, other_room) in tails.iter() {
+        if other_room != room {
+            continue;
+        }
+        for (segment_start, segment_end) in other_tail.pairs_front_to_back() {
+            let Some(distance) = ray_segment_intersection(
+                origin,
+                direction,
+                COLLISION_DISTANCE,
+                segment_start.0,
+                segment_end.0,
+            ) else {
+                continue;
+            };
+
+            if other_entity == main && distance <= COLLISION_DISTANCE / 1000.0 {
+                continue;
+            }
+            if nearest.map_or(true, |(nearest_distance, _)| distance < nearest_distance) {
+                nearest = Some((distance, other_entity));
+            }
+        }
+    }
+    nearest.map(|(_, entity)| entity)
+}
 
 #[cfg(test)]
 mod tests {
@@ -69,10 +116,14 @@ mod tests {
     use std::collections::VecDeque;
 
     use bevy::prelude::*;
-    use shared::network::protocol::prelude::Direction;
     use shared::network::bundle::snake::SnakeBundle;
+    use shared::network::protocol::prelude::Direction;
 
     use super::*;
+
+    fn run_fixed_update(app: &mut App) {
+        app.world_mut().run_schedule(FixedUpdate);
+    }
 
     #[test]
     fn test_normal_collision() {
@@ -82,25 +133,29 @@ mod tests {
         app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: vertical, pointing up
-        let snake1 = app.world.spawn(SnakeBundle::default()).id();
+        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: horizontal in front of the snake1
-        let snake2 = app.world.spawn(SnakeBundle::default()).id();
+        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         let points2 = TailPoints(VecDeque::from([
             (Vec2::new(50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
             (Vec2::new(-50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
         ]));
-        let collider2 = Collider::from(SharedShape::polyline(points2.points_front_to_back(), None));
-        app.world.entity_mut(snake2).insert((points2, collider2));
+        app.world_mut().entity_mut(snake2).insert(points2);
 
-        app.update();
+        run_fixed_update(&mut app);
 
         assert_eq!(
-            app.world.get_resource_mut::<Events<SnakeCollision>>().unwrap().drain().collect::<Vec<_>>(),
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
             vec![SnakeCollision {
                 killed: snake1,
                 killer: snake2,
-            }])
-        ;
+                reason: DeathReason::Collision,
+            }]
+        );
     }
 
     #[test]
@@ -111,24 +166,29 @@ mod tests {
         app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: [0, -100] -> [0, 0]
-        let snake1 = app.world.spawn(SnakeBundle::default()).id();
+        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: [0, 0] -> [100, 0]
-        let snake2 = app.world.spawn(SnakeBundle::default()).id();
+        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         let points2 = TailPoints(VecDeque::from([
             (Vec2::new(100.0, COLLISION_DISTANCE / 2.0), Direction::Right),
             (Vec2::new(0.0, COLLISION_DISTANCE / 2.0), Direction::Right),
         ]));
-        let collider2 = Collider::from(SharedShape::polyline(points2.points_front_to_back(), None));
-        app.world.entity_mut(snake2).insert((points2, collider2));
+        app.world_mut().entity_mut(snake2).insert(points2);
 
-        app.update();
+        run_fixed_update(&mut app);
 
         assert_eq!(
-            app.world.get_resource_mut::<Events<SnakeCollision>>().unwrap().drain().collect::<Vec<_>>(),
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
             vec![SnakeCollision {
                 killed: snake1,
                 killer: snake2,
-            }]);
+                reason: DeathReason::Collision,
+            }]
+        );
     }
 
     #[test]
@@ -139,21 +199,25 @@ mod tests {
         app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: [0, -100] -> [0, 0]
-        let snake1 = app.world.spawn(SnakeBundle::default()).id();
+        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: [0, 0] -> [100, 0]
-        let snake2 = app.world.spawn(SnakeBundle::default()).id();
+        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         let points2 = TailPoints(VecDeque::from([
             (Vec2::new(0.0, 50.0), Direction::Up),
             (Vec2::new(0.0, -50.0), Direction::Up),
         ]));
-        let collider2 = Collider::from(SharedShape::polyline(points2.points_front_to_back(), None));
-        app.world.entity_mut(snake2).insert((points2, collider2));
+        app.world_mut().entity_mut(snake2).insert(points2);
 
-        app.update();
+        run_fixed_update(&mut app);
 
         assert_eq!(
-            app.world.get_resource_mut::<Events<SnakeCollision>>().unwrap().drain().collect::<Vec<_>>(),
-            vec![]);
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
+            vec![]
+        );
     }
 
     #[test]
@@ -163,19 +227,22 @@ mod tests {
         app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         // snake1: [0, -100] -> [0, 0]
-        let snake1 = app.world.spawn(SnakeBundle::default()).id();
+        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: [0, 0] -> [100, 0]
-        let snake2 = app.world.spawn(SnakeBundle::default()).id();
+        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         let points2 = TailPoints(VecDeque::from([
             (Vec2::new(100.0, 10.0), Direction::Right),
             (Vec2::new(0.0, 10.0), Direction::Right),
         ]));
-        let collider2 = Collider::from(SharedShape::polyline(points2.points_front_to_back(), None));
-        app.world.entity_mut(snake2).insert((points2, collider2));
-        app.update();
+        app.world_mut().entity_mut(snake2).insert(points2);
+        run_fixed_update(&mut app);
 
         assert_eq!(
-            app.world.get_resource_mut::<Events<SnakeCollision>>().unwrap().drain().collect::<Vec<_>>(),
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
             vec![]
         );
     }
@@ -186,7 +253,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
-        let snake = app.world.spawn(SnakeBundle::default()).id();
+        let snake = app.world_mut().spawn(SnakeBundle::default()).id();
         let points = TailPoints(VecDeque::from([
             (Vec2::new(COLLISION_DISTANCE / 2.0, 50.0), Direction::Left),
             (Vec2::new(10.0, 50.0), Direction::Left),
@@ -194,17 +261,92 @@ mod tests {
             (Vec2::new(0.0, 100.0), Direction::Right),
             (Vec2::new(0.0, 0.0), Direction::Up),
         ]));
-        let collider = Collider::from(SharedShape::polyline(points.points_front_to_back(), None));
-        app.world.entity_mut(snake).insert((points, collider));
-        app.update();
+        app.world_mut().entity_mut(snake).insert(points);
+        run_fixed_update(&mut app);
 
         assert_eq!(
-            app.world.get_resource_mut::<Events<SnakeCollision>>().unwrap().drain().collect::<Vec<_>>(),
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
             vec![SnakeCollision {
                 killed: snake,
                 killer: snake,
+                reason: DeathReason::Suicide,
             }]
         );
     }
 
+    #[test]
+    fn test_boundary_collision() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(GameConfig {
+            arena: shared::config::ArenaConfig {
+                width: 100.0,
+                height: 100.0,
+            },
+            ..default()
+        });
+        app.add_plugins(shared::collision::CollisionPlugin);
+        app.add_plugins(ColliderPlugin);
+
+        let snake = app.world_mut().spawn(SnakeBundle::default()).id();
+        app.world_mut()
+            .entity_mut(snake)
+            .insert(TailPoints(VecDeque::from([
+                (Vec2::new(60.0, 0.0), Direction::Right),
+                (Vec2::new(0.0, 0.0), Direction::Right),
+            ])));
+
+        run_fixed_update(&mut app);
+
+        assert_eq!(
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
+            vec![SnakeCollision {
+                killed: snake,
+                killer: snake,
+                reason: DeathReason::Boundary,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_collision_ignores_other_rooms() {
+        let mut app = App::new();
+
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(shared::collision::CollisionPlugin);
+        app.add_plugins(ColliderPlugin);
+
+        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
+        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
+        let points2 = TailPoints(VecDeque::from([
+            (Vec2::new(50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
+            (Vec2::new(-50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
+        ]));
+        app.world_mut()
+            .entity_mut(snake2)
+            .insert((points2, RoomId(1)));
+
+        run_fixed_update(&mut app);
+
+        assert_eq!(
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
+            vec![]
+        );
+        assert_ne!(
+            app.world().entity(snake1).get::<RoomId>(),
+            app.world().entity(snake2).get::<RoomId>()
+        );
+    }
 }

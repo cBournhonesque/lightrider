@@ -2,9 +2,8 @@ use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 // use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
-pub(crate) mod snake;
 mod camera;
-
+pub(crate) mod snake;
 
 pub(crate) struct DebugPlugin;
 

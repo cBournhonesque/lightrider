@@ -1,9 +1,7 @@
-use bevy_xpbd_2d::prelude::PhysicsLayer;
-
 /// Different layers for collision
-#[derive(PhysicsLayer)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CollideLayer {
     Player,
     Food,
-    Wall
+    Wall,
 }

@@ -1,0 +1,45 @@
+(
+    arena: (
+        width: 800.0,
+        height: 600.0,
+    ),
+    movement: (
+        tick_rate_hz: 30.0,
+        starting_tail_length: 80.0,
+        min_speed: 1.0,
+        max_speed: 4.0,
+        base_acceleration: -0.01,
+        boost_acceleration_ratio: 2.0,
+        boost_distance: 20.0,
+    ),
+    food: (
+        target_count: 20,
+        spawn_interval_seconds: 0.25,
+        radius: 20.0,
+        tail_growth: 20.0,
+    ),
+    rooms: (
+        max_rooms: 2,
+        max_players_per_room: 8,
+    ),
+    bots: (
+        enabled: true,
+        target_count_per_room: 4,
+        decision_interval_ticks: 5,
+    ),
+    fake_clients: (
+        enabled: false,
+        count: 0,
+        input_interval_ticks: 5,
+    ),
+    network: (
+        server_port: 5000,
+        artificial_latency_ms: 0,
+        artificial_jitter_ms: 0,
+        artificial_loss_percent: 0,
+    ),
+    debug: (
+        lightyear_debug: true,
+        json_snapshots: true,
+    ),
+)

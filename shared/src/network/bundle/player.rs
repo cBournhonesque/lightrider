@@ -1,28 +1,43 @@
 use bevy::prelude::*;
-use leafwing_input_manager::action_state::ActionState;
-use lightyear::prelude::{ClientId, ReplicationGroup};
+use lightyear::prelude::{NetworkTarget, PeerId, Replicate, ReplicationGroup};
 
-use crate::network::protocol::prelude::Player;
-use crate::network::protocol::{DeadGameAction, Replicate};
+use crate::network::protocol::prelude::{
+    Player, PlayerInput, PlayerRank, PlayerScore, PlayerStatus, RoomId,
+};
 
 #[derive(Bundle)]
 pub struct PlayerBundle {
     pub player: Player,
-    // we need to include the action-state so that client inputs are replicated to the server
-    pub action: ActionState<DeadGameAction>,
+    pub score: PlayerScore,
+    pub rank: PlayerRank,
+    pub status: PlayerStatus,
+    pub input: PlayerInput,
+    pub room: RoomId,
 }
 
 impl PlayerBundle {
     pub fn new(player: Player) -> Self {
-        Self { player, action: ActionState::default() }
+        Self::new_in_room(player, RoomId::default())
     }
-    pub fn spawn(self, commands: &mut Commands, client_id: ClientId) -> Entity {
-        let mut replicate = Replicate {
-            replication_group: ReplicationGroup::new_id(client_id),
-            ..default()
-        };
-        // no need to replicate player inputs
-        replicate.disable_component::<ActionState<DeadGameAction>>();
-        commands.spawn((self, replicate)).id()
+
+    pub fn new_in_room(player: Player, room: RoomId) -> Self {
+        Self {
+            player,
+            score: PlayerScore::default(),
+            rank: PlayerRank::default(),
+            status: PlayerStatus::Alive,
+            input: PlayerInput,
+            room,
+        }
+    }
+
+    pub fn spawn(self, commands: &mut Commands, _client_id: PeerId) -> Entity {
+        commands
+            .spawn((
+                self,
+                Replicate::to_clients(NetworkTarget::None),
+                ReplicationGroup::new_from_entity(),
+            ))
+            .id()
     }
 }

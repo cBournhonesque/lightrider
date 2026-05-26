@@ -4,12 +4,8 @@
 //! - respawning logic
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
-use lightyear::client::input_leafwing::ToggleActions;
-use lightyear::client::events::MessageEvent;
-use lightyear::client::prediction::Predicted;
-use shared::network::protocol::{DeadGameAction, PlayerMovement};
-use shared::network::protocol::prelude::{HasPlayer, SnakeCollision};
-use crate::network::inputs::Owned;
+use lightyear::prelude::{Client, Controlled, MessageReceiver, Predicted};
+use shared::network::protocol::prelude::{HasPlayer, Player, PlayerDeath};
 
 pub(crate) struct DeathPlugin;
 
@@ -22,7 +18,6 @@ enum GameState {
 
 impl Plugin for DeathPlugin {
     fn build(&self, app: &mut App) {
-
         // states
         app.init_state::<GameState>();
 
@@ -47,13 +42,18 @@ impl Plugin for DeathPlugin {
 // 2. if it's someone else's death, play death animation
 fn handle_death_message(
     mut next_state: ResMut<NextState<GameState>>,
-    mut messages: EventReader<MessageEvent<SnakeCollision>>,
-    player: Query<Entity, With<Owned>>,
+    mut receivers: Query<&mut MessageReceiver<PlayerDeath>, With<Client>>,
+    player: Query<Entity, (With<Player>, With<Controlled>)>,
 ) {
-    for message in messages.read() {
-        let message = message.message();
+    let Ok(player) = player.single() else {
+        return;
+    };
+    let Ok(mut receiver) = receivers.single_mut() else {
+        return;
+    };
+    for message in receiver.receive() {
         trace!(?message, "Received death message");
-        if message.killed == player.single() {
+        if message.killed_player == player {
             debug!("I died");
             next_state.set(GameState::Dead);
         }
@@ -61,7 +61,8 @@ fn handle_death_message(
 }
 
 // During dead state, show the death screen to the user
-fn show_death_screen(mut commands: Commands) {
+#[allow(dead_code)]
+fn show_death_screen(_commands: Commands) {
     // commands.spawn(NodeBundle {
     //     style: Style {
     //         display: Display::Flex,
@@ -78,31 +79,20 @@ fn show_death_screen(mut commands: Commands) {
 
 // 1. press spawn, send message to server
 // 2. server
-fn enable_dead_actions(
-    mut movement_toggle: ResMut<ToggleActions<PlayerMovement>>,
-    mut action_toggle: ResMut<ToggleActions<DeadGameAction>>,
-) {
+fn enable_dead_actions() {
     trace!("Enable dead actions");
-    movement_toggle.enabled = false;
-    action_toggle.enabled = true;
 }
 
-fn enable_alive_actions(
-    mut movement_toggle: ResMut<ToggleActions<PlayerMovement>>,
-    mut action_toggle: ResMut<ToggleActions<DeadGameAction>>,
-) {
+fn enable_alive_actions() {
     trace!("Enable alive actions");
-    movement_toggle.enabled = true;
-    action_toggle.enabled = false;
 }
-
 
 // TODO: receive an event instead
 /// When we receive a new predicted snake from the server, that means we respawn!
 /// Switch the game state
 fn set_alive_state(
     mut next_state: ResMut<NextState<GameState>>,
-    my_snake: Query<Entity, (Added<HasPlayer>, With<Predicted>)>
+    my_snake: Query<Entity, (Added<HasPlayer>, With<Predicted>)>,
 ) {
     if my_snake.iter().next().is_some() {
         trace!("Setting state to Alive");

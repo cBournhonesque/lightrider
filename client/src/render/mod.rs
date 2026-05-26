@@ -1,9 +1,8 @@
 use bevy::app::{App, Plugin};
 
-pub(crate) mod snake;
 mod camera;
 mod food;
-
+pub(crate) mod snake;
 
 pub(crate) struct RenderPlugin;
 

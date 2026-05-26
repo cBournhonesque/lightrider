@@ -1,58 +1,69 @@
-use std::net::{Ipv4Addr, SocketAddr};
-use std::time::Duration;
-
-use bevy::prelude::default;
+use bevy::prelude::*;
+use lightyear::netcode::client_plugin::NetcodeConfig;
+use lightyear::netcode::NetcodeClient;
+use lightyear::prelude::client::{ClientPlugins, WebTransportClientIo};
 use lightyear::prelude::*;
-use lightyear::prelude::client::*;
+use std::net::{Ipv4Addr, SocketAddr};
 
-use shared::network::config::{KEY, PROTOCOL_ID, shared_config, Transports};
-use shared::network::protocol::{GameProtocol, protocol};
+use shared::config::GameConfig;
+use shared::network::config::{KEY, PROTOCOL_ID};
 
-pub(crate) fn build_plugin(
-    client_id: ClientId,
-    client_port: u16,
-    server_addr: SocketAddr,
-    transport: Transports,
-) -> ClientPlugin<GameProtocol> {
+#[derive(Resource, Clone)]
+pub(crate) struct ClientConnectionConfig {
+    pub(crate) client_id: u64,
+    pub(crate) client_port: u16,
+    pub(crate) server_addr: SocketAddr,
+    pub(crate) certificate_digest: String,
+}
+
+pub(crate) struct ClientConnectionPlugin {
+    pub(crate) config: ClientConnectionConfig,
+}
+
+impl Plugin for ClientConnectionPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<GameConfig>();
+        let tick_duration = app
+            .world()
+            .resource::<GameConfig>()
+            .movement
+            .tick_duration();
+        app.add_plugins(ClientPlugins { tick_duration });
+        app.insert_resource(self.config.clone());
+        app.add_systems(Startup, spawn_client);
+    }
+}
+
+fn spawn_client(mut commands: Commands, config: Res<ClientConnectionConfig>) -> Result {
+    let client_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), config.client_port);
     let auth = Authentication::Manual {
-        server_addr,
-        client_id,
+        server_addr: config.server_addr,
+        client_id: config.client_id,
         private_key: KEY,
         protocol_id: PROTOCOL_ID,
     };
-    let client_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), client_port);
-    let certificate_digest =
-        String::from("6c594425dd0c8664c188a0ad6e641b39ff5f007e5bcfc1e72c7a7f2f38ecf819")
-            .replace(":", "");
-    let transport_config = match transport {
-        #[cfg(not(target_family = "wasm"))]
-        Transports::Udp => TransportConfig::UdpSocket(client_addr),
-        Transports::WebTransport => TransportConfig::WebTransportClient {
-            client_addr,
-            server_addr,
-            #[cfg(target_family = "wasm")]
-            certificate_digest,
-        },
-        Transports::WebSocket => TransportConfig::WebSocketClient { server_addr },
-    };
-    let link_conditioner = LinkConditionerConfig {
-        incoming_latency: Duration::from_millis(40),
-        incoming_jitter: Duration::from_millis(4),
-        incoming_loss: 0.01,
-    };
-    let config = ClientConfig {
-        shared: shared_config(),
-        net: NetConfig::Netcode {
-            auth,
-            config: NetcodeConfig::default(),
-            io: IoConfig::from_transport(transport_config).with_conditioner(link_conditioner),
-        },
-        interpolation: InterpolationConfig {
-            delay: InterpolationDelay::default().with_send_interval_ratio(2.0),
-            // do not do linear interpolation per component, instead we provide our own interpolation logic
-            custom_interpolation_logic: true,
-        },
+
+    let mut client = commands.spawn((
+        Client::default(),
+        Link::new(None),
+        LocalAddr(client_addr),
+        PeerAddr(config.server_addr),
+        PredictionManager::default(),
+        Name::from("Client"),
+    ));
+
+    let netcode_config = NetcodeConfig {
+        client_timeout_secs: 3,
+        token_expire_secs: -1,
         ..default()
     };
-    ClientPlugin::new(PluginConfig::new(config, protocol()))
+    client.insert(NetcodeClient::new(auth, netcode_config)?);
+
+    client.insert(WebTransportClientIo {
+        certificate_digest: config.certificate_digest.clone(),
+    });
+
+    let client = client.id();
+    commands.trigger(Connect { entity: client });
+    Ok(())
 }
