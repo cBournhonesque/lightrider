@@ -102,13 +102,13 @@ pub fn app(cli: Cli) -> App {
         }));
     }
 
-    app.add_plugins(SharedPlugin);
     app.add_plugins(network::NetworkPlugin {
         client_id: cli.client_id,
         client_port: cli.client_port,
         server_addr: (cli.server_addr, cli.server_port).into(),
         certificate_digest: cli.certificate_digest,
     });
+    app.add_plugins(SharedPlugin);
     app.add_plugins(collision::CollisionPlugin);
     app.add_plugins(rooms::ClientRoomsPlugin { mode: cli.room });
     if cli.mode == ClientMode::Bot {

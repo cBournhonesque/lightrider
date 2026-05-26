@@ -4,7 +4,8 @@ use crate::rooms::{
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy_turborand::prelude::*;
-use lightyear::prelude::{NetworkTarget, Replicate};
+use lightyear::prelude::server::ClientOf;
+use lightyear::prelude::{NetworkTarget, Replicate, ReplicationSender};
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::map::{MapMarker, MapSize};
@@ -22,7 +23,12 @@ fn spawn_food(
     food: Query<&RoomId, With<FoodMarker>>,
     config: Res<GameConfig>,
     rooms: Res<RoomDirectory>,
+    pending_clients: Query<(), (With<ClientOf>, Without<ReplicationSender>)>,
 ) {
+    if !pending_clients.is_empty() {
+        return;
+    }
+
     let timer =
         timer.get_or_insert_with(|| Timer::new(config.food.spawn_interval(), TimerMode::Repeating));
     if config.is_changed() {
@@ -43,7 +49,7 @@ fn spawn_food(
         let food = commands
             .spawn((
                 FoodBundle::new_in_room(pos, *room),
-                Replicate::to_clients(NetworkTarget::None),
+                Replicate::to_clients(NetworkTarget::All),
             ))
             .id();
         if let Some(lightyear_room) = rooms.lightyear_room(*room) {

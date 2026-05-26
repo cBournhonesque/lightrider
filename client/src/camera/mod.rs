@@ -62,7 +62,8 @@ fn follow_camera(
         if let Ok(pos) = predicted.single() {
             let head = pos.front().0;
             // *camera_pos = Transform::from_translation(camera_pos.translation.mul_add(Vec3::splat(1.0 - lerp), Vec3::from((head, 0.0)) * lerp));
-            *camera_pos = Transform::from_xyz(head.x, head.y, 0.0);
+            camera_pos.translation.x = head.x;
+            camera_pos.translation.y = head.y;
         }
     }
     // player is dead: camera follows killer's head

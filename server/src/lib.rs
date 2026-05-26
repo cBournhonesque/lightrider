@@ -50,11 +50,11 @@ pub async fn app(cli: Cli) -> App {
         }));
     }
 
-    // shared
-    app.add_plugins(SharedPlugin);
-
     // networking
     app.add_plugins(network::NetworkPluginGroup::new(cli.port).build());
+
+    // shared
+    app.add_plugins(SharedPlugin);
 
     // rooms
     app.add_plugins(rooms::ServerRoomsPlugin);

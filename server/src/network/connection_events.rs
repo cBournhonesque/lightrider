@@ -12,7 +12,15 @@ use shared::network::bundle::snake::SnakeBundle;
 use shared::network::protocol::prelude::*;
 
 pub(crate) fn handle_new_client(trigger: On<Add, LinkOf>, mut commands: Commands) {
-    commands.entity(trigger.entity).insert(Name::from("Client"));
+    commands
+        .entity(trigger.entity)
+        .insert((ReplicationSender::default(), Name::from("Client")));
+}
+
+pub(crate) fn handle_new_client_of(trigger: On<Add, ClientOf>, mut commands: Commands) {
+    commands
+        .entity(trigger.entity)
+        .insert((ReplicationSender::default(), Name::from("Client")));
 }
 
 pub(crate) fn handle_connected(
@@ -31,7 +39,7 @@ pub(crate) fn handle_connected(
     directory.register_human(assignment.game_room);
     info!(
         "Client {client_id:?} connected to room {}",
-        assignment.game_room.0
+        assignment.game_room.0,
     );
     commands.entity(trigger.entity).insert(ClientRoom {
         room: assignment.game_room,

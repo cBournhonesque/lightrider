@@ -131,7 +131,9 @@ The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbou
 - Existing client rendering is very barebones and uses gizmos in `client/src/render/snake.rs`.
 - Custom snake interpolation has been restored against Lightyear 0.26 using `ConfirmedHistory<TailPoints>`, `ConfirmedHistory<TailLength>`, and `InterpolationSystems::Interpolate`. The helper is adapted from the old Lightrider prototype and the Lightyear `replication_groups` example.
 - Frame interpolation is enabled for predicted snake `TailPoints` via `FrameInterpolationPlugin<TailPoints>` and `FrameInterpolate<TailPoints>`. Visual correction is intentionally not configured.
-- Lightyear room visibility is the replication filter for game entities. Spawn replicated game entities with `Replicate::to_clients(NetworkTarget::None)`, then use `RoomEvent::AddEntity/AddSender`; targeting `NetworkTarget::All` can hit pending WebTransport/netcode links before they are valid `ReplicationSender`s.
+- Lightyear room visibility is the interest-management filter for game entities, but it is not a replacement for normal replication targets. Room-scoped entities use `Replicate::to_clients(NetworkTarget::All)` plus `RoomEvent::AddEntity/AddSender`, and food spawning pauses while any `ClientOf` lacks a `ReplicationSender` to avoid pending-handshake sender errors.
+- Non-headless clients must spawn `ReplicationReceiver::default()` on the client entity; otherwise WebTransport connects but replicated game entities never arrive. Add Lightyear `ClientPlugins`/`ServerPlugins` before the shared `ProtocolPlugin`, matching the upstream examples.
+- The client render baseline now draws a dark clear color, arena border/axes, larger food circles, and brighter/thicker snake gizmos so a connected or not-yet-connected window is visibly alive.
 - Server-owned bots live in `server/src/bots.rs` and reuse shared bot steering from `shared/src/bot.rs`. Bot clients are `client --headless --mode bot` and drive BEI `ActionMock`s through the same input path as real clients. Bot steering now scores arena boundaries, its own tail, and same-room snake tails as short lookahead obstacles; random voluntary turns are throttled so bots do not immediately draw tiny self-trapping boxes.
 - Runnable binaries are explicitly named `lightrider-server` and `lightrider-client`; do not rely on both crates exposing a bin named `main`.
 - A root `justfile` exists with `server`, `client`, `bot`, `bots`, and `local` recipes for starting a local headless server, headless bot clients, and a normal client.
@@ -239,6 +241,9 @@ Status: complete enough for local load/latency smoke work.
 - Updated server-owned bots and headless bot clients to pass room-local tail snapshots into the shared obstacle-aware steering logic.
 - Added bot unit tests for avoiding self-tail and other-tail lookahead collisions.
 - Verification: `cargo test -p shared -j 4`, `cargo check --workspace -j 4`, and `cargo test --workspace -j 4` pass. A 60-second headless server smoke on `config/test.ron` with four server bots reported zero `Collision event` lines and five food pickups.
+- Fixed blank non-headless clients after `just server` plus `just client`: the client now has `ReplicationReceiver::default()`, protocol registration happens after Lightyear client/server plugins, room-scoped entities use `NetworkTarget::All` plus room visibility, and food spawning waits out pending client handshakes without a `ReplicationSender`.
+- Improved first-pass rendering visibility with an arena outline/axes, dark clear color, brighter food, thicker snake trails, and a one-time client log when gameplay entities reach the render world.
+- Verification for the render/replication fix: connected WebTransport smoke with `config/test.ron` logs `Client render received gameplay entities snake_count=1 food_count=20` and no server `No ReplicationSender`/`ClientOf ... not found` errors. Remaining follow-up: client prediction can warn about rollback spans above the current 100-tick cap after joining a long-running server.
 
 ### 2026-05-22
 
@@ -270,7 +275,7 @@ Status: complete enough for local load/latency smoke work.
 - Added `--config <path>` support on client and server for loading RON game config files.
 - Wired snake spawn length/speed, movement acceleration/speed clamps, boost distance, food target count/spawn interval/radius/growth, and server boundary checks through `GameConfig`.
 - Added server-authoritative arena boundary death and tests for boundary collision, BEI movement direction selection, invalid reverse turns, and boost acceleration scaling.
-- Initially changed food replication away from bare `Replicate::default()` after a headless server smoke exposed `No ReplicationSender` errors; Phase 3 later moved room-scoped entities to `NetworkTarget::None` plus Lightyear room visibility.
+- Initially changed food replication away from bare `Replicate::default()` after a headless server smoke exposed `No ReplicationSender` errors. Later validation showed Lightyear room visibility is only a filter, so room-scoped entities must still target connected clients through `NetworkTarget::All`.
 - Verified `cargo tree -i leafwing-input-manager -p shared` reports nothing to print.
 - Verified `cargo tree -i bevy_enhanced_input -p shared` resolves a single BEI version, `0.22.2`, shared by Lightyear's BEI integration and the `shared` crate.
 - Verified `cargo check --workspace -j 4`, `cargo test --workspace -j 4`, and `git diff --check` pass after the input migration and Phase 1 simulation/config changes.
@@ -293,6 +298,7 @@ Status: complete enough for local load/latency smoke work.
 - Added explicit binary names `lightrider-server` and `lightrider-client` to avoid Cargo output collisions between the server and client crates.
 - Added a root `justfile` with `server`, `client`, `bot`, `bots`, and `local` recipes for local server/client/bot runs.
 - Removed Bevy `dynamic_linking` from the workspace dependency because `cargo test --workspace -j 4` failed to link test binaries through `bevy_dylib`.
-- Changed room-scoped replicated entities to use `Replicate::to_clients(NetworkTarget::None)` plus Lightyear room visibility. This avoids Lightyear errors when a pending WebTransport/netcode link exists before it has a valid `ReplicationSender`.
+- Changed room-scoped replicated entities to use `Replicate::to_clients(NetworkTarget::All)` plus Lightyear room visibility, added `ReplicationReceiver` to the client connection entity, and moved shared protocol registration after the Lightyear client/server plugin groups. Food spawning now skips pending `ClientOf` entities until their `ReplicationSender` is present.
+- Added a client-side render baseline: arena border/axes, non-black clear color, brighter food, thicker snake trails, and a one-time log when gameplay entities are available to render.
 - Added stable connection logs for server startup, server room assignment, and client connection.
 - Verified Phase 3/4 close-out with `cargo check --workspace -j 4`, `cargo test --workspace -j 4` (client 1 test, server 16 tests, shared 22 tests), `just --list`, a combined build of `lightrider-server` and `lightrider-client`, and a WebTransport smoke connecting one headless bot client to a headless server with no panic/protocol/error markers.

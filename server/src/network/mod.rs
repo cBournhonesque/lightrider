@@ -36,6 +36,7 @@ impl Plugin for NetworkPlugin {
 
         // systems
         app.add_observer(connection_events::handle_new_client);
+        app.add_observer(connection_events::handle_new_client_of);
         app.add_observer(connection_events::handle_connected);
     }
 }

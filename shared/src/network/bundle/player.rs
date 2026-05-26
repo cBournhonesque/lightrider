@@ -35,7 +35,7 @@ impl PlayerBundle {
         commands
             .spawn((
                 self,
-                Replicate::to_clients(NetworkTarget::None),
+                Replicate::to_clients(NetworkTarget::All),
                 ReplicationGroup::new_from_entity(),
             ))
             .id()

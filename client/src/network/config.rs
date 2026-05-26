@@ -48,6 +48,7 @@ fn spawn_client(mut commands: Commands, config: Res<ClientConnectionConfig>) -> 
         Link::new(None),
         LocalAddr(client_addr),
         PeerAddr(config.server_addr),
+        ReplicationReceiver::default(),
         PredictionManager::default(),
         Name::from("Client"),
     ));
