@@ -55,6 +55,7 @@ fn maintain_bots(
             Entity,
             &mut Player,
             &mut PlayerScore,
+            &mut PlayerStats,
             &mut PlayerStatus,
             &RoomId,
             Option<&RespawnReadyAt>,
@@ -81,7 +82,8 @@ fn maintain_bots(
         }
     }
 
-    for (player_entity, mut player, mut score, mut status, room, respawn_ready_at) in &mut dead_bots
+    for (player_entity, mut player, mut score, mut stats, mut status, room, respawn_ready_at) in
+        &mut dead_bots
     {
         if player.snake.is_some() && *status == PlayerStatus::Alive {
             continue;
@@ -108,6 +110,7 @@ fn maintain_bots(
         commands.entity(player_entity).remove::<RespawnReadyAt>();
         player.snake = Some(snake);
         *score = PlayerScore::from_length(config.movement.starting_tail_length);
+        stats.reset_for_life();
         *status = PlayerStatus::Alive;
     }
 }
@@ -165,9 +168,10 @@ fn spawn_bot_snake<'a>(
     );
     commands.entity(snake).insert((
         BotMarker,
-        BotController::new(
+        BotController::new_with_mistakes(
             config.bots.decision_interval_ticks,
             bot_id.to_bits() ^ room.0.rotate_left(17),
+            config.bots.mistake_chance_per_decision_percent,
         ),
     ));
     add_replicated_entity_to_room(commands, lightyear_room, snake);

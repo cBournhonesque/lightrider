@@ -201,7 +201,14 @@ impl Plugin for ServerRoomsPlugin {
         app.add_plugins(LightyearRoomPlugin);
         app.init_resource::<RoomDirectory>();
         app.add_systems(Startup, ensure_initial_room);
-        app.add_systems(Update, (handle_room_join_requests, update_player_ranks));
+        app.add_systems(
+            Update,
+            (
+                handle_player_name_updates,
+                handle_room_join_requests,
+                update_player_ranks,
+            ),
+        );
         app.add_observer(handle_disconnected);
     }
 }
@@ -215,6 +222,33 @@ fn ensure_initial_room(
     if directory.is_empty() {
         directory.create_room(&mut commands, &mut room_allocator, &config, None);
     }
+}
+
+fn handle_player_name_updates(
+    mut clients: Query<(&RemoteId, &mut MessageReceiver<PlayerNameUpdate>), With<Connected>>,
+    mut players: Query<&mut Player>,
+) {
+    for (remote_id, mut receiver) in &mut clients {
+        for message in receiver.receive() {
+            let name = sanitize_player_name(&message.name);
+            for mut player in &mut players {
+                if player.id == remote_id.0 {
+                    player.name = name.clone();
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn sanitize_player_name(name: &str) -> String {
+    let trimmed = name.trim();
+    let sanitized = if trimmed.is_empty() {
+        "Player"
+    } else {
+        trimmed
+    };
+    sanitized.chars().take(18).collect()
 }
 
 fn handle_room_join_requests(

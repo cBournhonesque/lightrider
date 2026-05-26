@@ -2,6 +2,7 @@ use crate::collision::death::DeathView;
 use crate::inputs::ToggleCamera;
 use bevy::camera::{Projection, ScalingMode};
 use bevy::prelude::*;
+use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::input::bei::Start;
 use lightyear::prelude::Predicted;
 use shared::network::protocol::prelude::TailPoints;
@@ -30,7 +31,9 @@ impl Plugin for CameraPlugin {
         // we could run during update, because the predicted movement is updated in FixedUpdate
         app.add_systems(
             PostUpdate,
-            follow_camera.run_if(in_state(CameraState::Follow)),
+            follow_camera
+                .after(FrameInterpolationSystems::Interpolate)
+                .run_if(in_state(CameraState::Follow)),
         );
         app.add_observer(toggle_camera);
     }

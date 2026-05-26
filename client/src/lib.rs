@@ -70,6 +70,9 @@ pub struct Cli {
     #[arg(long, default_value = "auto", value_parser = rooms::parse_room_join_mode)]
     room: RoomJoinMode,
 
+    #[arg(long, default_value = "")]
+    name: String,
+
     #[arg(long)]
     config: Option<PathBuf>,
 }
@@ -78,6 +81,9 @@ pub fn app(cli: Cli) -> App {
     let mut app = App::new();
     let config = load_config(cli.config.as_deref());
     let bot_decision_interval_ticks = config.fake_clients.input_interval_ticks;
+    let bot_mistake_chance_per_decision_percent =
+        config.fake_clients.mistake_chance_per_decision_percent;
+    let player_name = player_name(&cli);
     let log_plugin = if cli.headless {
         runtime_log_plugin(&config, "wgpu=error,bevy_ecs=trace")
     } else {
@@ -108,10 +114,14 @@ pub fn app(cli: Cli) -> App {
     app.add_plugins(SharedPlugin);
     app.add_plugins(RuntimeDebugPlugin::client());
     app.add_plugins(collision::CollisionPlugin);
-    app.add_plugins(rooms::ClientRoomsPlugin { mode: cli.room });
+    app.add_plugins(rooms::ClientRoomsPlugin {
+        mode: cli.room,
+        name: player_name,
+    });
     if cli.mode == ClientMode::Bot {
         app.add_plugins(bot::BotClientPlugin {
             decision_interval_ticks: bot_decision_interval_ticks,
+            mistake_chance_per_decision_percent: bot_mistake_chance_per_decision_percent,
         });
     }
     if !cli.headless {
@@ -121,6 +131,17 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(render::RenderPlugin);
     }
     app
+}
+
+fn player_name(cli: &Cli) -> String {
+    let trimmed = cli.name.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    match cli.mode {
+        ClientMode::Player => format!("Player {}", cli.client_id),
+        ClientMode::Bot => format!("Bot Client {}", cli.client_id),
+    }
 }
 
 fn load_config(path: Option<&std::path::Path>) -> GameConfig {

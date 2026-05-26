@@ -6,14 +6,18 @@ use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use lightyear::prelude::{Client, Controlled, MessageReceiver, Predicted};
 use shared::config::GameConfig;
-use shared::network::protocol::prelude::{DeathReason, HasPlayer, Player, PlayerDeath};
+use shared::network::protocol::prelude::{
+    DeathReason, HasPlayer, Player, PlayerDeath, PlayerDeathStats,
+};
 
 pub(crate) struct DeathPlugin;
 
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
 pub(crate) struct DeathView {
     pub(crate) killer_snake: Option<Entity>,
     pub(crate) respawn_allowed_at_seconds: f32,
+    pub(crate) message: String,
+    pub(crate) stats: Option<PlayerDeathStats>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States, Reflect)]
@@ -73,6 +77,8 @@ fn handle_death_message(
             death_view.killer_snake = death_camera_target(&message);
             death_view.respawn_allowed_at_seconds =
                 time.elapsed_secs() + config.respawn.player_cooldown_seconds.max(0.0);
+            death_view.message = death_message(&message);
+            death_view.stats = Some(message.stats);
             next_state.set(GameState::Dead);
         }
     }
@@ -87,6 +93,19 @@ fn death_camera_target(message: &PlayerDeath) -> Option<Entity> {
             Some(message.killer_snake)
         }
         DeathReason::Collision | DeathReason::Boundary | DeathReason::Suicide => None,
+    }
+}
+
+fn death_message(message: &PlayerDeath) -> String {
+    match message.reason {
+        DeathReason::Collision
+            if message.killer_player != message.killed_player
+                && message.killer_snake != message.killed_snake =>
+        {
+            format!("Killed by {}", message.killer_name)
+        }
+        DeathReason::Boundary => "Out of bounds".to_string(),
+        DeathReason::Suicide | DeathReason::Collision => "You died".to_string(),
     }
 }
 

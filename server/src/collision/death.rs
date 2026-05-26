@@ -28,7 +28,11 @@ pub fn handle_collision(
     rooms: Res<RoomDirectory>,
     config: Res<GameConfig>,
     time: Res<Time>,
-    mut players: Query<(&mut Player, &mut PlayerStatus, Has<BotMarker>)>,
+    mut players: ParamSet<(
+        Query<(&Player, &PlayerScore, &PlayerStats)>,
+        Query<&mut PlayerStats>,
+        Query<(&mut Player, &mut PlayerStatus, Has<BotMarker>)>,
+    )>,
     human_players: Query<(), With<ControlledBy>>,
     snakes: Query<(&HasPlayer, &RoomId)>,
     mut commands: Commands,
@@ -51,10 +55,34 @@ pub fn handle_collision(
             error!(?collision_event, "snake collision crossed room boundaries");
             continue;
         }
-        let Ok((mut killed, mut killed_status, killed_is_bot)) = players.get_mut(killed_player.0)
-        else {
-            error!("player could not be found");
+        let Ok((killed_name, killed_stats)) = ({
+            let player_read = players.p0();
+            player_read
+                .get(killed_player.0)
+                .map(|(player, score, stats)| {
+                    (
+                        player.name.clone(),
+                        PlayerDeathStats::from_live(score.value, stats),
+                    )
+                })
+        }) else {
+            error!("killed player could not be found");
             continue;
+        };
+        let Ok(killer_name) = ({
+            let player_read = players.p0();
+            player_read
+                .get(killer_player.0)
+                .map(|(player, _, _)| player.name.clone())
+        }) else {
+            error!("killer player could not be found");
+            continue;
+        };
+
+        if collision_event.reason == DeathReason::Collision && killer_player.0 != killed_player.0 {
+            if let Ok(mut killer_stats) = players.p1().get_mut(killer_player.0) {
+                killer_stats.kills = killer_stats.kills.saturating_add(1);
+            }
         };
         info!(?collision_event, "Collision event!");
 
@@ -71,8 +99,11 @@ pub fn handle_collision(
                         killed_player: killed_player.0,
                         killer_snake: collision_event.killer,
                         killed_snake: collision_event.killed,
+                        killer_name,
+                        killed_name,
                         room: *killed_room,
                         reason: collision_event.reason,
+                        stats: killed_stats,
                     },
                     server,
                     &NetworkTarget::All,
@@ -89,8 +120,18 @@ pub fn handle_collision(
             );
         }
         commands.entity(collision_event.killed).try_despawn();
-        killed.snake = None;
-        *killed_status = PlayerStatus::Dead;
+        let killed_is_bot = {
+            let mut player_states = players.p2();
+            let Ok((mut killed, mut killed_status, killed_is_bot)) =
+                player_states.get_mut(killed_player.0)
+            else {
+                error!("player could not be found");
+                continue;
+            };
+            killed.snake = None;
+            *killed_status = PlayerStatus::Dead;
+            killed_is_bot
+        };
         commands
             .entity(killed_player.0)
             .insert(RespawnReadyAt::from_now(

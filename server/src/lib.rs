@@ -16,6 +16,7 @@ mod network;
 mod respawn;
 pub(crate) mod rooms;
 mod spawning;
+mod stats;
 
 pub const SERVER_PORT: u16 = 5000;
 
@@ -72,6 +73,9 @@ pub async fn app(cli: Cli) -> App {
 
     // food
     app.add_plugins(FoodPlugin);
+
+    // stats
+    app.add_plugins(stats::ServerStatsPlugin);
     app
 }
 

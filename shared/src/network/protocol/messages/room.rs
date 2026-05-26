@@ -14,3 +14,8 @@ pub enum RoomJoinMode {
 pub struct RoomJoinRequest {
     pub mode: RoomJoinMode,
 }
+
+#[derive(Message, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PlayerNameUpdate {
+    pub name: String,
+}

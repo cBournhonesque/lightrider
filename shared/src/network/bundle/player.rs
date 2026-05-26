@@ -2,13 +2,14 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, PeerId, Replicate};
 
 use crate::network::protocol::prelude::{
-    Player, PlayerInput, PlayerRank, PlayerScore, PlayerStatus, RoomId,
+    Player, PlayerInput, PlayerRank, PlayerScore, PlayerStats, PlayerStatus, RoomId,
 };
 
 #[derive(Bundle)]
 pub struct PlayerBundle {
     pub player: Player,
     pub score: PlayerScore,
+    pub stats: PlayerStats,
     pub rank: PlayerRank,
     pub status: PlayerStatus,
     pub input: PlayerInput,
@@ -24,6 +25,7 @@ impl PlayerBundle {
         Self {
             player,
             score: PlayerScore::default(),
+            stats: PlayerStats::default(),
             rank: PlayerRank::default(),
             status: PlayerStatus::Alive,
             input: PlayerInput,

@@ -4,6 +4,8 @@ use lightyear::prelude::input::bei::InputPlugin;
 use lightyear::prelude::input::InputRegistryExt;
 use lightyear::prelude::*;
 
+use crate::config::GameConfig;
+
 pub use inputs::{
     spawn_player_input_actions, spawn_snake_input_actions, MoveSnake, PlayerInput, ServerAction,
     SnakeInput, SpawnPlayer,
@@ -34,15 +36,23 @@ pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<GameConfig>();
+        let input_packet_redundancy_ticks = app
+            .world()
+            .resource::<GameConfig>()
+            .network
+            .input_packet_redundancy_ticks;
         app.add_plugins(InputPlugin::<SnakeInput> {
             config: InputConfig {
                 rebroadcast_inputs: false,
+                packet_redundancy: input_packet_redundancy_ticks,
                 ..default()
             },
         });
         app.add_plugins(InputPlugin::<PlayerInput> {
             config: InputConfig {
                 rebroadcast_inputs: false,
+                packet_redundancy: input_packet_redundancy_ticks,
                 ..default()
             },
         });
@@ -56,6 +66,8 @@ impl Plugin for ProtocolPlugin {
             .add_map_entities()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<messages::room::RoomJoinRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<messages::room::PlayerNameUpdate>()
             .add_direction(NetworkDirection::ClientToServer);
 
         app.add_channel::<channels::GameChannel>(ChannelSettings {
@@ -83,6 +95,7 @@ impl Plugin for ProtocolPlugin {
 
         app.register_component::<components::player::Player>();
         app.register_component::<components::player::PlayerScore>();
+        app.register_component::<components::player::PlayerStats>();
         app.register_component::<components::player::PlayerRank>();
         app.register_component::<components::player::PlayerStatus>();
         app.register_component::<components::food::FoodMarker>();

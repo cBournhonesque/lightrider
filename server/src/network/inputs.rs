@@ -28,6 +28,7 @@ pub(crate) fn handle_spawn_action(
     mut players: Query<(
         &mut Player,
         &mut PlayerScore,
+        &mut PlayerStats,
         &mut PlayerStatus,
         &RoomId,
         Option<&ControlledBy>,
@@ -36,7 +37,7 @@ pub(crate) fn handle_spawn_action(
     tails: Query<(&TailPoints, &RoomId)>,
 ) {
     let player_entity = trigger.context;
-    let Ok((mut player, mut score, mut status, room, controlled_by, respawn_ready_at)) =
+    let Ok((mut player, mut score, mut stats, mut status, room, controlled_by, respawn_ready_at)) =
         players.get_mut(player_entity)
     else {
         return;
@@ -77,5 +78,6 @@ pub(crate) fn handle_spawn_action(
     commands.entity(player_entity).remove::<RespawnReadyAt>();
     player.snake = Some(head_entity);
     *score = PlayerScore::from_length(config.movement.starting_tail_length);
+    stats.reset_for_life();
     *status = PlayerStatus::Alive;
 }

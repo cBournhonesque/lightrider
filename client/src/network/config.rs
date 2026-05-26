@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeClient;
 use lightyear::prelude::client::{
-    ClientPlugins, InputDelayConfig, InputTimelineConfig, WebTransportClientIo,
+    ClientPlugins, InputDelayConfig as LightyearInputDelayConfig, InputTimelineConfig,
+    WebTransportClientIo,
 };
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -36,7 +37,12 @@ impl Plugin for ClientConnectionPlugin {
     }
 }
 
-fn spawn_client(mut commands: Commands, config: Res<ClientConnectionConfig>) -> Result {
+fn spawn_client(
+    mut commands: Commands,
+    config: Res<ClientConnectionConfig>,
+    game_config: Res<GameConfig>,
+) -> Result {
+    let input_delay = &game_config.network.input_delay;
     let client_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), config.client_port);
     let auth = Authentication::Manual {
         server_addr: config.server_addr,
@@ -52,7 +58,12 @@ fn spawn_client(mut commands: Commands, config: Res<ClientConnectionConfig>) -> 
         PeerAddr(config.server_addr),
         ReplicationReceiver::default(),
         PredictionManager::default(),
-        InputTimelineConfig::default().with_input_delay(InputDelayConfig::balanced()),
+        InputTimelineConfig::default().with_input_delay(LightyearInputDelayConfig {
+            minimum_input_delay_ticks: input_delay.minimum_input_delay_ticks,
+            maximum_input_delay_before_prediction: input_delay
+                .maximum_input_delay_before_prediction_ticks,
+            maximum_predicted_ticks: input_delay.maximum_predicted_ticks,
+        }),
         Name::from("Client"),
     ));
 

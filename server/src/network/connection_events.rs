@@ -141,7 +141,7 @@ fn spawn_ready_client(
     let player_entity = PlayerBundle::new_in_room(
         Player {
             id: client_id,
-            name: "Player".to_string(),
+            name: format!("Player {}", client_id.to_bits()),
             snake: Some(head_entity),
         },
         assignment.game_room,

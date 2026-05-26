@@ -18,6 +18,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<FakeClientConfig>();
         app.register_type::<RespawnConfig>();
         app.register_type::<NetworkConfig>();
+        app.register_type::<InputDelayConfig>();
         app.register_type::<DebugConfig>();
     }
 }
@@ -168,6 +169,7 @@ pub struct BotConfig {
     pub enabled: bool,
     pub target_count_per_room: usize,
     pub decision_interval_ticks: u32,
+    pub mistake_chance_per_decision_percent: u8,
 }
 
 impl Default for BotConfig {
@@ -176,6 +178,7 @@ impl Default for BotConfig {
             enabled: false,
             target_count_per_room: 0,
             decision_interval_ticks: 10,
+            mistake_chance_per_decision_percent: 3,
         }
     }
 }
@@ -186,6 +189,7 @@ pub struct FakeClientConfig {
     pub enabled: bool,
     pub count: usize,
     pub input_interval_ticks: u32,
+    pub mistake_chance_per_decision_percent: u8,
 }
 
 impl Default for FakeClientConfig {
@@ -194,6 +198,7 @@ impl Default for FakeClientConfig {
             enabled: false,
             count: 0,
             input_interval_ticks: 10,
+            mistake_chance_per_decision_percent: 3,
         }
     }
 }
@@ -218,6 +223,8 @@ impl Default for RespawnConfig {
 #[serde(default)]
 pub struct NetworkConfig {
     pub server_port: u16,
+    pub input_delay: InputDelayConfig,
+    pub input_packet_redundancy_ticks: u16,
     pub artificial_latency_ms: u64,
     pub artificial_jitter_ms: u64,
     pub artificial_loss_percent: u8,
@@ -227,9 +234,29 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             server_port: 5000,
+            input_delay: InputDelayConfig::default(),
+            input_packet_redundancy_ticks: 3,
             artificial_latency_ms: 0,
             artificial_jitter_ms: 0,
             artificial_loss_percent: 0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Reflect)]
+#[serde(default)]
+pub struct InputDelayConfig {
+    pub minimum_input_delay_ticks: u16,
+    pub maximum_input_delay_before_prediction_ticks: u16,
+    pub maximum_predicted_ticks: u16,
+}
+
+impl Default for InputDelayConfig {
+    fn default() -> Self {
+        Self {
+            minimum_input_delay_ticks: 0,
+            maximum_input_delay_before_prediction_ticks: 3,
+            maximum_predicted_ticks: 7,
         }
     }
 }
@@ -265,7 +292,18 @@ mod tests {
         assert_eq!(config.arena.width, 5000.0);
         assert_eq!(config.arena.height, 1600.0);
         assert_eq!(config.rooms.max_players_per_room, 50);
+        assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);
+        assert_eq!(config.fake_clients.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.network.server_port, 5000);
+        assert_eq!(
+            config.network.input_delay,
+            InputDelayConfig {
+                minimum_input_delay_ticks: 0,
+                maximum_input_delay_before_prediction_ticks: 3,
+                maximum_predicted_ticks: 7,
+            }
+        );
+        assert_eq!(config.network.input_packet_redundancy_ticks, 3);
     }
 
     #[test]

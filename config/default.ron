@@ -26,11 +26,13 @@
         enabled: false,
         target_count_per_room: 0,
         decision_interval_ticks: 10,
+        mistake_chance_per_decision_percent: 3,
     ),
     fake_clients: (
         enabled: false,
         count: 0,
         input_interval_ticks: 10,
+        mistake_chance_per_decision_percent: 3,
     ),
     respawn: (
         player_cooldown_seconds: 1.0,
@@ -38,6 +40,12 @@
     ),
     network: (
         server_port: 5000,
+        input_delay: (
+            minimum_input_delay_ticks: 0,
+            maximum_input_delay_before_prediction_ticks: 3,
+            maximum_predicted_ticks: 7,
+        ),
+        input_packet_redundancy_ticks: 3,
         artificial_latency_ms: 0,
         artificial_jitter_ms: 0,
         artificial_loss_percent: 0,

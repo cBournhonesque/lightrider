@@ -12,17 +12,20 @@ use shared::network::protocol::prelude::*;
 
 pub(crate) struct BotClientPlugin {
     pub(crate) decision_interval_ticks: u32,
+    pub(crate) mistake_chance_per_decision_percent: u8,
 }
 
 #[derive(Resource, Clone, Copy, Debug)]
 struct BotClientSettings {
     decision_interval_ticks: u32,
+    mistake_chance_per_decision_percent: u8,
 }
 
 impl Plugin for BotClientPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(BotClientSettings {
             decision_interval_ticks: self.decision_interval_ticks,
+            mistake_chance_per_decision_percent: self.mistake_chance_per_decision_percent,
         });
         app.add_systems(
             Update,
@@ -45,10 +48,13 @@ fn attach_bot_controllers(
     snakes: Query<Entity, (With<Controlled>, With<TailPoints>, Without<BotController>)>,
 ) {
     for snake in &snakes {
-        commands.entity(snake).insert(BotController::new(
-            settings.decision_interval_ticks,
-            snake.to_bits(),
-        ));
+        commands
+            .entity(snake)
+            .insert(BotController::new_with_mistakes(
+                settings.decision_interval_ticks,
+                snake.to_bits(),
+                settings.mistake_chance_per_decision_percent,
+            ));
     }
 }
 

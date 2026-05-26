@@ -94,6 +94,7 @@ fn grow_tail(
     mut tails: Query<&mut TailLength>,
     snake_players: Query<&HasPlayer>,
     mut scores: Query<&mut PlayerScore>,
+    mut stats: Query<&mut PlayerStats>,
     mut events: MessageReader<FoodCollision>,
 ) {
     for event in events.read() {
@@ -102,6 +103,9 @@ fn grow_tail(
             if let Ok(has_player) = snake_players.get(event.snake) {
                 if let Ok(mut score) = scores.get_mut(has_player.0) {
                     *score = PlayerScore::from_length(tail_length.target_size);
+                }
+                if let Ok(mut stats) = stats.get_mut(has_player.0) {
+                    stats.food_eaten = stats.food_eaten.saturating_add(1);
                 }
             }
         }

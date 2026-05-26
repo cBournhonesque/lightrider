@@ -5,6 +5,8 @@ use shared::network::protocol::prelude::*;
 mod arena;
 mod camera;
 mod food;
+mod hud;
+mod name_labels;
 pub(crate) mod snake;
 
 pub(crate) struct RenderPlugin;
@@ -15,6 +17,8 @@ impl Plugin for RenderPlugin {
         app.add_plugins(snake::SnakeRenderPlugin);
         app.add_plugins(camera::CameraPlugin);
         app.add_plugins(food::FoodRenderPlugin);
+        app.add_plugins(hud::HudRenderPlugin);
+        app.add_plugins(name_labels::NameLabelRenderPlugin);
         app.add_systems(Update, log_first_rendered_entities);
     }
 }

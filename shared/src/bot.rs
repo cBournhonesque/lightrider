@@ -16,14 +16,24 @@ pub struct BotMarker;
 pub struct BotController {
     ticks_until_decision: u32,
     decision_interval_ticks: u32,
+    mistake_chance_per_decision_percent: u8,
     seed: u64,
 }
 
 impl BotController {
     pub fn new(decision_interval_ticks: u32, seed: u64) -> Self {
+        Self::new_with_mistakes(decision_interval_ticks, seed, 0)
+    }
+
+    pub fn new_with_mistakes(
+        decision_interval_ticks: u32,
+        seed: u64,
+        mistake_chance_per_decision_percent: u8,
+    ) -> Self {
         Self {
             ticks_until_decision: 0,
             decision_interval_ticks: decision_interval_ticks.max(1),
+            mistake_chance_per_decision_percent: mistake_chance_per_decision_percent.min(100),
             seed: seed | 1,
         }
     }
@@ -42,6 +52,9 @@ impl BotController {
         let current_safety = safety_distance(tail, obstacle_tails, current, arena);
         if let Some(direction) = boundary_avoidance_direction(tail.front().0, current, arena) {
             self.reset_decision_timer();
+            if self.should_make_mistake() {
+                return self.mistake_direction(current);
+            }
             return safest_direction(
                 tail,
                 arena,
@@ -53,6 +66,9 @@ impl BotController {
 
         if current_safety < DANGER_DISTANCE {
             self.reset_decision_timer();
+            if self.should_make_mistake() {
+                return self.mistake_direction(current);
+            }
             return safest_direction(tail, arena, obstacle_tails, &candidate_directions(current))
                 .unwrap_or(current);
         }
@@ -68,6 +84,9 @@ impl BotController {
         }
 
         let (left, right) = legal_turns(current);
+        if self.should_make_mistake() {
+            return self.mistake_direction(current);
+        }
         let preferred = match self.next_u32() % 24 {
             0 => left,
             1 => right,
@@ -84,6 +103,20 @@ impl BotController {
 
     fn reset_decision_timer(&mut self) {
         self.ticks_until_decision = self.decision_interval_ticks.saturating_sub(1);
+    }
+
+    fn should_make_mistake(&mut self) -> bool {
+        let chance = u32::from(self.mistake_chance_per_decision_percent);
+        chance > 0 && self.next_u32() % 100 < chance
+    }
+
+    fn mistake_direction(&mut self, current: Direction) -> Direction {
+        let (left, right) = legal_turns(current);
+        if self.next_u32() & 1 == 0 {
+            left
+        } else {
+            right
+        }
     }
 
     fn next_u32(&mut self) -> u32 {
@@ -377,6 +410,21 @@ mod tests {
             bot.choose_direction_avoiding(&own_tail, &arena, &[&obstacle_tail]),
             Direction::Up
         );
+    }
+
+    #[test]
+    fn bot_can_be_configured_to_make_mistakes() {
+        let arena = ArenaConfig {
+            width: 500.0,
+            height: 500.0,
+        };
+        let tail = TailPoints(VecDeque::from([
+            (Vec2::ZERO, Direction::Up),
+            (Vec2::new(0.0, -200.0), Direction::Up),
+        ]));
+        let mut bot = BotController::new_with_mistakes(1, 1, 100);
+
+        assert_ne!(bot.choose_direction(&tail, &arena), Direction::Up);
     }
 
     #[test]
