@@ -88,6 +88,8 @@ impl Plugin for ProtocolPlugin {
             .add_prediction();
         app.register_component::<components::snake::Acceleration>()
             .add_prediction();
+        app.register_component::<components::snake::FoodBoost>()
+            .add_prediction();
         app.register_component::<components::snake::HasPlayer>()
             .add_prediction();
         app.register_component::<inputs::SnakeInput>()

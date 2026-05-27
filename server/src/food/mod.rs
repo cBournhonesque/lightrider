@@ -91,15 +91,16 @@ fn food_collision(
 
 fn grow_tail(
     config: Res<GameConfig>,
-    mut tails: Query<&mut TailLength>,
+    mut tails: Query<(&mut TailLength, &mut FoodBoost)>,
     snake_players: Query<&HasPlayer>,
     mut scores: Query<&mut PlayerScore>,
     mut stats: Query<&mut PlayerStats>,
     mut events: MessageReader<FoodCollision>,
 ) {
     for event in events.read() {
-        if let Ok(mut tail_length) = tails.get_mut(event.snake) {
+        if let Ok((mut tail_length, mut food_boost)) = tails.get_mut(event.snake) {
             tail_length.target_size += config.food.tail_growth;
+            food_boost.0 += config.movement.food_boost_acceleration.max(0.0);
             if let Ok(has_player) = snake_players.get(event.snake) {
                 if let Ok(mut score) = scores.get_mut(has_player.0) {
                     *score = PlayerScore::from_length(tail_length.target_size);
@@ -304,6 +305,12 @@ mod tests {
                 .target_size,
             shared::config::MovementConfig::default().starting_tail_length
                 + GameConfig::default().food.tail_growth
+        );
+        assert_eq!(
+            app.world().entity(snake).get::<FoodBoost>(),
+            Some(&FoodBoost(
+                GameConfig::default().movement.food_boost_acceleration
+            ))
         );
     }
 

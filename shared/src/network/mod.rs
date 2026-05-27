@@ -20,6 +20,7 @@ impl Plugin for NetworkPlugin {
             .register_type::<TailPoints>()
             .register_type::<Speed>()
             .register_type::<Acceleration>()
+            .register_type::<FoodBoost>()
             .register_type::<HasPlayer>()
             .register_type::<Player>()
             .register_type::<PlayerScore>()

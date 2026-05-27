@@ -5,9 +5,17 @@ use bevy::prelude::*;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::input::bei::Start;
 use lightyear::prelude::Predicted;
+use shared::config::GameConfig;
 use shared::network::protocol::prelude::TailPoints;
 
-pub struct CameraPlugin;
+pub struct CameraPlugin {
+    pub(crate) debug_enabled: bool,
+}
+
+#[derive(Resource, Clone, Copy, Debug)]
+struct CameraSettings {
+    debug_enabled: bool,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, States)]
 pub enum CameraState {
@@ -20,6 +28,10 @@ pub enum CameraState {
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(CameraSettings {
+            debug_enabled: self.debug_enabled,
+        });
+
         // state
         app.init_state::<CameraState>();
         // follow
@@ -31,9 +43,7 @@ impl Plugin for CameraPlugin {
         // we could run during update, because the predicted movement is updated in FixedUpdate
         app.add_systems(
             PostUpdate,
-            follow_camera
-                .after(FrameInterpolationSystems::Interpolate)
-                .run_if(in_state(CameraState::Follow)),
+            follow_camera.after(FrameInterpolationSystems::Interpolate),
         );
         app.add_observer(toggle_camera);
     }
@@ -41,9 +51,13 @@ impl Plugin for CameraPlugin {
 
 fn toggle_camera(
     _trigger: On<Start<ToggleCamera>>,
+    settings: Res<CameraSettings>,
     mut next_state: ResMut<NextState<CameraState>>,
     current_state: Res<State<CameraState>>,
 ) {
+    if !settings.debug_enabled {
+        return;
+    }
     match current_state.get() {
         CameraState::Follow => next_state.set(CameraState::Full),
         CameraState::Full => next_state.set(CameraState::Follow),
@@ -81,24 +95,34 @@ fn follow_camera(
 }
 
 /// Switch camera to follow view, reset the projection
-fn enter_follow_camera(mut camera_query: Query<&mut Projection, With<Camera>>) {
+fn enter_follow_camera(
+    config: Res<GameConfig>,
+    mut camera_query: Query<&mut Projection, With<Camera>>,
+) {
     if let Ok(mut projection) = camera_query.single_mut() {
         let Projection::Orthographic(projection) = &mut *projection else {
             return;
         };
         // NOTE: do not set the window size to >1.0 as this can cause jitters due to fractional pixel movement
         projection.scaling_mode = ScalingMode::WindowSize;
-        projection.scale = 1.0;
+        projection.scale = config.render.normal_camera_scale.max(0.1);
     }
 }
 
 /// Switch camera to full view, reset the projection
-fn enter_full_camera(mut camera_query: Query<&mut Projection, With<Camera>>) {
+fn enter_full_camera(
+    config: Res<GameConfig>,
+    mut camera_query: Query<&mut Projection, With<Camera>>,
+) {
     if let Ok(mut projection) = camera_query.single_mut() {
         let Projection::Orthographic(projection) = &mut *projection else {
             return;
         };
         projection.scaling_mode = ScalingMode::WindowSize;
-        projection.scale = 1.0;
+        projection.scale = config
+            .render
+            .debug_camera_scale
+            .max(config.render.normal_camera_scale)
+            .max(0.1);
     }
 }

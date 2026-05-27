@@ -230,6 +230,11 @@ pub struct Speed(pub f32);
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect, Add, Mul)]
 pub struct Acceleration(pub f32);
 
+#[derive(
+    Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Reflect, Add, Mul,
+)]
+pub struct FoodBoost(pub f32);
+
 #[cfg(test)]
 mod tests {
     use super::*;

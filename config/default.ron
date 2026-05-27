@@ -9,8 +9,17 @@
         min_speed: 1.0,
         max_speed: 4.0,
         base_acceleration: -0.01,
+        food_boost_acceleration: 0.08,
+        food_boost_decay: 0.85,
         boost_acceleration_ratio: 2.0,
         boost_distance: 20.0,
+    ),
+    render: (
+        tail_width: 3.0,
+        head_size: 10.0,
+        map_outline_width: 3.0,
+        normal_camera_scale: 1.0,
+        debug_camera_scale: 4.0,
     ),
     food: (
         target_count: 100,

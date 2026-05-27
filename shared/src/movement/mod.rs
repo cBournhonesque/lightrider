@@ -1,5 +1,5 @@
 use crate::collision::collider::{snake_friction, SnakeFrictionEvent};
-use bevy::ecs::entity::EntityHashSet;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 use lightyear::prelude::input::bei::Fire;
 
@@ -99,27 +99,47 @@ pub fn turn_tail(tail: &mut TailPoints, requested: Direction) {
 pub fn update_acceleration(
     mut events: MessageReader<SnakeFrictionEvent>,
     config: Res<GameConfig>,
-    mut snakes: Query<(Entity, &mut Acceleration), Simulated>,
+    mut snakes: Query<(Entity, &mut Acceleration, &mut FoodBoost), Simulated>,
 ) {
     let movement = &config.movement;
-    let mut accelerating_snakes = EntityHashSet::default();
+    let mut proximity_boosts = EntityHashMap::default();
     for event in events.read() {
-        let Ok((_, mut acceleration)) = snakes.get_mut(event.main) else {
-            continue;
-        };
-        accelerating_snakes.insert(event.main);
-        acceleration.set_if_neq(Acceleration(boost_acceleration(
+        let acceleration = boost_acceleration(
             movement.base_acceleration,
             movement.boost_acceleration_ratio,
             movement.boost_distance,
             event.distance,
-        )));
+        );
+        proximity_boosts
+            .entry(event.main)
+            .and_modify(|current: &mut f32| *current = current.max(acceleration))
+            .or_insert(acceleration);
     }
-    // TODO: we'd like to add easing to this
-    for (entity, mut acceleration) in snakes.iter_mut() {
-        if !accelerating_snakes.contains(&entity) {
-            acceleration.set_if_neq(Acceleration(movement.base_acceleration));
-        }
+
+    for (entity, mut acceleration, mut food_boost) in snakes.iter_mut() {
+        acceleration.set_if_neq(Acceleration(combined_acceleration(
+            movement.base_acceleration,
+            proximity_boosts.get(&entity).copied(),
+            food_boost.0,
+        )));
+        food_boost.0 = decayed_food_boost(food_boost.0, movement.food_boost_decay);
+    }
+}
+
+pub fn combined_acceleration(
+    base_acceleration: f32,
+    proximity_acceleration: Option<f32>,
+    food_boost: f32,
+) -> f32 {
+    proximity_acceleration.unwrap_or(base_acceleration) + food_boost
+}
+
+pub fn decayed_food_boost(boost: f32, decay: f32) -> f32 {
+    let decayed = boost * decay.clamp(0.0, 1.0);
+    if decayed.abs() < 0.001 {
+        0.0
+    } else {
+        decayed
     }
 }
 
@@ -211,6 +231,7 @@ mod tests {
                 },
                 Speed(0.5),
                 Acceleration(0.0),
+                FoodBoost::default(),
             ))
             .id()
     }
@@ -263,6 +284,19 @@ mod tests {
         assert!((boost_acceleration(-0.01, 2.0, 20.0, 20.0) - 0.0).abs() < f32::EPSILON);
         assert!((boost_acceleration(-0.01, 2.0, 20.0, 0.0) - 0.02).abs() < f32::EPSILON);
         assert!((boost_acceleration(-0.01, 2.0, 20.0, 10.0) - 0.01).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn food_boost_decays_smoothly() {
+        assert!((decayed_food_boost(0.08, 0.85) - 0.068).abs() < f32::EPSILON);
+        assert_eq!(decayed_food_boost(0.0001, 0.85), 0.0);
+        assert_eq!(decayed_food_boost(0.08, -1.0), 0.0);
+    }
+
+    #[test]
+    fn food_boost_layers_over_base_or_proximity_acceleration() {
+        assert!((combined_acceleration(-0.01, None, 0.08) - 0.07).abs() < f32::EPSILON);
+        assert!((combined_acceleration(-0.01, Some(0.02), 0.08) - 0.10).abs() < f32::EPSILON);
     }
 
     #[test]

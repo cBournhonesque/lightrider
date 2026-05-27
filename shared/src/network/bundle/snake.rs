@@ -18,6 +18,7 @@ pub struct SnakeBundle {
     pub speed: Speed,
     pub acceleration: Acceleration,
     pub tail_points: TailPoints,
+    pub food_boost: FoodBoost,
     pub input: SnakeInput,
     pub room: RoomId,
 }
@@ -58,6 +59,7 @@ impl SnakeBundle {
             },
             speed: Speed(config.min_speed),
             acceleration: Acceleration(0.0),
+            food_boost: FoodBoost::default(),
             input: SnakeInput,
             room,
         }

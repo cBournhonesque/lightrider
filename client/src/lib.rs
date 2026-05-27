@@ -38,9 +38,15 @@ pub enum ClientMode {
 
 #[derive(Parser, PartialEq, Debug)]
 pub struct Cli {
+    /// Enable local debug tools. Kept as an alias for existing workflows.
     #[arg(short, long, default_value = "false")]
     inspector: bool,
 
+    /// Enable local debug shortcuts such as camera zoom toggle and shortcut help.
+    #[arg(long, default_value = "false")]
+    debug: bool,
+
+    /// Run without rendering, for bot clients and load-test clients.
     #[arg(long, default_value = "false")]
     headless: bool,
 
@@ -84,6 +90,7 @@ pub fn app(cli: Cli) -> App {
     let bot_mistake_chance_per_decision_percent =
         config.fake_clients.mistake_chance_per_decision_percent;
     let player_name = player_name(&cli);
+    let debug_enabled = cli.debug || cli.inspector;
     let log_plugin = if cli.headless {
         runtime_log_plugin(&config, "wgpu=error,bevy_ecs=trace")
     } else {
@@ -125,8 +132,8 @@ pub fn app(cli: Cli) -> App {
         });
     }
     if !cli.headless {
-        app.add_plugins(inputs::LocalInputsPlugin);
-        app.add_plugins(camera::CameraPlugin);
+        app.add_plugins(inputs::LocalInputsPlugin { debug_enabled });
+        app.add_plugins(camera::CameraPlugin { debug_enabled });
         app.add_plugins(debug::DebugPlugin);
         app.add_plugins(render::RenderPlugin);
     }

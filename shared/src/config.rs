@@ -12,6 +12,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<GameConfig>();
         app.register_type::<ArenaConfig>();
         app.register_type::<MovementConfig>();
+        app.register_type::<RenderConfig>();
         app.register_type::<FoodConfig>();
         app.register_type::<RoomConfig>();
         app.register_type::<BotConfig>();
@@ -28,6 +29,7 @@ impl Plugin for ConfigPlugin {
 pub struct GameConfig {
     pub arena: ArenaConfig,
     pub movement: MovementConfig,
+    pub render: RenderConfig,
     pub food: FoodConfig,
     pub rooms: RoomConfig,
     pub bots: BotConfig,
@@ -42,6 +44,7 @@ impl Default for GameConfig {
         Self {
             arena: ArenaConfig::default(),
             movement: MovementConfig::default(),
+            render: RenderConfig::default(),
             food: FoodConfig::default(),
             rooms: RoomConfig::default(),
             bots: BotConfig::default(),
@@ -92,6 +95,8 @@ pub struct MovementConfig {
     pub min_speed: f32,
     pub max_speed: f32,
     pub base_acceleration: f32,
+    pub food_boost_acceleration: f32,
+    pub food_boost_decay: f32,
     pub boost_acceleration_ratio: f32,
     pub boost_distance: f32,
 }
@@ -104,6 +109,8 @@ impl Default for MovementConfig {
             min_speed: 1.0,
             max_speed: 4.0,
             base_acceleration: -0.01,
+            food_boost_acceleration: 0.08,
+            food_boost_decay: 0.85,
             boost_acceleration_ratio: 2.0,
             boost_distance: 20.0,
         }
@@ -118,6 +125,28 @@ impl MovementConfig {
             Self::default().tick_rate_hz
         };
         Duration::from_secs_f32(1.0 / tick_rate_hz)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
+#[serde(default)]
+pub struct RenderConfig {
+    pub tail_width: f32,
+    pub head_size: f32,
+    pub map_outline_width: f32,
+    pub normal_camera_scale: f32,
+    pub debug_camera_scale: f32,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self {
+            tail_width: 3.0,
+            head_size: 10.0,
+            map_outline_width: 3.0,
+            normal_camera_scale: 1.0,
+            debug_camera_scale: 4.0,
+        }
     }
 }
 
@@ -291,6 +320,10 @@ mod tests {
 
         assert_eq!(config.arena.width, 5000.0);
         assert_eq!(config.arena.height, 1600.0);
+        assert_eq!(config.render.tail_width, 3.0);
+        assert_eq!(config.render.map_outline_width, 3.0);
+        assert_eq!(config.movement.food_boost_acceleration, 0.08);
+        assert_eq!(config.movement.food_boost_decay, 0.85);
         assert_eq!(config.rooms.max_players_per_room, 50);
         assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.fake_clients.mistake_chance_per_decision_percent, 3);

@@ -6,6 +6,9 @@ server config="config/test.ron" port="5000":
 client id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
     cargo run -j 4 -p client --bin lightrider-client -- --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
 
+client-debug id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
+    cargo run -j 4 -p client --bin lightrider-client -- --debug --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
+
 bot id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
     cargo run -j 4 -p client --bin lightrider-client -- --headless --mode bot --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
 
