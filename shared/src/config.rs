@@ -138,6 +138,7 @@ pub struct RenderConfig {
     pub normal_camera_growth_per_tail_length: f32,
     pub normal_camera_max_scale: f32,
     pub debug_camera_scale: f32,
+    pub food_visual_lerp: f32,
 }
 
 impl Default for RenderConfig {
@@ -150,6 +151,7 @@ impl Default for RenderConfig {
             normal_camera_growth_per_tail_length: 0.001,
             normal_camera_max_scale: 1.0,
             debug_camera_scale: 1.0,
+            food_visual_lerp: 0.35,
         }
     }
 }
@@ -339,6 +341,7 @@ mod tests {
         assert_eq!(config.render.normal_camera_scale, 0.35);
         assert_eq!(config.render.normal_camera_max_scale, 1.0);
         assert_eq!(config.render.debug_camera_scale, 1.0);
+        assert_eq!(config.render.food_visual_lerp, 0.35);
         assert_eq!(config.food.visual_radius, 3.0);
         assert_eq!(config.food.radius, 8.0);
         assert_eq!(config.food.magnet_radius, 75.0);

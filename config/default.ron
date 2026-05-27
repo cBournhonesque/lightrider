@@ -22,6 +22,7 @@
         normal_camera_growth_per_tail_length: 0.001,
         normal_camera_max_scale: 1.0,
         debug_camera_scale: 1.0,
+        food_visual_lerp: 0.35,
     ),
     food: (
         target_count: 100,

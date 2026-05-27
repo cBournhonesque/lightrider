@@ -5,7 +5,7 @@ use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy_turborand::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{InterpolationTarget, NetworkTarget, Replicate, ReplicationSender};
+use lightyear::prelude::{NetworkTarget, Replicate, ReplicationSender};
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::map::{MapMarker, MapSize};
@@ -59,7 +59,6 @@ pub(crate) fn spawn_food_entity(
         .spawn((
             FoodBundle::new_in_room(position, room),
             Replicate::to_clients(NetworkTarget::All),
-            InterpolationTarget::to_clients(NetworkTarget::All),
         ))
         .id();
     if let Some(lightyear_room) = rooms.lightyear_room(room) {
