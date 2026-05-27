@@ -77,7 +77,7 @@ pub(crate) fn handle_spawn_action(
     spawn_snake_input_actions(&mut commands, head_entity, client_id, true);
     commands.entity(player_entity).remove::<RespawnReadyAt>();
     player.snake = Some(head_entity);
-    *score = PlayerScore::from_length(config.movement.starting_tail_length);
+    *score = PlayerScore::default();
     stats.reset_for_life();
     *status = PlayerStatus::Alive;
 }

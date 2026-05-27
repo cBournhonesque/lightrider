@@ -27,6 +27,10 @@ impl PlayerScore {
             value: length.max(0.0).round() as u32,
         }
     }
+
+    pub fn from_tail_length(tail_length: f32, starting_tail_length: f32) -> Self {
+        Self::from_length(tail_length - starting_tail_length)
+    }
 }
 
 #[derive(Component, Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
@@ -98,5 +102,12 @@ mod tests {
         stats.reset_for_life();
 
         assert_eq!(stats, PlayerStats::default());
+    }
+
+    #[test]
+    fn player_score_ignores_starting_tail_length() {
+        assert_eq!(PlayerScore::from_tail_length(200.0, 200.0).value, 0);
+        assert_eq!(PlayerScore::from_tail_length(220.0, 200.0).value, 20);
+        assert_eq!(PlayerScore::from_tail_length(180.0, 200.0).value, 0);
     }
 }

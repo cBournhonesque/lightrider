@@ -147,11 +147,6 @@ fn spawn_ready_client(
         assignment.game_room,
     )
     .spawn(commands, client_id);
-    commands
-        .entity(player_entity)
-        .insert(PlayerScore::from_length(
-            config.movement.starting_tail_length,
-        ));
 
     let controlled_by = ControlledBy {
         owner: client_entity,

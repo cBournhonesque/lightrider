@@ -25,6 +25,7 @@ impl Plugin for NetworkPlugin {
             .register_type::<Player>()
             .register_type::<PlayerScore>()
             .register_type::<PlayerRank>()
-            .register_type::<PlayerStatus>();
+            .register_type::<PlayerStatus>()
+            .register_type::<Position>();
     }
 }

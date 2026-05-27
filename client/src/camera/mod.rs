@@ -6,7 +6,7 @@ use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::input::bei::Start;
 use lightyear::prelude::Predicted;
 use shared::config::GameConfig;
-use shared::network::protocol::prelude::TailPoints;
+use shared::network::protocol::prelude::{TailLength, TailPoints};
 
 pub struct CameraPlugin {
     pub(crate) debug_enabled: bool,
@@ -70,20 +70,28 @@ fn toggle_camera(
 ///
 /// System to make the camera follow the head of the player, or the head of the killer
 fn follow_camera(
+    config: Res<GameConfig>,
+    camera_state: Res<State<CameraState>>,
     death_view: Res<DeathView>,
-    predicted: Query<&TailPoints, With<Predicted>>,
+    predicted: Query<(&TailPoints, &TailLength), With<Predicted>>,
     tails: Query<&TailPoints>,
-    mut camera_query: Query<&mut Transform, With<Camera>>,
+    mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera>>,
 ) {
     // how much we stick to the new position
     // let lerp = 0.1;
     // let lerp = 1.0;
-    if let Ok(mut camera_pos) = camera_query.single_mut() {
-        if let Ok(pos) = predicted.single() {
+    if let Ok((mut camera_pos, mut projection)) = camera_query.single_mut() {
+        if let Ok((pos, tail_length)) = predicted.single() {
             let head = pos.front().0;
             // *camera_pos = Transform::from_translation(camera_pos.translation.mul_add(Vec3::splat(1.0 - lerp), Vec3::from((head, 0.0)) * lerp));
             camera_pos.translation.x = head.x;
             camera_pos.translation.y = head.y;
+            if *camera_state.get() == CameraState::Follow {
+                set_camera_scale(
+                    &mut projection,
+                    normal_camera_scale_for_tail(&config, tail_length),
+                );
+            }
         } else if let Some(killer_snake) = death_view.killer_snake {
             if let Ok(pos) = tails.get(killer_snake) {
                 let head = pos.front().0;
@@ -100,12 +108,7 @@ fn enter_follow_camera(
     mut camera_query: Query<&mut Projection, With<Camera>>,
 ) {
     if let Ok(mut projection) = camera_query.single_mut() {
-        let Projection::Orthographic(projection) = &mut *projection else {
-            return;
-        };
-        // NOTE: do not set the window size to >1.0 as this can cause jitters due to fractional pixel movement
-        projection.scaling_mode = ScalingMode::WindowSize;
-        projection.scale = config.render.normal_camera_scale.max(0.1);
+        set_camera_scale(&mut projection, config.render.normal_camera_scale.max(0.1));
     }
 }
 
@@ -115,14 +118,54 @@ fn enter_full_camera(
     mut camera_query: Query<&mut Projection, With<Camera>>,
 ) {
     if let Ok(mut projection) = camera_query.single_mut() {
-        let Projection::Orthographic(projection) = &mut *projection else {
-            return;
-        };
-        projection.scaling_mode = ScalingMode::WindowSize;
-        projection.scale = config
-            .render
-            .debug_camera_scale
-            .max(config.render.normal_camera_scale)
-            .max(0.1);
+        set_camera_scale(&mut projection, config.render.debug_camera_scale.max(0.1));
+    }
+}
+
+fn set_camera_scale(projection: &mut Projection, scale: f32) {
+    let Projection::Orthographic(projection) = &mut *projection else {
+        return;
+    };
+    // NOTE: do not set the window size to >1.0 as this can cause jitters due to fractional pixel movement
+    projection.scaling_mode = ScalingMode::WindowSize;
+    projection.scale = scale.max(0.1);
+}
+
+fn normal_camera_scale_for_tail(config: &GameConfig, tail_length: &TailLength) -> f32 {
+    let min_scale = config.render.normal_camera_scale.max(0.1);
+    let max_scale = config.render.normal_camera_max_scale.max(min_scale);
+    let growth = (tail_length.current_size - config.movement.starting_tail_length).max(0.0);
+    (min_scale + growth * config.render.normal_camera_growth_per_tail_length.max(0.0))
+        .clamp(min_scale, max_scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_camera_scale_grows_with_tail_length() {
+        let config = GameConfig::default();
+
+        assert_eq!(
+            normal_camera_scale_for_tail(
+                &config,
+                &TailLength {
+                    current_size: config.movement.starting_tail_length,
+                    target_size: config.movement.starting_tail_length,
+                },
+            ),
+            config.render.normal_camera_scale
+        );
+
+        let grown = normal_camera_scale_for_tail(
+            &config,
+            &TailLength {
+                current_size: config.movement.starting_tail_length + 200.0,
+                target_size: config.movement.starting_tail_length + 200.0,
+            },
+        );
+        assert!(grown > config.render.normal_camera_scale);
+        assert!(grown <= config.render.normal_camera_max_scale);
     }
 }

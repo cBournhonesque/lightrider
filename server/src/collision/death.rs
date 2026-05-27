@@ -1,3 +1,4 @@
+use crate::food::spawn_food_entity;
 use crate::respawn::{respawn_delay_seconds, RespawnReadyAt};
 use crate::rooms::{remove_replicated_entity_from_room, RoomDirectory};
 use bevy::ecs::entity::EntityHashSet;
@@ -34,7 +35,7 @@ pub fn handle_collision(
         Query<(&mut Player, &mut PlayerStatus, Has<BotMarker>)>,
     )>,
     human_players: Query<(), With<ControlledBy>>,
-    snakes: Query<(&HasPlayer, &RoomId)>,
+    snakes: Query<(&HasPlayer, &RoomId, &TailPoints)>,
     mut commands: Commands,
 ) {
     let server = server.into_inner();
@@ -43,11 +44,12 @@ pub fn handle_collision(
         if !killed_snakes.insert(collision_event.killed) {
             continue;
         }
-        let Ok((killed_player, killed_room)) = snakes.get(collision_event.killed) else {
+        let Ok((killed_player, killed_room, killed_tail)) = snakes.get(collision_event.killed)
+        else {
             error!("snake does not have HasPlayer component");
             continue;
         };
-        let Ok((killer_player, killer_room)) = snakes.get(collision_event.killer) else {
+        let Ok((killer_player, killer_room, _)) = snakes.get(collision_event.killer) else {
             error!("snake does not have HasPlayer component");
             continue;
         };
@@ -120,6 +122,7 @@ pub fn handle_collision(
             );
         }
         commands.entity(collision_event.killed).try_despawn();
+        spawn_death_food(&mut commands, &rooms, &config, *killed_room, killed_tail);
         let killed_is_bot = {
             let mut player_states = players.p2();
             let Ok((mut killed, mut killed_status, killed_is_bot)) =
@@ -138,5 +141,71 @@ pub fn handle_collision(
                 time.elapsed_secs_f64(),
                 respawn_delay_seconds(&config, killed_is_bot),
             ));
+    }
+}
+
+fn spawn_death_food(
+    commands: &mut Commands,
+    rooms: &RoomDirectory,
+    config: &GameConfig,
+    room: RoomId,
+    tail: &TailPoints,
+) {
+    for position in death_food_positions(
+        tail,
+        config.food.death_food_spacing,
+        config.food.death_food_max,
+    ) {
+        spawn_food_entity(commands, rooms, room, Position(position));
+    }
+}
+
+pub fn death_food_positions(tail: &TailPoints, spacing: f32, max_food: usize) -> Vec<Vec2> {
+    if spacing <= 0.0 || max_food == 0 {
+        return Vec::new();
+    }
+    let mut positions = Vec::new();
+    for (start, end) in tail.pairs_front_to_back() {
+        let segment = end.0 - start.0;
+        let length = segment.length();
+        if length <= f32::EPSILON {
+            continue;
+        }
+        let direction = segment / length;
+        let mut distance = spacing * 0.5;
+        while distance < length && positions.len() < max_food {
+            positions.push(start.0 + direction * distance);
+            distance += spacing;
+        }
+        if positions.len() >= max_food {
+            break;
+        }
+    }
+    positions
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+
+    #[test]
+    fn death_food_samples_tail_segments_without_exceeding_limit() {
+        let tail = TailPoints(VecDeque::from([
+            (Vec2::new(100.0, 0.0), Direction::Right),
+            (Vec2::ZERO, Direction::Right),
+        ]));
+
+        let positions = death_food_positions(&tail, 25.0, 3);
+
+        assert_eq!(
+            positions,
+            vec![
+                Vec2::new(12.5, 0.0),
+                Vec2::new(37.5, 0.0),
+                Vec2::new(62.5, 0.0),
+            ]
+        );
     }
 }

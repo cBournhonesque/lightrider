@@ -109,7 +109,7 @@ fn maintain_bots(
         commands.entity(snake).insert(HasPlayer(player_entity));
         commands.entity(player_entity).remove::<RespawnReadyAt>();
         player.snake = Some(snake);
-        *score = PlayerScore::from_length(config.movement.starting_tail_length);
+        *score = PlayerScore::default();
         stats.reset_for_life();
         *status = PlayerStatus::Alive;
     }
@@ -140,10 +140,7 @@ fn spawn_bot<'a>(
         assignment.game_room,
     )
     .spawn(commands, bot_id);
-    commands.entity(player).insert((
-        BotMarker,
-        PlayerScore::from_length(config.movement.starting_tail_length),
-    ));
+    commands.entity(player).insert(BotMarker);
     commands.entity(snake).insert(HasPlayer(player));
     add_replicated_entity_to_room(commands, assignment.lightyear_room, player);
 }

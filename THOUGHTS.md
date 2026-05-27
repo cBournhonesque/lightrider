@@ -23,8 +23,10 @@ The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbou
 - A snake is represented as a head plus a tail polyline. Direction changes add turn points; the tail follows the head path and is shortened from the back to maintain length.
 - Players steer up, down, left, and right. A 180-degree reversal is invalid.
 - Hitting another snake, hitting yourself, or hitting the arena boundary kills the snake.
-- Food spawns in the arena. Eating food grows the snake and increases score.
-- Score is derived from length for the prototype. Add richer score events later only if the original behavior requires them.
+- Food spawns in the arena as very small dots. Nearby food is magnetically pulled toward close snake heads and is absorbed at the head.
+- Eating food grows the snake and increases score.
+- Score starts at 0 and counts growth beyond the initial snake length. The starting tail length is not part of the score.
+- When a snake dies, the server drops food samples along the killed snake's trajectory.
 - The Powerline signature mechanic is proximity speed boost: a snake accelerates when moving close and parallel enough to another snake trail, then decelerates back toward base speed when not close.
 - The prototype should support respawning after death. The server enforces a short respawn cooldown; clients request respawn through the normal networked input action.
 - Bots should use the same movement, collision, food, and scoring rules as players.
@@ -34,7 +36,7 @@ The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbou
 - Start with Bevy primitives and gizmos: dark arena, visible boundaries, simple line tails, simple square/circle heads, simple food dots.
 - Make gameplay state legible before matching cosmetics.
 - Keep rendering replaceable so later asset imports from the original Powerline source do not disturb simulation or networking logic.
-- Later cosmetic backlog: glow, sparks on proximity boost, death effects, food pickup animation, sound effects from `sounds/out.ogg`, sprites from `images/sheet.png`, logo/menu assets, minimap, leaderboard styling.
+- Later cosmetic backlog: glow, sparks on proximity boost, richer death effects, richer food pickup animation, sound effects from `sounds/out.ogg`, sprites from `images/sheet.png`, logo/menu assets, minimap, leaderboard styling.
 
 ### Arena And Rules
 
@@ -115,14 +117,14 @@ The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbou
 - Lightyear transport features are WebTransport-only: `webtransport`, `webtransport_self_signed`, and `webtransport_dangerous_configuration`. `udp` and `websocket` features are intentionally not enabled.
 - Leafwing input usage has been removed from the active dependency tree. Keep the direct `bevy_enhanced_input` dependency aligned with the version pulled by Lightyear main's `input_bei` integration, otherwise the project gets two incompatible BEI action APIs.
 - `.cargo/config.toml` no longer forces an Apple target; Linux workspace checks/tests now run on the host target.
-- Data-driven config exists in `shared/src/config.rs` with RON files at `config/default.ron` and `config/test.ron`. It now covers movement, food, rooms, respawn, network/input delay, debug tracing, and barebones render knobs such as tail width, head size, map outline width, and normal/debug camera scale. `MovementConfig::tick_duration()` is the single source for the Lightyear fixed tick duration.
+- Data-driven config exists in `shared/src/config.rs` with RON files at `config/default.ron` and `config/test.ron`. It now covers movement, food, rooms, respawn, network/input delay, debug tracing, and barebones render knobs such as tail width, head size, map outline width, close-camera growth, and debug camera scale. `MovementConfig::tick_duration()` is the single source for the Lightyear fixed tick duration.
 - Shared logic has a polyline snake model in `shared/src/network/protocol/components/snake.rs`.
 - Movement logic lives in `shared/src/movement/mod.rs` and includes BEI-driven turn handling, config-driven acceleration/speed integration, food-pickup acceleration boost decay, and tail shortening.
 - Collision/proximity now uses explicit geometry in `shared/src/utils/geometry.rs`, `shared/src/collision/collider.rs`, and `server/src/collision/collider.rs`. Simulation-critical proximity, server collision/death, and food overlap/growth systems run in `FixedUpdate` around `SimulationSet::Movement`.
 - Shared `RoomId` is registered in the protocol and attached to maps, players, snakes, and food. Proximity boost, snake-vs-snake collision, food overlap, respawns, rank computation, and Lightyear room visibility are room-scoped.
 - Server boundary death now uses explicit arena geometry from `GameConfig`.
-- Server food spawning, overlap, and growth use `GameConfig` for target count, spawn interval, radius, and tail growth. Food is replicated through room visibility.
-- `PlayerScore`, `PlayerRank`, and `PlayerStatus` replicate with the player. Food pickups update score from tail length on the server, per-room ranks are recomputed on the server, and respawns reset score/status from config.
+- Server food spawning, magnetic attraction, overlap, growth, and death drops use `GameConfig` for target count, spawn interval, visual radius, absorption radius, magnet radius/speed, tail growth, and death-food spacing/limit. Food is replicated through room visibility and `Position` is interpolated for smoother magnetic movement.
+- `PlayerScore`, `PlayerRank`, and `PlayerStatus` replicate with the player. Food pickups update score from tail growth beyond the initial length on the server, per-room ranks are recomputed on the server, and respawns reset score/status from config.
 - Death flow now uses server-internal `SnakeCollision` with `DeathReason` and sends a server-to-client `PlayerDeath` message containing mapped player/snake entities, room id, and reason. The server remains authoritative for despawning snakes, setting player status, clearing `Player.snake`, and enforcing respawn cooldown through `RespawnReadyAt`.
 - Client death state records the local player's death view: after a collision death, the follow camera tracks the killer snake if it still exists; after suicide or boundary death, the camera stays static. Respawn is requested with Enter or Space after the configured cooldown, and the server validates the timing.
 - Client prediction now includes the shared collision/proximity plugin, so local predicted snakes can compute boost from nearby room-local trails before reconciliation.
@@ -131,13 +133,13 @@ The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbou
 - Client/server connection setup now uses Lightyear 0.26 entity components (`ClientPlugins`, `ServerPlugins`, `NetcodeClient`, `NetcodeServer`, WebTransport IO components) rather than old `ClientPlugin<GameProtocol>` / `ServerPlugin<GameProtocol>` config objects. Both client and server derive Lightyear's tick duration from `GameConfig`.
 - Client CLI accepts `--certificate-digest <hex>` for WebTransport. Native dev builds can leave it empty because the local dev feature set enables dangerous certificate handling; browser/deployment paths should pass the digest printed by the server.
 - Client and server CLIs accept `--config <path>` to load a RON `GameConfig`; without it they use `GameConfig::default()`.
-- Non-headless client debug mode is enabled with `--debug` or the existing `--inspector` alias. In debug mode `T` toggles between normal close camera scale and the zoomed-out debug camera scale, and `?` toggles a local shortcuts overlay.
+- Non-headless client debug mode is enabled with `--debug` or the existing `--inspector` alias. In debug mode `T` toggles between normal close camera scale and the zoomed-out debug camera scale, and `?` toggles a local shortcuts overlay. The normal camera starts much closer to the head and grows outward with current tail growth up to a configured max scale.
 - Existing client rendering is very barebones and uses gizmos in `client/src/render/snake.rs`.
 - Custom snake interpolation has been restored against Lightyear 0.26 using `ConfirmedHistory<TailPoints>`, `ConfirmedHistory<TailLength>`, and `InterpolationSystems::Interpolate`. The helper is adapted from the old Lightrider prototype and the Lightyear `replication_groups` example.
 - Frame interpolation is enabled for predicted snake `TailPoints` via `FrameInterpolationPlugin<TailPoints>` and `FrameInterpolate<TailPoints>`. Visual correction is intentionally not configured.
 - Lightyear room visibility is the interest-management filter for game entities, but it is not a replacement for normal replication targets. On Lightyear main, room membership uses the `Rooms` component with ids from `RoomAllocator`; room-scoped entities still use `Replicate::to_clients(NetworkTarget::All)`, and food spawning pauses while any `ClientOf` lacks a `ReplicationSender` to avoid pending-handshake sender errors.
 - Non-headless clients must spawn `ReplicationReceiver::default()` on the client entity; otherwise WebTransport connects but replicated game entities never arrive. Add Lightyear `ClientPlugins`/`ServerPlugins` before the shared `ProtocolPlugin`, matching the upstream examples.
-- The client render baseline now draws a dark clear color, arena outline/axes, larger food circles, and configurable snake head/tail gizmos so a connected or not-yet-connected window is visibly alive.
+- The client render baseline now draws a dark clear color, arena outline/axes, small food dots, and configurable snake head/tail gizmos so a connected or not-yet-connected window is visibly alive.
 - Server-owned bots live in `server/src/bots.rs` and reuse shared bot steering from `shared/src/bot.rs`. Bot clients are `client --headless --mode bot` and drive BEI `ActionMock`s through the same input path as real clients. Bot steering now scores arena boundaries, its own tail, and same-room snake tails as lookahead obstacles; random voluntary turns are strongly throttled so bots do not immediately draw tiny self-trapping boxes.
 - Server respawning uses safer spawn placement from `server/src/spawning.rs`, scoring candidate head/tail positions against same-room tails and arena bounds before falling back to the best deterministic candidate.
 - Runnable binaries are explicitly named `lightrider-server` and `lightrider-client`; do not rely on both crates exposing a bin named `main`.
@@ -244,7 +246,12 @@ Status: complete enough for local load/latency smoke work.
 
 ### 2026-05-26
 
-- Added data-driven render knobs to `GameConfig`: snake tail width, head size, map outline width, normal camera scale, and debug camera scale. The default/test configs now use a narrower `tail_width = 3.0` and draw a configurable map outline.
+- Tightened normal camera behavior: `normal_camera_scale` is now close to the head by default, `debug_camera_scale` matches the previous far normal view, and the normal camera grows with current tail growth using `normal_camera_growth_per_tail_length` up to `normal_camera_max_scale`.
+- Made food smaller and added server-authoritative magnetic attraction. Food now has separate `visual_radius`, absorption `radius`, `magnet_radius`, and `magnet_speed` config fields; the server moves nearby food toward the closest same-room snake head before pickup checks, and `Position` is interpolated for food so the pull is visible on clients.
+- Changed score semantics so initial tail length is worth 0 points. Respawns and initial spawns reset `PlayerScore` to default; food pickups use `PlayerScore::from_tail_length(total_tail_length, starting_tail_length)`.
+- Added death food drops. Before despawning a killed snake, the server samples positions along its `TailPoints` using `death_food_spacing` and `death_food_max` and spawns room-scoped replicated food at those positions.
+- Verification for close-camera/magnetic-food/score/death-food changes: `cargo fmt --all`, `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 4`, and `CARGO_INCREMENTAL=0 just trace-local 1 4 config/test.ron 5064` pass/complete. The trace at `logs/debug/20260526-203810` showed zero `snake_invariant_violation` and zero `server_late_input_mismatch` rows, no panic/error markers, and several server food pickup logs.
+- Added data-driven render knobs to `GameConfig`: snake tail width, head size, map outline width, normal camera scale/growth/max, and debug camera scale. The default/test configs now use a narrower `tail_width = 3.0` and draw a configurable map outline.
 - Added local client debug mode through `--debug` plus the existing `--inspector` alias. Debug clients spawn local-only shortcuts: `T` toggles between the normal close camera and zoomed-out debug camera, while `?` toggles an on-screen shortcut help panel. Added `just client-debug` as the convenient launch recipe.
 - Food pickups now add a short acceleration burst through a replicated/predicted `FoodBoost` component instead of directly changing speed. `shared::movement` layers food boost over either the current proximity acceleration or the base deceleration and then decays it each fixed tick, so snakes keep momentum briefly and then settle back toward the configured minimum speed through the existing negative base acceleration.
 - Verification for render/debug-camera/food-boost changes: `cargo fmt --all`, `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 4`, `target/debug/lightrider-client --help`, `just --list`, and `CARGO_INCREMENTAL=0 just trace-local 1 4 config/test.ron 5063` pass/complete. DuckDB showed zero `snake_invariant_violation` and zero `server_late_input_mismatch` rows for `logs/debug/20260526-201421`, and the logs had no panic/error markers.

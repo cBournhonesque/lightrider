@@ -135,6 +135,8 @@ pub struct RenderConfig {
     pub head_size: f32,
     pub map_outline_width: f32,
     pub normal_camera_scale: f32,
+    pub normal_camera_growth_per_tail_length: f32,
+    pub normal_camera_max_scale: f32,
     pub debug_camera_scale: f32,
 }
 
@@ -144,8 +146,10 @@ impl Default for RenderConfig {
             tail_width: 3.0,
             head_size: 10.0,
             map_outline_width: 3.0,
-            normal_camera_scale: 1.0,
-            debug_camera_scale: 4.0,
+            normal_camera_scale: 0.35,
+            normal_camera_growth_per_tail_length: 0.001,
+            normal_camera_max_scale: 1.0,
+            debug_camera_scale: 1.0,
         }
     }
 }
@@ -155,8 +159,13 @@ impl Default for RenderConfig {
 pub struct FoodConfig {
     pub target_count: usize,
     pub spawn_interval_seconds: f32,
+    pub visual_radius: f32,
     pub radius: f32,
+    pub magnet_radius: f32,
+    pub magnet_speed: f32,
     pub tail_growth: f32,
+    pub death_food_spacing: f32,
+    pub death_food_max: usize,
 }
 
 impl Default for FoodConfig {
@@ -164,8 +173,13 @@ impl Default for FoodConfig {
         Self {
             target_count: 100,
             spawn_interval_seconds: 1.0,
-            radius: 20.0,
+            visual_radius: 3.0,
+            radius: 8.0,
+            magnet_radius: 75.0,
+            magnet_speed: 10.0,
             tail_growth: 20.0,
+            death_food_spacing: 28.0,
+            death_food_max: 40,
         }
     }
 }
@@ -322,6 +336,13 @@ mod tests {
         assert_eq!(config.arena.height, 1600.0);
         assert_eq!(config.render.tail_width, 3.0);
         assert_eq!(config.render.map_outline_width, 3.0);
+        assert_eq!(config.render.normal_camera_scale, 0.35);
+        assert_eq!(config.render.normal_camera_max_scale, 1.0);
+        assert_eq!(config.render.debug_camera_scale, 1.0);
+        assert_eq!(config.food.visual_radius, 3.0);
+        assert_eq!(config.food.radius, 8.0);
+        assert_eq!(config.food.magnet_radius, 75.0);
+        assert_eq!(config.food.death_food_max, 40);
         assert_eq!(config.movement.food_boost_acceleration, 0.08);
         assert_eq!(config.movement.food_boost_decay, 0.85);
         assert_eq!(config.rooms.max_players_per_room, 50);

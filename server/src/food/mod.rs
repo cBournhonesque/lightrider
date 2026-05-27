@@ -5,7 +5,7 @@ use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy_turborand::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{NetworkTarget, Replicate, ReplicationSender};
+use lightyear::prelude::{InterpolationTarget, NetworkTarget, Replicate, ReplicationSender};
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::map::{MapMarker, MapSize};
@@ -45,17 +45,68 @@ fn spawn_food(
 
         let x = rng.f32_normalized() * map_size.width * 0.5;
         let y = rng.f32_normalized() * map_size.height * 0.5;
-        let pos = Position(Vec2::new(x, y));
-        let food = commands
-            .spawn((
-                FoodBundle::new_in_room(pos, *room),
-                Replicate::to_clients(NetworkTarget::All),
-            ))
-            .id();
-        if let Some(lightyear_room) = rooms.lightyear_room(*room) {
-            add_replicated_entity_to_room(&mut commands, lightyear_room, food);
+        spawn_food_entity(&mut commands, &rooms, *room, Position(Vec2::new(x, y)));
+    }
+}
+
+pub(crate) fn spawn_food_entity(
+    commands: &mut Commands,
+    rooms: &RoomDirectory,
+    room: RoomId,
+    position: Position,
+) -> Entity {
+    let food = commands
+        .spawn((
+            FoodBundle::new_in_room(position, room),
+            Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
+        ))
+        .id();
+    if let Some(lightyear_room) = rooms.lightyear_room(room) {
+        add_replicated_entity_to_room(commands, lightyear_room, food);
+    }
+    food
+}
+
+fn attract_food_to_heads(
+    config: Res<GameConfig>,
+    tails: Query<(&TailPoints, &RoomId)>,
+    mut food: Query<(&mut Position, &RoomId), With<FoodMarker>>,
+) {
+    let magnet_radius = config.food.magnet_radius.max(0.0);
+    let magnet_speed = config.food.magnet_speed.max(0.0);
+    if magnet_radius <= 0.0 || magnet_speed <= 0.0 {
+        return;
+    }
+
+    for (mut position, food_room) in &mut food {
+        let nearest_head = tails
+            .iter()
+            .filter(|(_, snake_room)| *snake_room == food_room)
+            .map(|(tail, _)| tail.front().0)
+            .filter(|head| head.distance(position.0) <= magnet_radius)
+            .min_by(|left, right| {
+                left.distance_squared(position.0)
+                    .total_cmp(&right.distance_squared(position.0))
+            });
+        if let Some(head) = nearest_head {
+            position.0 = magnetized_food_position(position.0, head, magnet_radius, magnet_speed);
         }
     }
+}
+
+pub fn magnetized_food_position(
+    position: Vec2,
+    head: Vec2,
+    magnet_radius: f32,
+    magnet_speed: f32,
+) -> Vec2 {
+    let to_head = head - position;
+    let distance = to_head.length();
+    if distance <= f32::EPSILON || distance > magnet_radius || magnet_speed <= 0.0 {
+        return position;
+    }
+    position + to_head / distance * distance.min(magnet_speed)
 }
 
 // TODO: handle two players colliding with the same food at the same time
@@ -70,7 +121,7 @@ fn food_collision(
 ) {
     let mut eaten_food = EntityHashSet::default();
     for (snake, tail, room) in tails.iter() {
-        let collision_point = tail.front().0 + tail.front().1.delta();
+        let collision_point = tail.front().0;
         trace!(head = ?tail.front().0, direction = ?tail.front().1, "Food collision check");
         for (food_entity, position, food_room) in food.iter() {
             if food_room != room || eaten_food.contains(&food_entity) {
@@ -103,7 +154,10 @@ fn grow_tail(
             food_boost.0 += config.movement.food_boost_acceleration.max(0.0);
             if let Ok(has_player) = snake_players.get(event.snake) {
                 if let Ok(mut score) = scores.get_mut(has_player.0) {
-                    *score = PlayerScore::from_length(tail_length.target_size);
+                    *score = PlayerScore::from_tail_length(
+                        tail_length.target_size,
+                        config.movement.starting_tail_length,
+                    );
                 }
                 if let Ok(mut stats) = stats.get_mut(has_player.0) {
                     stats.food_eaten = stats.food_eaten.saturating_add(1);
@@ -150,7 +204,9 @@ impl Plugin for FoodPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                food_collision.in_set(ColliderSet::ComputeCollision),
+                (attract_food_to_heads, food_collision)
+                    .chain()
+                    .in_set(ColliderSet::ComputeCollision),
                 (grow_tail, despawn_food).after(food_collision),
             ),
         );
@@ -291,9 +347,10 @@ mod tests {
 
         assert_eq!(
             app.world().entity(player).get::<PlayerScore>(),
-            Some(&PlayerScore::from_length(
+            Some(&PlayerScore::from_tail_length(
                 shared::config::MovementConfig::default().starting_tail_length
-                    + GameConfig::default().food.tail_growth
+                    + GameConfig::default().food.tail_growth,
+                shared::config::MovementConfig::default().starting_tail_length,
             ))
         );
         assert!(app.world().get_entity(food).is_err());
@@ -311,6 +368,22 @@ mod tests {
             Some(&FoodBoost(
                 GameConfig::default().movement.food_boost_acceleration
             ))
+        );
+    }
+
+    #[test]
+    fn magnetized_food_moves_toward_head_without_overshooting() {
+        assert_eq!(
+            magnetized_food_position(Vec2::ZERO, Vec2::new(20.0, 0.0), 30.0, 5.0),
+            Vec2::new(5.0, 0.0)
+        );
+        assert_eq!(
+            magnetized_food_position(Vec2::ZERO, Vec2::new(3.0, 0.0), 30.0, 5.0),
+            Vec2::new(3.0, 0.0)
+        );
+        assert_eq!(
+            magnetized_food_position(Vec2::ZERO, Vec2::new(40.0, 0.0), 30.0, 5.0),
+            Vec2::ZERO
         );
     }
 
