@@ -1,11 +1,9 @@
-use crate::rooms::{
-    add_replicated_entity_to_room, remove_replicated_entity_from_room, RoomDirectory,
-};
+use crate::rooms::{add_replicated_entity_to_room, RoomDirectory};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy_turborand::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{NetworkTarget, Replicate, ReplicationSender};
+use lightyear::prelude::{InterpolationTarget, NetworkTarget, Replicate, ReplicationSender};
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::map::{MapMarker, MapSize};
@@ -59,6 +57,7 @@ pub(crate) fn spawn_food_entity(
         .spawn((
             FoodBundle::new_in_room(position, room),
             Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
         ))
         .id();
     if let Some(lightyear_room) = rooms.lightyear_room(room) {
@@ -166,27 +165,9 @@ fn grow_tail(
     }
 }
 
-fn despawn_food(
-    mut commands: Commands,
-    rooms: Res<RoomDirectory>,
-    food_rooms: Query<&RoomId, With<FoodMarker>>,
-    mut events: MessageReader<FoodCollision>,
-) {
+fn despawn_food(mut commands: Commands, mut events: MessageReader<FoodCollision>) {
     for event in events.read() {
-        if let Ok(room) = food_rooms.get(event.food) {
-            if let Some(lightyear_room) = rooms.lightyear_room(*room) {
-                remove_replicated_entity_from_room(&mut commands, lightyear_room, event.food);
-            }
-        }
-        if let Ok(mut entity_command) = commands.get_entity(event.food) {
-            // TODO: provide a way to stop replicating the entity via a command!
-            //  (so that we don't have to wait for the handle_replicate_remove system to run)
-            //  probably via a command?
-            // stop replicating the food
-            entity_command.remove::<Replicate>();
-            // despawn the food on the server side only (on the client side, we will run an animation)
-            entity_command.despawn();
-        }
+        commands.entity(event.food).try_despawn();
     }
 }
 
@@ -227,6 +208,33 @@ mod tests {
 
     fn run_fixed_update(app: &mut App) {
         app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    #[derive(Resource)]
+    struct SpawnedFood(Entity);
+
+    fn spawn_test_food(mut commands: Commands, rooms: Res<RoomDirectory>) {
+        let food = spawn_food_entity(
+            &mut commands,
+            &rooms,
+            RoomId(1),
+            Position(Vec2::new(1.0, 2.0)),
+        );
+        commands.insert_resource(SpawnedFood(food));
+    }
+
+    #[test]
+    fn spawned_food_uses_delayed_interpolation_despawn_path() {
+        let mut app = App::new();
+        app.init_resource::<RoomDirectory>();
+        app.add_systems(Update, spawn_test_food);
+
+        app.update();
+
+        let food = app.world().resource::<SpawnedFood>().0;
+        let food = app.world().entity(food);
+        assert!(food.contains::<Replicate>());
+        assert!(food.contains::<InterpolationTarget>());
     }
 
     #[test]

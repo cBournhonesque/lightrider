@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.dependencies]
-lightyear = { git = "https://github.com/cBournhonesque/lightyear.git", branch = "main", features = [
+lightyear = { path = "../lightyear/lightyear", features = [
   "input_bei",
   "frame_interpolation",
   "netcode",

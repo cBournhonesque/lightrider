@@ -101,7 +101,8 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<components::player::PlayerRank>();
         app.register_component::<components::player::PlayerStatus>();
         app.register_component::<components::food::FoodMarker>();
-        app.register_component::<components::common::Position>();
+        app.register_component::<components::common::Position>()
+            .add_interpolation_with(components::common::interpolate_position);
         app.register_component::<components::common::RoomId>();
     }
 }
