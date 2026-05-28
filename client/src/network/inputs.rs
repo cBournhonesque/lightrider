@@ -16,7 +16,7 @@ impl Plugin for NetworkInputsPlugin {
 
 fn add_player_inputs(
     mut commands: Commands,
-    client: Single<&LocalId, With<Client>>,
+    client: Query<&LocalId, With<Client>>,
     players: Query<
         Entity,
         (
@@ -28,7 +28,9 @@ fn add_player_inputs(
     >,
     actions: Query<&ActionOf<PlayerInput>, With<Action<SpawnPlayer>>>,
 ) {
-    let client_id = client.0;
+    let Ok(client_id) = client.single().map(|id| id.0) else {
+        return;
+    };
     for player in &players {
         commands
             .entity(player)
@@ -41,7 +43,7 @@ fn add_player_inputs(
 
 fn add_snake_inputs(
     mut commands: Commands,
-    client: Single<&LocalId, With<Client>>,
+    client: Query<&LocalId, With<Client>>,
     snakes: Query<
         Entity,
         (
@@ -53,7 +55,9 @@ fn add_snake_inputs(
     >,
     actions: Query<&ActionOf<SnakeInput>, With<Action<MoveSnake>>>,
 ) {
-    let client_id = client.0;
+    let Ok(client_id) = client.single().map(|id| id.0) else {
+        return;
+    };
     for snake in &snakes {
         commands
             .entity(snake)

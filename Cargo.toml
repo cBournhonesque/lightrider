@@ -32,7 +32,15 @@ bevy-inspector-egui = "0.36"
 # Enable a small amount of optimization in debug mode
 [profile.dev]
 opt-level = 1
+incremental = true
+debug = "line-tables-only"
 
-# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code.
+# Dependency debuginfo is expensive for Bevy/Lightyear and usually not worth the disk.
 [profile.dev.package."*"]
 opt-level = 3
+debug = 0
+
+# Build scripts and proc macros do not need debuginfo for normal iteration.
+[profile.dev.build-override]
+debug = 0

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lightrider</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #05070b;
+        overflow: hidden;
+      }
+
+      canvas {
+        display: block;
+        height: 100vh !important;
+        width: 100vw !important;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      import init from "./pkg/lightrider_web.js";
+
+      init();
+    </script>
+  </body>
+</html>

@@ -415,7 +415,7 @@ fn move_replicated_entity_to_room(
 fn handle_disconnected(
     trigger: On<Add, Disconnected>,
     clients: Query<(&RemoteId, Option<&ClientRoom>), With<ClientOf>>,
-    players: Query<(Entity, &Player, &RoomId)>,
+    players: Query<(Entity, &Player)>,
     mut directory: ResMut<RoomDirectory>,
     mut commands: Commands,
 ) {
@@ -426,18 +426,10 @@ fn handle_disconnected(
         directory.unregister_human(client_room.room);
     }
 
-    let Some((player_entity, player, room)) = players
-        .iter()
-        .find(|(_, player, _)| player.id == remote_id.0)
+    let Some((player_entity, player)) = players.iter().find(|(_, player)| player.id == remote_id.0)
     else {
         return;
     };
-    if let Some(lightyear_room) = directory.lightyear_room(*room) {
-        remove_replicated_entity_from_room(&mut commands, lightyear_room, player_entity);
-        if let Some(snake_entity) = player.snake {
-            remove_replicated_entity_from_room(&mut commands, lightyear_room, snake_entity);
-        }
-    }
     if let Some(snake_entity) = player.snake {
         commands.entity(snake_entity).try_despawn();
     }

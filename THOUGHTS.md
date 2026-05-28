@@ -7,36 +7,36 @@ status: active
 
 # Lightrider Thoughts
 
-This is the durable project document for Lightrider. Keep it up to date whenever code, architecture, tooling, gameplay rules, deployment assumptions, or debugging knowledge changes.
+This is the durable project document for Lightrider. Keep it up to date whenever code, architecture, tooling, gameplay rules, deployment assumptions, debugging knowledge, or operational findings change.
 
 ## Game Design Document
 
 ### Product Goal
 
-Lightrider is a Rust, Bevy, and Lightyear clone of the online io game Powerline.io. The first milestone is a fully working online multiplayer prototype with intentionally barebones graphics. Cosmetics such as animation polish, sound, music, textures, font work, and richer colors come after the prototype proves that the gameplay and networking hold up when deployed online.
+Lightrider is a Rust, Bevy, and Lightyear clone of Powerline.io. The first milestone is a fully working online multiplayer prototype with intentionally barebones graphics. Cosmetics such as animation polish, sound, music, textures, fonts, richer colors, and original asset extraction come after gameplay and networking hold up online.
 
-The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbournhonesque/src/other/snakegame/original/powerline.io` as inspiration for behavior, tuning, UI ideas, and later asset extraction. The early prototype should prefer readable primitives over asset fidelity.
+Use `/spare/ssd/cbournhonesque/src/other/snakegame/original/powerline.io` as inspiration for behavior, tuning, UI ideas, and later assets. The prototype should prioritize readable primitives and correctness over visual fidelity.
 
 ### Core Gameplay
 
 - Players control a continuously moving light snake on an orthogonal grid-like plane.
-- A snake is represented as a head plus a tail polyline. Direction changes add turn points; the tail follows the head path and is shortened from the back to maintain length.
+- A snake is a head plus a tail polyline. Direction changes add turn points; the tail follows the head path and is shortened from the back to maintain length.
 - Players steer up, down, left, and right. A 180-degree reversal is invalid.
 - Hitting another snake, hitting yourself, or hitting the arena boundary kills the snake.
-- Food spawns in the arena as very small dots. Nearby food is magnetically pulled toward close snake heads and is absorbed at the head.
-- Eating food grows the snake and increases score.
-- Score starts at 0 and counts growth beyond the initial snake length. The starting tail length is not part of the score.
-- When a snake dies, the server drops food samples along the killed snake's trajectory.
+- Food spawns as very small dots. Nearby food is magnetically attracted toward close snake heads and is absorbed at the head.
+- Eating food grows the snake, increases score, and gives a short smooth acceleration burst.
+- Score starts at 0 and counts growth beyond the initial snake length. Starting tail length is not part of score.
+- When a snake dies, the server drops food samples along the killed snake trajectory.
 - The Powerline signature mechanic is proximity speed boost: a snake accelerates when moving close and parallel enough to another snake trail, then decelerates back toward base speed when not close.
-- The prototype should support respawning after death. The server enforces a short respawn cooldown; clients request respawn through the normal networked input action.
-- Bots should use the same movement, collision, food, and scoring rules as players.
+- The server remains authoritative for deaths, kill reasons, food pickups, score, room assignment, and respawn cooldowns.
+- Bots should use the same movement, collision, food, scoring, death, and respawn rules as players.
 
 ### Prototype Rendering
 
-- Start with Bevy primitives and gizmos: dark arena, visible boundaries, simple line tails, simple square/circle heads, simple food dots.
-- Make gameplay state legible before matching cosmetics.
+- Start with Bevy primitives and gizmos: dark arena, visible outline, simple line tails, simple heads, food dots, minimap, leaderboard, and death/stat overlays.
 - Keep rendering replaceable so later asset imports from the original Powerline source do not disturb simulation or networking logic.
-- Later cosmetic backlog: glow, sparks on proximity boost, richer death effects, richer food pickup animation, sound effects from `sounds/out.ogg`, sprites from `images/sheet.png`, logo/menu assets, minimap, leaderboard styling.
+- The normal camera should be close to the local head and grow outward with snake size. Debug mode can toggle to a very zoomed-out camera and show shortcuts with `?`.
+- Later cosmetic backlog: glow, sparks on proximity boost, richer death effects, food pickup animation, sound effects from `sounds/out.ogg`, sprites from `images/sheet.png`, logo/menu assets, minimap/leaderboard styling.
 
 ### Arena And Rules
 
@@ -46,17 +46,16 @@ The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbou
   - `INTERP_TIME = (1000 / 30) * UPDATE_EVERY_N_TICKS`
   - Default client-side arena values include `arenaWidth = 5000.0`, `arenaHeight = 1600.0`, centered at `(0.0, 0.0)`.
   - Kill reasons include left screen, killed, boundary, and suicide.
-- Current default config uses the Powerline-like `5000.0 x 1600.0` arena. `config/test.ron` uses an `800.0 x 600.0` arena for faster local testing.
-- Initial server prototype can use one arena per room. Room size, max players, bot count, and food count should come from data-driven config.
-- Keep one default config that is as close as practical to original Powerline behavior. Most values should feel similar to the original, but exact replication is not required when the original uses esoteric or ad-hoc logic.
-- Add smaller test configs, for example a much smaller arena for local collision, room, bot, and fake-client testing.
+- Current default config uses a Powerline-like `5000.0 x 1600.0` arena. `config/test.ron` uses an `800.0 x 600.0` arena for quick local testing.
+- Initial target room limit is 50 players per room, matching the intended scale of the original Powerline.io.
+- Exact original behavior is not required when the original uses ad-hoc logic, but defaults should produce a similar feel.
 
 ### Configuration
 
-- Use data-driven config for gameplay and server settings. RON is a good initial format unless implementation shows a better fit.
-- Maintain a `default` config tuned toward Powerline-like behavior.
-- Maintain at least one `test` config with a small arena and low limits for quick local iteration.
-- Config should cover arena dimensions, tick rate, spawn rules, respawn cooldowns, starting length, speed/boost tuning, food count, room capacity, bot count, fake-client defaults, render/debug camera knobs, and network/debug knobs.
+- Use typed, data-driven config loaded from RON.
+- Keep one `config/default.ron` tuned toward Powerline-like behavior.
+- Keep smaller test configs such as `config/test.ron` for local collision, room, bot, and fake-client testing.
+- Config should cover arena dimensions, tick rate, spawn rules, respawn cooldowns, starting length, speed/boost tuning, food count, room capacity, bot count, fake-client defaults, render/debug camera knobs, tail width, map outline width, network input delay, and debug tracing.
 - Game logic should consume typed config resources rather than scattering constants through systems.
 
 ### Multiplayer And Rooms
@@ -64,291 +63,298 @@ The game should stay as close as practical to Powerline.io. Use `/spare/ssd/cbou
 - The game will be served online through Edgegap.
 - Users can join a random room or create a new room.
 - A single server process should support multiple game rooms through the room system.
-- The authoritative server owns room simulation, player spawning, bot spawning, food spawning, collision, scoring, and death.
+- The authoritative server owns room simulation, player spawning, bot spawning, food spawning, collision, scoring, death, and respawn.
 - Clients render the world and send input. They do not decide kills, food pickups, or score.
-- Room assignment can start as a simple service-level route or CLI/config field, then become production matchmaking later.
-- Initial target room limit: 50 players per room, matching the intended scale of the original Powerline.io.
 
 ### Networking Model
 
 - Use Bevy `0.18` and Lightyear from the `main` branch of `https://github.com/cBournhonesque/lightyear.git`. Cargo may still report Lightyear's crate version as `0.26.4`; the source of truth is the git dependency and commit in `Cargo.lock`.
-- Use WebTransport as the only supported transport. UDP/WebSocket code paths were removed during Phase 2 to keep deployment and debugging focused.
+- The deployment plan has pivoted back to WebTransport so browser WASM clients can connect directly to Edgegap-hosted game servers.
+- Bevygap is the planned matchmaking/control path: clients talk to `bevygap_matchmaker_httpd` over WebSocket, receive a Lightyear `ConnectToken` plus WebTransport certificate digest, and then connect to the game server over WebTransport.
+- The direct Lightrider client/server path uses WebTransport and remains the default local/dev mode.
+- The first Bevygap integration slice is runtime-tested behind optional Cargo features. A `client --features bevygap -- --matchmaker-url ...` run spawns an unconnected Lightyear client entity and lets `bevygap_client_plugin` request a token and attach token auth, peer address, and WebTransport IO. A `server --features bevygap -- --bevygap` run adds the server-side Bevygap/NATS plugin; direct mode does not read Edgegap or NATS env vars.
+- Bevygap local mock validation works through `just bevygap-local-smoke`: local NATS + in-process `BEVYGAP_CONTEXT_MODE=local` server context + Lightrider WebTransport server + mock `bevygap_matchmaker` + `bevygap_matchmaker_httpd` + headless Lightrider bot client. The client receives a redacted `Session Ready` response, decodes the Lightyear `ConnectToken`, connects over WebTransport, and the server and matchmaker both observe the active-connection path.
+- Production netcode identity is environment-driven. `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` must match between game server and matchmaker; `LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1` makes zero/dev defaults a startup error. `LIGHTRIDER_PRIVATE_KEY` accepts either 64 hex characters or the Bevygap-compatible comma-separated 32-byte form.
 - Client prediction is enabled only for the local player's snake.
 - Other player snakes are interpolated, not predicted.
-- The server remains authoritative and reconciles predicted local state.
-- Movement is predicted, but deaths are server-authoritative. Clients may show provisional feedback later, but the server decides kill validity, kill reason, respawn state, and score effects.
-- Inputs should be compact directional actions. Server-side simulation should consume the same input semantics as client prediction.
-- Use Lightyear replication and interpolation APIs for snake state, especially tail interpolation. The old Lightyear `replication_groups` example remains useful as interpolation reference material, but main branch no longer exposes the old `ReplicationGroup` component used by earlier Lightrider code.
-- Bots controlled by the server should use the same shared simulation code as real clients where possible, but they do not need network round trips.
-- Fake clients should be able to connect to the server and send random or scripted inputs using the same protocol as real clients. Use them for latency/load tests and online deployment validation.
-- Add artificial latency, jitter, loss, and client count controls for local and deployed tests.
+- Movement is predicted, but deaths are server-authoritative.
+- Visual correction is intentionally not configured right now; frame interpolation is used.
+- Bots controlled by the server should reuse shared steering/simulation where possible.
+- Fake clients are the normal client binary with `--headless --mode bot`; they connect through the real protocol and send real movement/respawn actions.
+
+## General Agent Notes
 
 ### Architecture Goals
 
 - Keep a Cargo workspace.
-- Target top-level organization is four main folders/crates:
+- Target top-level organization is four main areas:
   - `client`: client-specific app logic, input sources, connection flow, local prediction setup, client modes, and headless/fake-client behavior.
-  - `server`: server-specific authoritative simulation orchestration, room lifecycle, Edgegap-facing runtime config, production logging, and server-owned bots.
-  - `render`: rendering-specific logic, camera, UI, debug views, visual interpolation display, and cosmetic systems.
-  - `shared`: network protocol, deterministic movement, collision geometry, room-safe components, config types, simulation rules, and bot decision helpers reusable by server bots and fake clients.
-- Client code should be able to run without rendering so a headless client can act autonomously or as a fake client.
-- Bot logic likely belongs in `shared` when it can be reused by both server-owned bots and fake clients. Server-specific bot orchestration stays in `server`.
-- Server crate owns authoritative simulation orchestration, room lifecycle, bot orchestration, fake-client harness entry points if kept in-process, Edgegap-facing config, and production logging.
-- Do not use Avian. There is little physics; prefer explicit geometry for ray/segment collision, proximity boost detection, arena boundary tests, and food overlap.
-- Do not reintroduce `bevy_xpbd_2d`/Avian-style physics for core gameplay. Collision, friction/proximity, and food overlap are now explicit geometry and should stay small and testable.
+  - `server`: authoritative simulation orchestration, room lifecycle, bot orchestration, Edgegap-facing runtime config, and production logging.
+  - `render`: rendering-specific logic, camera, UI, debug views, visual interpolation display, and cosmetic systems. This is still folded into the client crate today.
+  - `shared`: network protocol, deterministic movement, collision geometry, room-safe components, config types, simulation rules, and reusable bot decision helpers.
+- Do not use Avian or another physics engine for core gameplay. Collision, proximity, friction/boost, food overlap, and boundaries should remain explicit geometry.
 - Rust modules with nesting should use `a.rs` and `a/b.rs`, not `mod.rs`, when adding or reorganizing modules.
 - Add focused unit tests for complicated logic: tail shortening, tail interpolation, turn validation, collision cases, proximity boost, food spawn constraints, room assignment, and bot/fake-client input generation.
 
-### Observability And Agent-Friendly Tooling
+### Current Repo Snapshot
 
-- Add CLI flags for server mode, room count, bots per room, fake clients, listen address, tick rate, artificial network conditions, deterministic RNG seed, and WebTransport certificate digest handling.
-- Add structured tracing spans for room id, player id, snake entity, tick, input sequence, prediction corrections, collisions, food pickups, and despawns.
-- Add a debug snapshot command or endpoint that dumps room state as JSON: players, snakes, tail points, score, food count, bot state, tick, network stats.
-- Add deterministic replay fixtures for simulation bugs: seed plus input stream should reproduce movement/collision outcomes.
-- Investigate and use `lightyear_debug` for network debugging. It can store data in JSON form for later analysis with DuckDB, which fits the goal of agent-inspectable networking and prediction diagnostics.
-- AI agents should be able to autonomously run a headless server plus multiple headless bot clients, capture structured `lightyear_debug` JSONL logs, load them into DuckDB, and identify simulation/replication bugs without requiring manual visual inspection.
-- Runtime correctness probes should sample snake heads at `FixedUpdate` after movement, `FixedLast`, `PostUpdate` after frame interpolation, and `Last`, including tick, role, room, player id, prediction/interpolation/control markers, speed, acceleration, and tail length fields.
-- Keep protocol and simulation docs close to code and link them from this file.
+- Workspace members: `client`, `server`, `shared`.
+- Dependency state: Bevy `0.18.1`, Lightyear git `main` at the commit locked in `Cargo.lock`, `bevy_enhanced_input = "0.24.4"`, `bevy_turborand = "0.13"`, `bevy-inspector-egui = "0.36"`, and no direct physics-engine dependency.
+- Lightrider transport features currently enable Lightyear WebTransport, self-signed WebTransport certificates, and the dangerous native no-certificate-validation test path.
+- Data-driven config lives in `shared/src/config.rs` with RON files at `config/default.ron` and `config/test.ron`.
+- `MovementConfig::tick_duration()` is the source for the Lightyear fixed tick duration.
+- Shared movement lives in `shared/src/movement/mod.rs` and includes BEI-driven turn handling, config-driven acceleration/speed integration, food-pickup acceleration boost decay, and tail shortening.
+- Shared explicit geometry lives in `shared/src/utils/geometry.rs`, `shared/src/collision/collider.rs`, and `server/src/collision/collider.rs`.
+- Simulation-critical movement, proximity, server collision/death, and food overlap/growth run in `FixedUpdate` around `SimulationSet::Movement`.
+- `RoomId` is registered in the protocol and attached to maps, players, snakes, and food. Proximity boost, collision, food overlap, respawn, rank computation, and Lightyear visibility are room-scoped.
+- Food spawning, magnetic attraction, overlap, growth, and death drops use `GameConfig`.
+- Food uses Lightyear `Position` interpolation. Eaten food should be despawned in a way that lets Lightyear record delayed interpolated despawns.
+- `PlayerScore`, `PlayerRank`, and `PlayerStatus` replicate with the player.
+- Death flow uses server-internal `SnakeCollision` with `DeathReason` and sends a server-to-client `PlayerDeath` message.
+- Client death view follows the killer after a collision death if possible, otherwise stays static. Respawn is requested with Enter or Space after cooldown.
+- Networked inputs use Lightyear's BEI input plugin with replicated action entities. Client setup keys off Lightyear's `Controlled` marker.
+- Client/server connection setup uses Lightyear 0.26 entity components (`ClientPlugins`, `ServerPlugins`, `NetcodeClient`, `NetcodeServer`, `WebTransportClientIo`, `WebTransportServerIo`).
+- Direct native clients can pass `--cert-digest` or `--certificate-digest`; copied colon-separated server log digests are normalized before connection. Leaving it empty uses the native dangerous no-validation test path. Browser clients must receive the digest from matchmaking/bootstrap.
+- Optional Cargo feature `bevygap` gates Lightrider's path dependencies on `bevygap_client_plugin` and `bevygap_server_plugin`. The default build must not compile or require Bevygap, NATS, Edgegap credentials, or matchmaker services.
+- Optional client feature `bevygap-matchmaker-tls` forwards to `bevygap_client_plugin/matchmaker-tls` for TLS matchmaker WebSocket support.
+- Client networking now has two startup modes: direct WebTransport/manual auth, or Bevygap token mode. In token mode the client entity starts with Lightyear base components and waits for the Bevygap plugin to connect it.
+- Browser builds have a dedicated `lightrider-web` WASM entrypoint. It avoids Clap and defaults the matchmaker WebSocket to same-origin `/matchmaker/ws`, with `?matchmaker_url=` as an override.
+- Client input systems tolerate the token-mode startup window before `LocalId` is available.
+- Non-headless clients must spawn `ReplicationReceiver::default()` on the client entity, or the network connection can succeed without replicated game entities arriving.
+- Custom snake interpolation uses `ConfirmedHistory<TailPoints>`, `ConfirmedHistory<TailLength>`, and `InterpolationSystems::Interpolate`, adapted from the old prototype and the Lightyear `replication_groups` example.
+- Frame interpolation is enabled for predicted snake `TailPoints` through `FrameInterpolationPlugin<TailPoints>` and `FrameInterpolate<TailPoints>`.
+- Server-owned bots live in `server/src/bots.rs` and reuse shared bot steering from `shared/src/bot.rs`.
+- Runnable binaries are named `lightrider-server` and `lightrider-client`.
+- The root `justfile` has `server`, `client`, `client-debug`, `bot`, `bots`, `local`, `trace-local`, `trace-summary`, and Edgegap image recipes.
+- Bevygap local-smoke recipes now include `bevygap-help`, `bevygap-nats-pull`, `bevygap-nats`, `bevygap-nats-health`, `bevygap-fake-context`, `bevygap-server-local`, `bevygap-matchmaker-local`, `bevygap-matchmaker-mock-local`, `bevygap-httpd-local`, `bevygap-client-bot`, and `bevygap-local-smoke`. Use `bevygap-help` for the required order.
+- `bevygap-local-smoke` writes service logs under `logs/bevygap/<timestamp>/` and updates `logs/bevygap/latest`. It scans for cert digest publication, mock session creation, redacted session readiness, client connection attempt, server-side Lightyear connect event, server active-connection KV write, and matchmaker active-connection watcher observation.
 
-## Current Repo Snapshot
+### Observability And Debugging
 
-- Workspace members today: `client`, `server`, `shared`. Target organization still adds a separate `render` folder/crate so rendering can be excluded from headless client modes.
-- Dependency state: Bevy `0.18.1`, Lightyear from `https://github.com/cBournhonesque/lightyear.git` branch `main` at the commit locked in `Cargo.lock` (currently `64c71437`), `bevy_enhanced_input = "0.24.4"` aligned with Lightyear's `input_bei` integration, `bevy_turborand = "0.13"`, `bevy-inspector-egui = "0.36"`, and no direct physics-engine dependency. Bevy `dynamic_linking` is disabled because it broke test-binary links through `bevy_dylib` on this machine.
-- Lightyear transport features are WebTransport-only: `webtransport`, `webtransport_self_signed`, and `webtransport_dangerous_configuration`. `udp` and `websocket` features are intentionally not enabled.
-- Leafwing input usage has been removed from the active dependency tree. Keep the direct `bevy_enhanced_input` dependency aligned with the version pulled by Lightyear main's `input_bei` integration, otherwise the project gets two incompatible BEI action APIs.
-- `.cargo/config.toml` no longer forces an Apple target; Linux workspace checks/tests now run on the host target.
-- Data-driven config exists in `shared/src/config.rs` with RON files at `config/default.ron` and `config/test.ron`. It now covers movement, food, rooms, respawn, network/input delay, debug tracing, and barebones render knobs such as tail width, head size, map outline width, close-camera growth, and debug camera scale. `MovementConfig::tick_duration()` is the single source for the Lightyear fixed tick duration.
-- Shared logic has a polyline snake model in `shared/src/network/protocol/components/snake.rs`.
-- Movement logic lives in `shared/src/movement/mod.rs` and includes BEI-driven turn handling, config-driven acceleration/speed integration, food-pickup acceleration boost decay, and tail shortening.
-- Collision/proximity now uses explicit geometry in `shared/src/utils/geometry.rs`, `shared/src/collision/collider.rs`, and `server/src/collision/collider.rs`. Simulation-critical proximity, server collision/death, and food overlap/growth systems run in `FixedUpdate` around `SimulationSet::Movement`.
-- Shared `RoomId` is registered in the protocol and attached to maps, players, snakes, and food. Proximity boost, snake-vs-snake collision, food overlap, respawns, rank computation, and Lightyear room visibility are room-scoped.
-- Server boundary death now uses explicit arena geometry from `GameConfig`.
-- Server food spawning, magnetic attraction, overlap, growth, and death drops use `GameConfig` for target count, spawn interval, visual radius, absorption radius, magnet radius/speed, tail growth, and death-food spacing/limit. Food is replicated through room visibility and uses Lightyear `Position` interpolation. Eaten food should remain replicated until the server despawns it so Lightyear can record a delayed interpolated despawn at the authoritative tick.
-- `PlayerScore`, `PlayerRank`, and `PlayerStatus` replicate with the player. Food pickups update score from tail growth beyond the initial length on the server, per-room ranks are recomputed on the server, and respawns reset score/status from config.
-- Death flow now uses server-internal `SnakeCollision` with `DeathReason` and sends a server-to-client `PlayerDeath` message containing mapped player/snake entities, room id, and reason. The server remains authoritative for despawning snakes, setting player status, clearing `Player.snake`, and enforcing respawn cooldown through `RespawnReadyAt`.
-- Client death state records the local player's death view: after a collision death, the follow camera tracks the killer snake if it still exists; after suicide or boundary death, the camera stays static. Respawn is requested with Enter or Space after the configured cooldown, and the server validates the timing.
-- Client prediction now includes the shared collision/proximity plugin, so local predicted snakes can compute boost from nearby room-local trails before reconciliation.
-- Lightyear protocol registration now uses the 0.26 explicit plugin style in `shared/src/network/protocol/mod.rs`.
-- Networked inputs use Lightyear's BEI input plugin with replicated action entities. Client setup keys off Lightyear's `Controlled` marker and no longer uses a local `Owned` marker. `SpawnPlayer` is bound to Enter and Space.
-- Client/server connection setup now uses Lightyear 0.26 entity components (`ClientPlugins`, `ServerPlugins`, `NetcodeClient`, `NetcodeServer`, WebTransport IO components) rather than old `ClientPlugin<GameProtocol>` / `ServerPlugin<GameProtocol>` config objects. Both client and server derive Lightyear's tick duration from `GameConfig`.
-- Client CLI accepts `--certificate-digest <hex>` for WebTransport. Native dev builds can leave it empty because the local dev feature set enables dangerous certificate handling; browser/deployment paths should pass the digest printed by the server.
-- Client and server CLIs accept `--config <path>` to load a RON `GameConfig`; without it they use `GameConfig::default()`.
-- Non-headless client debug mode is enabled with `--debug` or the existing `--inspector` alias. In debug mode `T` toggles between normal close camera scale and the zoomed-out debug camera scale, and `?` toggles a local shortcuts overlay. The normal camera starts much closer to the head and grows outward with current tail growth up to a configured max scale.
-- Existing client rendering is very barebones and uses gizmos in `client/src/render/snake.rs`.
-- Custom snake interpolation has been restored against Lightyear 0.26 using `ConfirmedHistory<TailPoints>`, `ConfirmedHistory<TailLength>`, and `InterpolationSystems::Interpolate`. The helper is adapted from the old Lightrider prototype and the Lightyear `replication_groups` example.
-- Frame interpolation is enabled for predicted snake `TailPoints` via `FrameInterpolationPlugin<TailPoints>` and `FrameInterpolate<TailPoints>`. Visual correction is intentionally not configured.
-- Lightyear room visibility is the interest-management filter for game entities, but it is not a replacement for normal replication targets. On Lightyear main, room membership uses the `Rooms` component with ids from `RoomAllocator`; room-scoped entities still use `Replicate::to_clients(NetworkTarget::All)`, and food spawning pauses while any `ClientOf` lacks a `ReplicationSender` to avoid pending-handshake sender errors.
-- Non-headless clients must spawn `ReplicationReceiver::default()` on the client entity; otherwise WebTransport connects but replicated game entities never arrive. Add Lightyear `ClientPlugins`/`ServerPlugins` before the shared `ProtocolPlugin`, matching the upstream examples.
-- The client render baseline now draws a dark clear color, arena outline/axes, small food dots, and configurable snake head/tail gizmos so a connected or not-yet-connected window is visibly alive.
-- Server-owned bots live in `server/src/bots.rs` and reuse shared bot steering from `shared/src/bot.rs`. Bot clients are `client --headless --mode bot` and drive BEI `ActionMock`s through the same input path as real clients. Bot steering now scores arena boundaries, its own tail, and same-room snake tails as lookahead obstacles; random voluntary turns are strongly throttled so bots do not immediately draw tiny self-trapping boxes.
-- Server respawning uses safer spawn placement from `server/src/spawning.rs`, scoring candidate head/tail positions against same-room tails and arena bounds before falling back to the best deterministic candidate.
-- Runnable binaries are explicitly named `lightrider-server` and `lightrider-client`; do not rely on both crates exposing a bin named `main`.
-- A root `justfile` exists with `server`, `client`, `client-debug`, `bot`, `bots`, and `local` recipes for starting a local headless server, debug/normal clients, and headless bot clients.
-- Runtime debug tracing lives in `shared/src/debug.rs`. When `GameConfig.debug.lightyear_debug` is true and `LIGHTYEAR_DEBUG_FILE` is set, client/server `LogPlugin`s install a Lightyear-compatible JSONL layer for `lightyear_debug::*` tracing targets and enable `lightyear_debug=trace`; `json_snapshots` emits `snake_head` rows and `snake_invariant_violation` rows for DuckDB analysis.
-- `just trace-local` builds the binaries once, runs a headless WebTransport server plus multiple staggered headless bot clients, writes per-process `.ndjson` and `.log` files under `logs/debug/<timestamp>/`, and runs `tools/debug_trace_summary.sql` through DuckDB. `just trace-summary dir=...` reruns the summary on an existing trace directory.
-- Current verification after switching to Lightyear main: `cargo check --workspace -j 4` passes, `cargo test --workspace -j 4` passes with client 1 test, server 20 tests, shared 25 tests, and `just trace-local 2 6 config/test.ron 5053` produced 14,946 `snake_head` rows, zero invariant violations, and no panic/error/replication-sender markers.
+- Runtime debug tracing lives in `shared/src/debug.rs`.
+- Resource policy for this repo: use Cargo with at most two jobs (`-j 2` or `CARGO_BUILD_JOBS=2`). Avoid starting overlapping Cargo builds unless explicitly needed. Dev builds keep incremental compilation enabled for iteration speed, but reduce disk pressure by keeping only line-table debug info for local crates and no debug info for dependencies/build scripts.
+- When `GameConfig.debug.lightyear_debug` is true and `LIGHTYEAR_DEBUG_FILE` is set, client/server `LogPlugin`s install a Lightyear-compatible JSONL layer for `lightyear_debug::*` tracing targets and enable `lightyear_debug=trace`.
+- `json_snapshots` emits `snake_head` rows and `snake_invariant_violation` rows for DuckDB analysis.
+- `just trace-local` builds binaries once, runs a headless WebTransport server plus multiple staggered headless bot clients, writes `.ndjson` and `.log` files under `logs/debug/<timestamp>/`, and runs `tools/debug_trace_summary.sql`.
+- `just trace-summary dir=...` reruns the DuckDB summary on an existing trace directory.
+- `just bevygap-local-smoke` is the native token-path smoke. It uses local NATS and the server plugin's local context mode, then verifies the matchmaker WebSocket -> NATS -> mock Edgegap session -> Lightyear `ConnectToken` -> WebTransport connect -> active-session KV flow. The smoke intentionally checks redacted log text and should not emit raw connect tokens.
+- AI agents should be able to autonomously run a headless server plus multiple headless bot clients, capture structured logs, load them into DuckDB, and identify simulation/replication bugs without manual visual inspection.
+- When debugging deployed WebTransport, compare client timeout logs with server logs. The server should log `Starting WebTransport server`, the certificate digest, and Lightyear WebTransport startup before clients attempt to connect.
 
 ## Implementation Plan
 
 ### Phase 0: Baseline And Dependency Upgrade
 
-Status: complete enough to move to Phase 1.
+Status: complete.
 
-1. Recorded the current behavior and test baseline before major edits.
-2. Upgraded the workspace to Bevy `0.18.1` and Lightyear main. Cargo still shows Lightyear's package version as `0.26.4`, but the dependency is git branch `main`.
-3. Introduced typed data-driven RON config loading with `default` and `test` configs.
-4. Kept the current `client`, `server`, `shared` workspace shape; the separate `render` crate/folder remains a later structural task.
-5. Removed direct `bevy_xpbd_2d` usage and replaced spatial-query gameplay checks with explicit geometry.
-6. Restored `cargo test --workspace -j 4`.
-7. Smoke-started the headless server over UDP during the early upgrade work; current server smoke is WebTransport-only.
+1. Upgraded the workspace to Bevy `0.18.1` and Lightyear main.
+2. Introduced typed data-driven RON config loading with default and test configs.
+3. Removed direct physics-engine usage and replaced gameplay checks with explicit geometry.
+4. Restored workspace checks/tests.
 
 ### Phase 1: Deterministic Shared Simulation
 
-Status: complete enough to move to Phase 2.
+Status: complete enough to build on.
 
-1. Define shared config resources for tick rate, arena size, spawn length, speed range, boost distance, food radius, and room limits. Initial typed resources exist.
-2. Wire all movement constants to `GameConfig`. Spawn length, min/max speed, base acceleration, boost ratio, boost distance, and Lightyear fixed tick duration are wired.
-3. Move boundary collision to explicit geometry. Server-authoritative arena boundary death is implemented and tested.
-4. Initial proximity boost tuning is implemented with config-driven values. Exact original Powerline feel remains a later tuning pass after multiplayer is running.
-5. Add unit tests for boundary collision, room-scoped collision, and more proximity boost cases. Boundary, boost helper, room-scoped proximity, room-scoped snake collision, and room-scoped food overlap tests exist.
-6. Simulation-critical movement, proximity, server collision/death, and food overlap/growth run on fixed tick schedules.
-7. Split rendering state from authoritative simulation state where useful. The larger render crate/folder split remains future work.
+1. Movement, speed, boost, spawn length, arena, food, room, and Lightyear fixed tick settings are config-driven.
+2. Boundary collision, room-scoped snake collision, proximity boost, and food overlap are explicit geometry.
+3. Simulation-critical systems run on fixed tick schedules.
+4. Focused tests exist for boundary, boost helpers, room-scoped proximity, room-scoped snake collision, and room-scoped food overlap.
 
 ### Phase 2: Lightyear Protocol And Prediction
 
-Status: complete enough to move to Phase 3/4 validation.
+Status: complete enough for prototype validation.
 
-1. Protocol registration has been rebuilt against the upgraded Lightyear API.
-2. Runtime replication shape now covers player identity, snake state, tail points, food, room id, score, player status, and death messages.
-3. Score and room metadata replication are in place through `PlayerScore`, `PlayerStatus`, and `RoomId`.
-4. WebTransport is the only supported transport. UDP/WebSocket code paths and Lightyear features were removed.
-5. Predict only the local player's movement. Server snake bundles use `PredictionTarget::Single(owner)` and `InterpolationTarget::AllExceptSingle(owner)`.
-6. Keep deaths, kill reasons, food pickups, scoring, and respawn state server-authoritative. `SnakeCollision` is server-internal; clients receive `PlayerDeath`.
-7. Remote snake visual interpolation is restored with a custom `ConfirmedHistory` system using the tail path, and fixed-tick frame interpolation is enabled for predicted snake `TailPoints`.
-8. Visual correction is intentionally not enabled. Connected WebTransport validation now exists through the headless bot-client smoke; `lightyear_debug` capture remains an observability task.
+1. Protocol registration is rebuilt against the upgraded Lightyear API.
+2. Runtime replication covers player identity, snake state, tail points, food, room id, score, status, rank, and death messages.
+3. WebTransport is now the active direct client/server transport; the online/browser path will add Bevygap token matchmaking on top.
+4. Only the local player's snake is predicted. Remote snakes are interpolated.
+5. Deaths, kill reasons, food pickups, scoring, and respawn state stay server-authoritative.
+6. Remote snake interpolation and predicted-tail frame interpolation are in place.
 
 ### Phase 3: Authoritative Server Rooms
 
-Status: complete enough to move to deployable prototype work.
+Status: complete enough for deployable prototype work.
 
-1. Room entities/resources exist in `server/src/rooms.rs`, and clients can auto-join, create a new room, or request a numeric room id through `RoomJoinRequest`.
-2. Room config is data-driven through `GameConfig`: max rooms, max players per room, arena size, food target, and bot target counts are all loaded from RON.
-3. Replication, collision, food, proximity, and ranking are room-scoped. Game entities rely on Lightyear room visibility, not global `NetworkTarget::All` replication.
-4. Respawn flow preserves the player's current room and remains server-authoritative. Death state is tracked through replicated `PlayerStatus`.
-5. Minimal leaderboard/rank state exists as replicated `PlayerRank`, computed per room from `PlayerScore`.
+1. Room entities/resources exist in `server/src/rooms.rs`.
+2. Clients can auto-join, create a new room, or request a numeric room id through `RoomJoinRequest`.
+3. Room config covers max rooms, max players per room, arena size, food target, and bot target counts.
+4. Replication, collision, food, proximity, respawn, and ranking are room-scoped.
+5. Minimal leaderboard/rank state exists as replicated `PlayerRank`.
 
 ### Phase 4: Bots And Fake Clients
 
 Status: complete enough for local load/latency smoke work.
 
-1. Server-owned bots choose legal turns with shared deterministic steering and use the same movement, collision, food, score, death, and respawn systems as players. They avoid walls, their own tail, and same-room snake trails using conservative lookahead, and respawn after the configured bot cooldown.
-2. Fake clients are implemented as the normal client binary with `--headless --mode bot`; they connect over WebTransport and send BEI movement/respawn actions through the real protocol. They use the same shared obstacle-aware steering when replicated tails are available.
-3. Local test modes are available through `just bot`, `just bots`, and `just local`. Bot ids are deterministic CLI values; server bot ids start at `PeerId::Netcode(10000)`.
-4. Initial operational signals are connection logs, room assignment logs, replicated score/rank/status, and smoke-test log scanning. Detailed bytes/correction metrics remain observability work.
+1. Server-owned bots choose legal turns with shared deterministic steering and use normal simulation systems.
+2. Fake clients run as `lightrider-client --headless --mode bot` and send real network inputs.
+3. Local test modes are available through `just bot`, `just bots`, and `just local`.
+4. Initial operational signals are connection logs, room assignment logs, replicated score/rank/status, and smoke-test log scanning.
 
 ### Phase 5: Deployable Prototype
 
-1. Add container/build scripts for the headless server and web/native client path selected for first deployment.
-2. Add Edgegap configuration and runtime env handling.
-3. Run local soak tests with fake clients before deploying.
-4. Deploy to Edgegap and test random room join, created room join, latency behavior, prediction quality, and server resource usage.
+Status: in progress.
 
-### Phase 6: Cosmetics And Original Asset Parity
+1. The game-server image is `Dockerfile.server`. It builds `lightrider-server --features bevygap`, defaults to `--bevygap`, and exposes `7777/udp` for WebTransport/QUIC.
+2. The matchmaker/control image is `Dockerfile.matchmaker`. It bundles NATS, `bevygap_matchmaker`, `bevygap_matchmaker_httpd`, nginx, and the compiled `lightrider-web` WASM files.
+3. Edgegap registry credentials and API settings are stored locally in ignored `secrets/edgegap.env`.
+4. The server image tag shape is `registry.edgegap.com/lightyear-6qgcf4w4mrq7/lightrider-server:<tag>`.
+5. The matchmaker image tag shape is `registry.edgegap.com/lightyear-6qgcf4w4mrq7/lightrider-matchmaker:<tag>`.
+6. Current deployment direction: run the matchmaker/control image on a VPS or equivalent public host, and run the game-server image on Edgegap.
 
-1. Import and verify original assets only after gameplay/networking are stable.
-2. Add visual polish incrementally: glow, boost sparks, food animation, death animation, minimap, leaderboard, menus, fonts, and sound.
-3. Keep each cosmetic feature optional or isolated from simulation logic.
+### Edgegap And Web Client Hosting Plan
 
-## General Notes For AI Agents
+Goal: publish a WebTransport Edgegap server image and a browser WASM client. The page starts the Bevy client, talks to Bevygap matchmaking over WebSocket, receives a Lightyear `ConnectToken` and certificate digest, then connects to the Edgegap game server over WebTransport.
 
-- Read this file first before changing code.
-- After every meaningful change, update the changelog and any stale design/plan notes here.
-- Prefer `rg` and `rg --files` for code search.
-- Use the original Powerline source as behavioral reference, not as code to copy directly.
-- Keep code clean and maintainable over matching old JavaScript structure.
-- Preserve user changes in the worktree. Do not revert unrelated dirty files.
-- For Rust work, run focused tests first, then broader `cargo test` when the change touches shared behavior.
-- Limit cargo jobs on this machine if builds are heavy.
-- When changing networking behavior, add enough tracing for another agent to inspect what happened from logs.
-- When changing simulation behavior, add unit tests in `shared` where possible.
-- Avoid introducing physics engines. Geometry for this game should remain small, explicit, and testable.
-- Keep bots and fake clients separate concepts: bots are server-owned simulated players; fake clients are network clients used for load and latency testing.
-- Keep client prediction scoped to the owner. Do not predict other clients.
-- Keep server authority for kills, food pickups, score, and room lifecycle.
+Reference docs for this plan:
 
-## Open Questions
+- Edgegap deployments: `https://docs.edgegap.com/docs/deployment/automated-deployment`
+- Edgegap application versions: `https://docs.edgegap.com/learn/advanced-features/application-and-versions`
+- Edgegap container registry: `https://docs.edgegap.com/docs/edgegap-container-registry`
+- MDN WebTransport certificate hashes: `https://developer.mozilla.org/docs/Web/API/WebTransport/WebTransport`
 
-- Deployment packaging is still open. Once a prototype exists, choose the easiest working path. Embedding client/static assets in the server binary is acceptable if it simplifies deployment.
-- Exact default config values still need to be derived from the original Powerline behavior and adjusted by feel.
-- Decide whether `render` should be a separate workspace crate immediately or first a folder/module split inside the client while the upgrade is in flight.
+1. Server container:
+   - Build `lightrider-server --release --features bevygap` in a multi-stage container.
+   - Runtime image should contain only the server binary, config, and entrypoint.
+   - Entrypoint should run `lightrider-server --headless --bevygap --port ${PORT:-7777} --config ${LIGHTRIDER_CONFIG:-/app/config/default.ron}` by default.
+   - Publish one Edgegap `gameport` mapping for WebTransport. The internal port can remain `7777`, but the Edgegap app version protocol must match the WebTransport-compatible deployment setup rather than raw UDP.
+   - Required production env includes `LIGHTRIDER_PROTOCOL_ID`, `LIGHTRIDER_PRIVATE_KEY`, `LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1`, `NATS_HOST`, `NATS_USER`, `NATS_PASSWORD`, Edgegap/Arbitrium context env, and optional NATS TLS trust env.
+   - Use Edgegap injected variables such as `ARBITRIUM_REQUEST_ID`, `ARBITRIUM_PUBLIC_IP`, `ARBITRIUM_PORTS_MAPPING`, and port-specific variables for diagnostics.
+
+2. Registry and image publishing:
+   - Keep Edgegap and registry credentials in ignored local/CI secrets.
+   - Local image publishing uses `just edgegap-build`, `just edgegap-push`, and `just edgegap-build-push`.
+   - Matchmaker/control publishing uses `just matchmaker-build`, `just matchmaker-push`, and `just matchmaker-build-push`.
+   - `just prod-images-build` builds both production images locally; `just prod-images-push` pushes both.
+   - The build context is generated under ignored `.edgegap-build/` because Lightrider currently depends on sibling `../lightyear` and optional sibling `../bevygap`.
+   - Prefer immutable tags for future CI. The mutable `dev` tag is convenient but can confuse deployment diagnosis.
+   - Before testing a deployment, verify the app version's `docker_image` and `docker_tag` match the intended Lightrider image.
+
+3. Web client:
+   - Current browser entrypoint is `lightrider-web`.
+   - Browser entrypoint should read player name, room join mode, server host/port, and bootstrap data from URL params or fetched JSON.
+   - The matchmaker/control image currently hosts static client files through nginx on `WEB_PORT` (default `8080`) and proxies `/matchmaker/*` to `bevygap_matchmaker_httpd`.
+   - Raw UDP will not work in browser WASM; WebTransport is the chosen browser transport for this plan.
+
+4. Matchmaking/control service:
+   - Do not call Edgegap APIs directly from the browser. The Edgegap token must stay server-side.
+   - Use `/spare/ssd/cbournhonesque/src/other/bevygap` as the starting point.
+   - All Bevygap/Edgegap integration in Lightrider must be behind an optional Cargo feature, initially named `bevygap`. The default build must continue to support direct local WebTransport without pulling in Bevygap, NATS, Edgegap API, or extra service dependencies.
+   - Relevant Bevygap utilities:
+     - `bevygap_matchmaker_httpd`: public HTTP/WebSocket frontend; clients connect to `/matchmaker/ws`.
+     - `bevygap_matchmaker`: private NATS service that creates Edgegap sessions, waits for readiness, generates Lightyear `ConnectToken`s, and schedules deletion.
+     - `bevygap_shared`: shared `RequestSession`, `SessionRequestFeedback`, NATS bucket/stream setup, and protocol structs.
+     - `bevy_nfws`: Bevy WebSocket client wrapper.
+     - `bevygap_client_plugin`: reference client state machine for matchmaking and token-based Lightyear connect.
+     - `bevygap_server_plugin`: reference server-side Edgegap context/NATS integration and active connection tracking.
+     - `bevygap_webhook_sink`: optional Edgegap webhook receiver.
+     - `edgegap_async`: generated Edgegap API client used by the matchmaker.
+   - Preferred flow:
+     1. Game client connects to `bevygap_matchmaker_httpd` over WebSocket.
+     2. Client sends `RequestSession { game, version, client_ip }`.
+     3. HTTPD publishes a NATS request to `bevygap_matchmaker`.
+     4. Matchmaker creates an Edgegap session, waits until ready, reads public IP/external port, assigns a Lightyear client id, builds a `ConnectToken`, stores session/client mappings in NATS KV, and streams feedback.
+     5. Client receives `SessionReady`, decodes token, configures the Lightyear connection, and connects to the game server.
+     6. Game server reports active connection state through NATS.
+     7. Matchmaker deletes sessions after disconnect or after unclaimed-session timeout.
+   - NATS role in current Bevygap:
+     - NATS core request/reply links `bevygap_matchmaker_httpd` to `bevygap_matchmaker`.
+     - NATS JetStream KV stores client-id to Edgegap-session mappings, active connections, and WebTransport certificate digests.
+     - Edgegap-hosted game servers must reach the same public NATS service so they can publish their context/digest and active connection state.
+     - In the current packaging plan, this NATS server is bundled into the matchmaker/control image for the simplest first deployment; it can be split into managed NATS or a separate VPS service later.
+   - Required env vars are `NATS_HOST`, `NATS_USER`, `NATS_PASSWORD`, and optionally `NATS_CA` or `NATS_CA_CONTENTS` for TLS trust.
+   - Recommended env var `BEVYGAP_NATS_NAMESPACE` must match between matchmaker/control services and Edgegap-hosted game servers for a given app/version.
+   - Bevygap priority work:
+     1. P0 complete: server readiness publication. The server plugin must publish context and WebTransport certificate digest only after NATS is connected, Edgegap context is loaded, the certificate digest is extracted, and the NATS sender exists. This avoids the previous one-shot `ContextLoaded` race.
+     2. P0 complete baseline: production NATS setup hardening. NATS insecure mode is now an explicit truthy flag, and production mode can reject insecure NATS and default development credentials. Real deployment still needs actual TLS certificates, DNS/SAN choices, and firewall rules.
+     3. P1 baseline complete: automate Edgegap app/version creation and env updates so the server image, app version, port protocol, NATS env vars, and netcode identity are less manual.
+        - Current shape: `tools/edgegap_app_version.sh` plus `just` wrappers. The operator supplies image tag, Edgegap app/version, public NATS endpoint, and secret env overlay; the script creates/updates the app version and verifies that Edgegap now points at the exact server image/tag, UDP/7777 WebTransport game port, session config, and required env names.
+        - Inputs should be split between checked-in defaults and ignored secrets. Checked-in config can define app name, internal port, protocol, config path, and safe env defaults. Ignored env files provide `EDGEGAP_API_KEY`, registry project, `NATS_HOST`, `NATS_USER`, `NATS_PASSWORD`, `LIGHTRIDER_PROTOCOL_ID`, `LIGHTRIDER_PRIVATE_KEY`, and optional NATS CA material.
+        - Tool modes include `desired`, `show`, `diff`, `sync`, and `verify`. `diff` redacts secret values but shows missing/changed env keys, image repository/tag, port protocol, session config, and runtime env assumptions.
+        - Output writes a redacted manifest under `.edgegap-build/edgegap-app-version.json` with app, version, image, tag, game port, protocol, env key list, and desired-payload hash so agents can compare deployments without printing secrets.
+        - Current recipes: `edgegap-app-show`, `edgegap-app-desired`, `edgegap-app-diff`, `edgegap-app-sync`, and `edgegap-app-verify`. `edgegap-real-smoke` remains pending until public NATS is available.
+     4. P1 complete: key certificate digests by deployment/request id first, endpoint `ip:port` second, and legacy public-IP keys last. This handles same-IP different-port deployments while preserving compatibility with older local data.
+     5. P1 complete: add a cleaner local/mock mode for `bevygap_server_plugin`. `BEVYGAP_CONTEXT_MODE=local` synthesizes Arbitrium context from env/defaults instead of calling `ARBITRIUM_CONTEXT_URL`.
+     6. P1 complete: NATS namespacing and session TTL polish. `BEVYGAP_NATS_NAMESPACE` now scopes Bevygap request subjects, gameserver announcements, delete-session streams, and JetStream KV buckets. Local recipes default to `lightrider_dev`; Edgegap app-version automation defaults to `<app>_<version>`. TTL envs exist for session mappings, unclaimed sessions, active connections, and certificate digests.
+     7. P1 complete: recoverable async/runtime errors in the main Bevygap path now log or stream errors instead of panicking. The server plugin retries NATS connect/watch setup, NATS event sends handle closed channels, malformed KV values are rejected cleanly, and matchmaker/HTTPD request handling avoids request-path `unwrap`/`expect` panics.
+     8. P1 complete: generated Edgegap client hygiene improved. `utils/gen-edgegap-client.sh` uses a pinned OpenAPI generator image by default, supports Podman or Docker, stores the downloaded spec under `target/`, applies only a small Cargo metadata post-process, and documents that generated source files should not be hand-edited.
+     9. P1 pending: run the real Edgegap-session smoke once the public NATS/control host is reachable and the app version has production env vars.
+     10. P2 pending: extend `bevygap-local-smoke` with DuckDB movement assertions and add production browser bootstrap/player-name UI polish.
+   - Implementation slices:
+     1. Complete: add optional path dependencies under feature `bevygap`: client gates `bevygap_client_plugin`; server gates `bevygap_server_plugin`; shared code remains transport-only.
+     2. Complete: add client CLI mode `--matchmaker-url <ws://...>` only when `bevygap` is enabled. Direct `--server-addr/--server-port` remains the default and stays available for local tests.
+     3. Complete: refactor client network startup so it can spawn an unconnected Lightyear client entity, then either connect directly with manual auth or let Bevygap insert `NetcodeClient(Authentication::Token)`, `PeerAddr`, and `WebTransportClientIo`.
+     4. Complete: add server CLI mode `--bevygap` only behind the feature. In direct mode, do not read Edgegap/NATS env vars. In Bevygap mode, add `BevygapServerPlugin` alongside the server WebTransport setup so the cert digest can be published.
+     5. Complete: move `PROTOCOL_ID` and private key out of source constants for production. Direct dev can keep zero defaults, but Bevygap matchmaker and game server read the same nonzero values from env.
+     6. Complete: extend `justfile` with feature-gated recipes. Local direct WebTransport remains unchanged; Bevygap recipes run NATS, `bevygap_matchmaker_httpd`, `bevygap_matchmaker`, and Lightrider with `--features bevygap`; the old fake context helper is retained but no longer needed by the default smoke.
+     7. Complete: update Docker packaging/context for Bevygap. `edgegap-context` includes sibling `../bevygap`; `Dockerfile.server` builds the Bevygap-enabled game server; `Dockerfile.matchmaker` builds the matchmaker/control image with NATS and WASM assets.
+     8. Partial: add a headless integration smoke that requests a token from matchmaker HTTPD and starts a bot client through the token path. `just bevygap-local-smoke` verifies the connect-token path through logs; DuckDB movement-row checks remain to be added.
+     9. Decide whether to keep NATS long term. If replacing it, preserve the same responsibilities: request/reply between HTTPD and matchmaker, session/client mappings with TTL/watch semantics, cert digest storage, active connection tracking, and cleanup triggers.
+   - Missing work:
+     - Run a token-path smoke against real Edgegap session creation instead of the local mock session mode.
+     - Build and run the new production images in containers; source checks, Docker dry-runs, context generation, and local native smoke pass, but full image builds were not run yet to avoid a large disk/CPU spike.
+     - Extend `bevygap-local-smoke` to emit Lightyear debug JSONL and verify connection plus movement rows in DuckDB.
+     - Browser UI still needs player-name/room controls; the current WASM entrypoint uses defaults and query-string matchmaker override.
+     - Stand up a public production NATS/control host with TLS, strong credentials, persistent storage, and restricted monitoring access.
+   - Remaining server-side validation gap:
+     - Real Edgegap active-connection validation still requires a public NATS/control host. The local mock flow now validates the server active-connection KV write and the matchmaker watcher, but it cannot prove Edgegap's real session cleanup until Edgegap-hosted game servers can reach NATS.
+   - Historical runtime boundary fixes:
+     - Bevygap native runtime boundaries needed fixes for this repo: the vendored Tokio task helper must not call `Runtime::block_on` when Bevy is already running inside a Tokio runtime, and native `bevy_nfws` WebSocket connections need their own Tokio runtime thread instead of Bevy's `IoTaskPool`.
+
+## Known Bugs
+
+- Low priority: client logs can emit `client::render::snake: DIAGONAL`. This should be investigated later; current gameplay is not blocked.
+- High priority QOL: camera can be slightly jittery, especially when turning. Consider smoothing camera movement and confirm it follows the frame-interpolated visual position where appropriate.
+- Historical deployment blocker: Edgegap deployment `60c89b835fed` started the correct raw UDP prototype server, but external native clients timed out and the server did not log incoming datagrams. The active plan has moved to WebTransport plus Bevygap.
 
 ## Update / Changelog
 
-### 2026-05-26
-
-- Tightened normal camera behavior: `normal_camera_scale` is now close to the head by default, `debug_camera_scale` matches the previous far normal view, and the normal camera grows with current tail growth using `normal_camera_growth_per_tail_length` up to `normal_camera_max_scale`.
-- Replaced the short-term food render smoothing workaround with the long-term interpolation/despawn path. `Position` is registered with Lightyear interpolation again, food spawns with `InterpolationTarget`, and eaten food no longer removes `Replicate`/`Rooms` before despawn; this lets Lightyear register `DelayedInterpolatedDespawn` from the replicated despawn tick instead of forcing client-side visual state.
-- Added a server unit test guard that spawned food keeps both `Replicate` and `InterpolationTarget`, because that combination is what routes client despawns through Lightyear's delayed interpolated despawn handling.
-- Made food smaller and added server-authoritative magnetic attraction. Food now has separate `visual_radius`, absorption `radius`, `magnet_radius`, and `magnet_speed` config fields; the server moves nearby food toward the closest same-room snake head before pickup checks, and Lightyear interpolation handles rendered food motion.
-- Changed score semantics so initial tail length is worth 0 points. Respawns and initial spawns reset `PlayerScore` to default; food pickups use `PlayerScore::from_tail_length(total_tail_length, starting_tail_length)`.
-- Added death food drops. Before despawning a killed snake, the server samples positions along its `TailPoints` using `death_food_spacing` and `death_food_max` and spawns room-scoped replicated food at those positions.
-- Verification for close-camera/magnetic-food/score/death-food changes: `cargo fmt --all`, `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 4`, and `CARGO_INCREMENTAL=0 just trace-local 1 4 config/test.ron 5064` pass/complete. The trace at `logs/debug/20260526-203810` showed zero `snake_invariant_violation` and zero `server_late_input_mismatch` rows, no panic/error markers, and several server food pickup logs.
-- Verification for the restored delayed-despawn food interpolation path: `cargo fmt --all`, `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 4`, `CARGO_INCREMENTAL=0 just trace-local 1 4 config/test.ron 5066`, and `CARGO_INCREMENTAL=0 just trace-local 4 20 config/test.ron 5067` pass/complete. The longer trace at `logs/debug/20260526-211336` included food pickup/despawn events and showed no panic/error/despawn/update-confirmed-history markers and zero `snake_invariant_violation` rows.
-- Previous rendered-client panic investigation showed the local container/session cannot present a Bevy window reliably: Xvfb fails Vulkan presentation due missing DRI3, the existing X display segfaults before connection, and `WGPU_BACKEND=gl` reports no GPU. Use headless traces here and validate rendered behavior in a working graphics session.
-- Rendered local client launch uses the normal Bevy/winit X11 path on the MATE desktop setup. If a shell has a stale forwarded display such as `DISPLAY=localhost:11.0`, run the rendered client with the local monitor display instead, for example `DISPLAY=:0 just client`. The temporary Wayland-preference wrapper was removed because this environment does not use Wayland.
-- Added data-driven render knobs to `GameConfig`: snake tail width, head size, map outline width, normal camera scale/growth/max, and debug camera scale. The default/test configs now use a narrower `tail_width = 3.0` and draw a configurable map outline.
-- Added local client debug mode through `--debug` plus the existing `--inspector` alias. Debug clients spawn local-only shortcuts: `T` toggles between the normal close camera and zoomed-out debug camera, while `?` toggles an on-screen shortcut help panel. Added `just client-debug` as the convenient launch recipe.
-- Food pickups now add a short acceleration burst through a replicated/predicted `FoodBoost` component instead of directly changing speed. `shared::movement` layers food boost over either the current proximity acceleration or the base deceleration and then decays it each fixed tick, so snakes keep momentum briefly and then settle back toward the configured minimum speed through the existing negative base acceleration.
-- Verification for render/debug-camera/food-boost changes: `cargo fmt --all`, `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 4`, `target/debug/lightrider-client --help`, `just --list`, and `CARGO_INCREMENTAL=0 just trace-local 1 4 config/test.ron 5063` pass/complete. DuckDB showed zero `snake_invariant_violation` and zero `server_late_input_mismatch` rows for `logs/debug/20260526-201421`, and the logs had no panic/error markers.
-- Fixed a Lightyear-main runtime regression where authoritative server snakes were not moving. Main now adds replication/interpolation marker components to source entities, so the old shared `Simulated` filter excluded server-owned snakes. Added a local `SimulationAuthority` marker to server snake sources and updated the simulation filter to include it while still excluding remote interpolated client copies.
-- Added regression tests for this marker behavior: authoritative replicated/interpolated snakes move, remote interpolated copies do not, and replicated authoritative snakes can move into and ingest food.
-- Added data-driven client input-delay settings under `network.input_delay` in the RON configs. The current default is minimum input delay 0 ticks, maximum delay before prediction 3 ticks, maximum prediction 7 ticks. At the current 30 Hz simulation rate that means no forced baseline input delay, up to about 100 ms of adaptive input delay before prediction, and up to about 233 ms of prediction. Also made input packet redundancy data-driven through `network.input_packet_redundancy_ticks`; the current default is 3 ticks so the initial input packet does not include already-simulated ticks in local smoke tests.
-- Camera follow now runs after `FrameInterpolationSystems::Interpolate`, so the follow target uses the same frame-interpolated `TailPoints` that snake rendering sees.
-- Added a barebones HUD render module. It displays a top-right leaderboard capped at 10 rows by combining the top 5 room players with up to 5 rows around the local player's rank, and a bottom-right minimap showing the local player and current room leader positions.
-- Added player names and name labels. Human clients now send a sanitized name update after connecting, defaulting to `Player <client_id>` when no `--name` is provided; bot-mode clients default to `Bot Client <client_id>`. Server-created bots keep their `Bot N` names. The client renders `Text2d` name labels next to each alive snake head after frame interpolation, and the leaderboard uses the replicated `Player.name`.
-- Added replicated per-life `PlayerStats` for average speed, time alive, kills, time as leader, and food eaten. The server updates stats authoritatively, increments killer kills on collision deaths, increments food eaten on food pickup, and resets life stats on respawn.
-- Expanded `PlayerDeath` with killed/killer names plus a death-stat snapshot. The local death overlay now displays `Killed by X` for deaths caused by another player and shows score, average speed, time alive, kills, time as leader, food eaten, and respawn countdown.
-- Added data-driven bot imperfection through `bots.mistake_chance_per_decision_percent` and `fake_clients.mistake_chance_per_decision_percent`. Server bots and bot-mode clients still avoid imminent collisions most of the time, but can occasionally make a bad turn so long-running rooms are not perfectly stable.
-- Expanded `tools/debug_trace_summary.sql` with `snake_movement_by_entity` and `stationary_server_snakes` sections so frozen authoritative simulation is visible in DuckDB summaries instead of only counting `snake_head` rows.
-- Verification for name/stat/death-HUD changes: `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 4`, and `CARGO_INCREMENTAL=0 just trace-local 1 5 config/test.ron 5061` pass/complete. The trace emitted moving server bot/player rows, zero `stationary_server_snakes`, zero invariant violations, and zero `server_late_input_mismatch` rows.
-- Verification for camera/HUD/bot-risk changes: `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test -p shared --lib bot::tests -j 4`, `CARGO_INCREMENTAL=0 cargo test -p client --lib render::hud::tests -j 4`, `CARGO_INCREMENTAL=0 cargo test -p shared --lib config::tests -j 4`, and `CARGO_INCREMENTAL=0 just trace-local 1 5 config/test.ron 5060` pass/complete. The trace emitted moving server bot/player rows, zero `stationary_server_snakes`, zero invariant violations, and zero `server_late_input_mismatch` rows.
-- Verification: `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test -p shared --lib config::tests::default_config_file_matches_expected_powerline_shape -j 1`, and `CARGO_INCREMENTAL=0 just trace-local 1 3 config/test.ron 5058` pass/complete. The trace emitted moving server bot/player rows, zero `stationary_server_snakes`, zero invariant violations, and zero `server_late_input_mismatch` rows. Note: the local filesystem was full during testing; removing generated Cargo incremental artifacts freed enough space to continue.
-- Switched the workspace Lightyear dependency from crates.io `0.26.4` to `https://github.com/cBournhonesque/lightyear.git` branch `main`, currently locked to commit `64c71437` in `Cargo.lock`.
-- Aligned the direct `bevy_enhanced_input` dependency to `0.24.4`, matching Lightyear main's `input_bei` integration, and replaced deprecated `ActionState` usage with `TriggerState`.
-- Adapted to Lightyear main's room-visibility API: the server now uses `RoomAllocator` plus `Rooms::single(...)` membership components instead of the removed `Room`/`RoomEvent`/`RoomTarget` API. The old `ReplicationGroup::new_from_entity()` inserts were removed because main no longer exposes that component.
-- Added `StatesPlugin` to the headless server plugin set because Lightyear main initializes states that require Bevy's `StateTransition` schedule even when the app uses `MinimalPlugins`.
-- Verification after the dependency switch: `cargo check --workspace -j 4`, `cargo test --workspace -j 4`, and `just trace-local 2 6 config/test.ron 5053` pass/complete. The trace emitted 14,946 `snake_head` rows, zero invariant violations, and no panic/error/replication-sender markers.
-- Added data-driven `RespawnConfig` and server-side `RespawnReadyAt` gating. Human players and server-owned bots no longer respawn immediately after death; the default and test configs currently use a 1-second cooldown for both.
-- Added dead-camera behavior for the local client. While alive the follow camera tracks the local predicted snake; after a collision death it follows the killer snake; after suicide or boundary death it stays static. `SpawnPlayer` is now bound to Enter and Space.
-- Made respawning safer by scoring deterministic spawn candidates against room-local snake tails and arena bounds before falling back to the best available candidate.
-- Made bots more conservative by increasing lookahead/danger thresholds and reducing voluntary turn frequency. In the latest 12-second `trace-local` run with four headless bot clients plus four server bots, server bots moved continuously through tick 539 and no collision/death churn appeared in the server log.
-- Investigated the reported panic string `Received a message ack for a single message but message is a fragmented message`. It comes from Lightyear's `lightyear_transport::channel::senders::reliable::ReliableSender::receive_ack` when a reliable fragmented message receives an ack without a fragment id. This run did not reproduce it; keep it as an upstream transport bug candidate and preserve backtraces/logs if it appears again.
-- Verification: `cargo check --workspace -j 4`, `cargo test --workspace -j 4`, `just --list`, and `just trace-local 4 12 config/test.ron 5051` pass/complete. The trace emitted 65,448 `snake_head` rows, zero invariant violations, and no panic/error/replication-sender markers.
-- Improved shared bot steering so bots no longer rely on frequent random turns. `BotController` now prefers safe straight movement, avoids short self-trapping segments, turns away from imminent wall/self-tail collisions, and can score same-room snake tails as obstacles.
-- Updated server-owned bots and headless bot clients to pass room-local tail snapshots into the shared obstacle-aware steering logic.
-- Added bot unit tests for avoiding self-tail and other-tail lookahead collisions.
-- Verification: `cargo test -p shared -j 4`, `cargo check --workspace -j 4`, and `cargo test --workspace -j 4` pass. A 60-second headless server smoke on `config/test.ron` with four server bots reported zero `Collision event` lines and five food pickups.
-- Fixed blank non-headless clients after `just server` plus `just client`: the client now has `ReplicationReceiver::default()`, protocol registration happens after Lightyear client/server plugins, room-scoped entities use `NetworkTarget::All` plus room visibility, and food spawning waits out pending client handshakes without a `ReplicationSender`.
-- Improved first-pass rendering visibility with an arena outline/axes, dark clear color, brighter food, thicker snake trails, and a one-time client log when gameplay entities reach the render world.
-- Verification for the render/replication fix: connected WebTransport smoke with `config/test.ron` logs `Client render received gameplay entities snake_count=1 food_count=20` and no server `No ReplicationSender`/`ClientOf ... not found` errors. Remaining follow-up: client prediction can warn about rollback spans above the current 100-tick cap after joining a long-running server.
-- Added runtime observability for autonomous agent checks: `RuntimeDebugPlugin` samples snake heads at fixed and frame schedules via `lightyear_debug::manual`, checks basic snake invariants in `FixedLast`, wires a Lightyear-compatible JSONL debug layer from config plus `LIGHTYEAR_DEBUG_FILE`, and adds DuckDB summary tooling through `just trace-local`, `just trace-summary`, and `tools/debug_trace_summary.sql`.
-- The first `trace-local` smoke exposed a Lightyear pending-sender race when multiple clients connected in the same narrow window. Server client spawning now waits for ready `ReplicationSender` clients where possible, and the local bot/trace recipes stagger client starts to keep routine smoke traces clean while the deeper simultaneous-connect behavior remains worth tracking against Lightyear.
-- Verification: a short `just trace-local 2 4 config/test.ron 5049` run produced 11,578 `snake_head` JSONL rows, zero `snake_invariant_violation` rows in DuckDB, and no `ERROR`/panic/replication-sender markers in the per-process logs.
-
-### 2026-05-22
-
-- Created this project thoughts document.
-- Confirmed target intent: Powerline.io-like game in Rust with Bevy and Lightyear, starting with barebones graphics and prioritizing working online multiplayer.
-- Inspected existing Lightrider workspace: client/server/shared crates, Bevy 0.13-era code, Lightyear git dependency, current snake tail interpolation/movement/collision/food prototype.
-- Inspected original Powerline source tree for constants, assets, and behavior references.
-- Noted initial target dependency direction: Bevy 0.18 and the then-current Lightyear release line. This was superseded on 2026-05-26 by the explicit Lightyear git-main dependency.
-- Added implementation plan emphasizing upgrade, deterministic geometry, owner-only prediction, interpolation for remote snakes, rooms, bots, fake clients, Edgegap deployment, and later cosmetics.
-- Added design decisions for RON-style data-driven config, default/test configs, multi-room single-server support, 50-player initial room target, WebTransport-only networking, server-authoritative deaths, headless clients, shared bot logic, and `lightyear_debug`/DuckDB-oriented diagnostics.
-- Fixed `.cargo/config.toml` so local Linux cargo commands no longer try to build `aarch64-apple-darwin`.
-- Updated the locked `time` crate to a current compatible patch release after the old version failed on the active Rust toolchain.
-- Added typed `GameConfig` loading in `shared/src/config.rs` and RON configs in `config/default.ron` and `config/test.ron`.
-- Wired map sizing through `GameConfig`.
-- Removed direct `bevy_xpbd_2d` usage and replaced collision/proximity/food checks with explicit geometry.
-- Added ray/segment geometry helpers and unit tests.
-- Historical intermediate upgrade: moved to Bevy `0.18.1`, the then-current Lightyear package line, and matching Bevy ecosystem crate versions. Later input work removed Leafwing, and 2026-05-26 switched Lightyear to git main.
-- Migrated Lightyear protocol setup away from removed macros (`protocolize!`, `component_protocol`, `message_protocol`) to explicit registration in `ProtocolPlugin`.
-- Migrated client/server network startup to Lightyear 0.26 entity-based connection setup with `ClientPlugins`, `ServerPlugins`, `NetcodeClient`, `NetcodeServer`, and transport IO components.
-- Converted Bevy local events to Bevy 0.18 messages where needed.
-- Temporarily stubbed the old custom snake interpolation plugin; remote snake smoothing is now an explicit next task.
-- Verified `cargo test --workspace -j 4` passes: client 0 tests, server 7 tests, shared 7 tests, doc tests 0.
-- Verified `git diff --check` passes.
-- Smoke-started the early headless server before the WebTransport-only decision; it ran until the timeout without immediate panic.
-- Replaced Leafwing network inputs with Lightyear BEI inputs: `SnakeInput`/`MoveSnake` for movement and `PlayerInput`/`SpawnPlayer` for respawn.
-- Added deterministic pre-spawned BEI action entities for client/server input mapping, following the Lightyear `examples/bevy_enhanced_inputs` pattern.
-- Client input setup now uses Lightyear's replicated `Controlled` marker to identify locally controlled player/snake contexts.
-- Removed the local `Owned` marker and switched local camera toggle to a BEI-only local input context.
-- Added `--config <path>` support on client and server for loading RON game config files.
-- Wired snake spawn length/speed, movement acceleration/speed clamps, boost distance, food target count/spawn interval/radius/growth, and server boundary checks through `GameConfig`.
-- Added server-authoritative arena boundary death and tests for boundary collision, BEI movement direction selection, invalid reverse turns, and boost acceleration scaling.
-- Initially changed food replication away from bare `Replicate::default()` after a headless server smoke exposed `No ReplicationSender` errors. Later validation showed Lightyear room visibility is only a filter, so room-scoped entities must still target connected clients through `NetworkTarget::All`.
-- Verified `cargo tree -i leafwing-input-manager -p shared` reports nothing to print after the input migration.
-- Verified BEI resolved as a single shared dependency after the input migration. The current BEI version is tracked in the 2026-05-26 dependency-switch entry.
-- Verified `cargo check --workspace -j 4`, `cargo test --workspace -j 4`, and `git diff --check` pass after the input migration and Phase 1 simulation/config changes.
-- Smoke-started the early headless server with `config/test.ron` before the WebTransport-only decision; it ran until the timeout without immediate panic.
-- Finished Phase 1 fixed-tick cleanup: Lightyear client/server tick duration now comes from `GameConfig`, and proximity/collision/death/food overlap logic runs in `FixedUpdate` around movement.
-- Added replicated `RoomId` and attached it to maps, players, snakes, and food so simulation queries can ignore entities from other rooms before the full room manager exists.
-- Made proximity boost, server snake collision, and food overlap room-scoped, with focused tests for cross-room ignore behavior.
-- Added client-side shared collision/proximity setup so local prediction computes boost state instead of leaving that entirely server-side.
-- Verified Phase 1 close-out with `cargo check --workspace -j 4`, `cargo test --workspace -j 4` (server 10 tests, shared 12 tests), `git diff --check`, and a headless UDP server smoke using `config/test.ron`.
-- Removed UDP/WebSocket support from active code paths and Lightyear features. Phase 2 networking is WebTransport-only, with self-signed and dangerous certificate features enabled for local development.
-- Removed transport selection from CLI/config. Client now accepts `--certificate-digest` for WebTransport browser/deployment paths; server logs its generated self-signed digest on startup.
-- Added replicated `PlayerScore` and `PlayerStatus`, updated food pickups to set score from tail length, and reset score/status on respawn.
-- Split server-internal snake collisions from client death notifications: `SnakeCollision` now carries `DeathReason`, and clients receive `PlayerDeath` with mapped player/snake entities plus room id.
-- Restored custom snake interpolation against Lightyear 0.26 using confirmed history for `TailPoints` and `TailLength`.
-- Enabled frame interpolation for predicted snake `TailPoints` and intentionally did not enable VisualCorrection.
-- Added tail interpolation tests and a food-pickup score test. Verification now passes with `cargo check --workspace -j 4`, `cargo test --workspace -j 4` (server 11 tests, shared 18 tests), `git diff --check`, no `lightyear_udp`/`lightyear_websocket` dependency path, and a headless WebTransport server smoke using `config/test.ron`.
-- Implemented Phase 3 server rooms with `RoomDirectory`, Lightyear `Room` entities, auto/new/specific room join requests, room-scoped map spawning, room-scoped replication visibility, and room-preserving respawns.
-- Implemented minimal per-room leaderboard state with replicated `PlayerRank`, recomputed from `PlayerScore`.
-- Implemented Phase 4 bots: shared deterministic bot steering, server-owned bots, and headless fake clients using `--mode bot` with BEI `ActionMock`s.
-- Added explicit binary names `lightrider-server` and `lightrider-client` to avoid Cargo output collisions between the server and client crates.
-- Added a root `justfile` with `server`, `client`, `bot`, `bots`, and `local` recipes for local server/client/bot runs.
-- Removed Bevy `dynamic_linking` from the workspace dependency because `cargo test --workspace -j 4` failed to link test binaries through `bevy_dylib`.
-- Changed room-scoped replicated entities to use `Replicate::to_clients(NetworkTarget::All)` plus Lightyear room visibility, added `ReplicationReceiver` to the client connection entity, and moved shared protocol registration after the Lightyear client/server plugin groups. Food spawning now skips pending `ClientOf` entities until their `ReplicationSender` is present.
-- Added a client-side render baseline: arena border/axes, non-black clear color, brighter food, thicker snake trails, and a one-time log when gameplay entities are available to render.
-- Added stable connection logs for server startup, server room assignment, and client connection.
-- Verified Phase 3/4 close-out with `cargo check --workspace -j 4`, `cargo test --workspace -j 4` (client 1 test, server 16 tests, shared 22 tests), `just --list`, a combined build of `lightrider-server` and `lightrider-client`, and a WebTransport smoke connecting one headless bot client to a headless server with no panic/protocol/error markers.
+- Started this document with game design, general agent notes, and changelog sections.
+- Upgraded the project to Bevy `0.18.1` and Lightyear main/current git dependency.
+- Added typed RON config and default/test config files.
+- Replaced physics-engine collision with explicit geometry.
+- Added room-scoped movement, collision, food, scoring, respawn, rank, and visibility logic.
+- Added BEI input integration through Lightyear and use of `Controlled` for locally controlled entities.
+- Added custom snake interpolation and frame interpolation for predicted tail state.
+- Added server bots and headless fake clients.
+- Added rendering baseline: dark clear color, arena outline/axes, food dots, configurable snake head/tail gizmos, death view, minimap, leaderboard, names, and debug camera shortcuts.
+- Added runtime debug tracing and `just trace-local`/`trace-summary` tooling for DuckDB analysis.
+- Switched the active native deployment prototype from WebTransport to UDP.
+- Added `Dockerfile.server`, container entrypoint, and podman-based `just edgegap-*` recipes.
+- Stored Edgegap/registry/S3 settings in ignored `secrets/edgegap.env`; the S3 secret access key still needs to be supplied before log uploads can authenticate.
+- Built and pushed `registry.edgegap.com/lightyear-6qgcf4w4mrq7/lightrider-server:dev`.
+- Verified the UDP/Edgegap image work with `cargo fmt --all`, `CARGO_INCREMENTAL=0 cargo check --workspace -j 4`, `CARGO_INCREMENTAL=0 cargo test --workspace --lib -j 4`, `CARGO_INCREMENTAL=0 just trace-local 1 3 config/test.ron 5067`, container `--help`, local container startup, `just edgegap-build dev`, and `just edgegap-push dev`.
+- Investigated deployment `390e2136cbf7`: Edgegap status had UDP mapping, but the app version pointed at old image `lightyear-6qgcf4w4mrq7/simple_box:a82d0d64b384e558639963c7ab5bc32c4669611b`; logs showed WebTransport certificate generation, explaining UDP client failure.
+- Investigated deployment `60c89b835fed`: Edgegap status showed `139.177.195.29:30090 -> 7777/udp`, app version correctly pointed at `lightyear-6qgcf4w4mrq7/lightrider-server:dev`, and container logs showed `Starting UDP server on 0.0.0.0:7777` plus `Server UDP socket bound to 0.0.0.0:7777`. Repeated native headless clients timed out with `ConnectionRequestTimedOut`. A plain Python UDP datagram sent to `139.177.195.29:30090` also produced no server-side `Received UDP packet from new address ...` log. Current diagnosis: image and bind are correct, but UDP datagrams are not reaching the server process through the deployment path, or the Edgegap log endpoint is not returning live post-start logs. Next step is Edgegap/network-path diagnostics or a temporary UDP echo/probe build.
+- Started the WebTransport + Bevygap path. Updated `/spare/ssd/cbournhonesque/src/other/bevygap` to Bevy `0.18` and local Lightyear `../lightyear/lightyear` with `client`, `server`, `netcode`, `replication`, and WebTransport features. Removed the stale `bevy_async_task` dependency from `bevy_nfws`, moved websocket tasks onto Bevy's `IoTaskPool`, updated observer APIs, updated matchmaker `ConnectToken` imports, changed the client plugin to insert `NetcodeClient`/`PeerAddr`/`WebTransportClientIo` on the existing Lightyear client entity, and changed the server plugin to observe current `Connected`/`Disconnected` ECS markers and extract certificate digest from `WebTransportServerIo`.
+- Bevygap verification: `cargo check --workspace -j 4`, `cargo test --workspace --lib -j 4`, and `cargo tree -i bevy@0.18.1` pass in the Bevygap repo. `cargo tree -i bevy@0.15.1` reports no matching package, confirming the duplicate old Bevy dependency is gone. Remaining Bevygap warnings are unused/dead-code warnings in existing helper code plus one unused `Serialize` import in the HTTPD binary.
+- Replaced Lightrider's direct Lightyear raw UDP IO with WebTransport. The server now generates a self-signed WebTransport identity at startup, logs its certificate digest, and includes local/Edgegap/`SELF_SIGNED_SANS` subject names. The direct client inserts `WebTransportClientIo`, accepts `--cert-digest`/`--certificate-digest`, and normalizes copied colon-separated digest logs; native local tests can leave the digest empty because the dangerous native test feature is enabled.
+- WebTransport verification: `cargo check --workspace -j 4`, `cargo test --workspace --lib -j 4`, and `just trace-local 1 5 config/test.ron 5067` pass. The trace run wrote `logs/debug/20260527-132304`, logged WebTransport server startup, connected the native client with no certificate validation, produced movement rows, and reported zero stuck-snake rows and zero invariant violations.
+- Added the Bevygap integration plan: Lightrider integration must be optional behind a `bevygap` feature, preserve direct local WebTransport as the default, gate client/server Bevygap dependencies separately, and use feature-gated recipes/tests for matchmaker-token smoke coverage.
+- Implemented the first Lightrider Bevygap integration slice. `client` now has optional `bevygap` and `bevygap-matchmaker-tls` features, a feature-gated `--matchmaker-url` path, and split direct-vs-token connection startup. `server` now has an optional `bevygap` feature and feature-gated `--bevygap` mode. Default direct WebTransport builds do not require Bevygap/NATS/Edgegap services.
+- Bevygap integration verification: `cargo fmt --all`, `cargo check --workspace -j 4`, `cargo check -p client --features bevygap -j 4`, `cargo check -p server --features bevygap -j 4`, `cargo test --workspace --lib -j 4`, default client dependency-tree check for Bevygap/NATS/Edgegap, and `just trace-local 1 4 config/test.ron 5068` pass. The feature builds are compile-checked only; the real matchmaker/NATS token flow is not yet runtime-tested.
+- Reduced local build pressure: repo Cargo defaults now cap builds at two jobs, `justfile` recipes use `-j 2` plus `CARGO_INCREMENTAL=1`, dev profile keeps incremental compilation while lowering debug-info volume, dependencies/build scripts compile without dev debuginfo, Docker release builds use `-j 2` and remove build caches from the image build layer, and cleanup recipes exist for `cargo clean`, targeted incremental-cache cleanup, and `podman builder prune -f`.
+- Pulled the local NATS container image with `podman pull nats:latest` and added Bevygap local-smoke recipes. Local NATS runs with JetStream, monitoring on `8222`, and development credentials `lightrider/lightrider`; the Lightrider server smoke uses a fake local Edgegap context endpoint before testing NATS context/cert-digest publication.
+- Added mock Edgegap session mode to `/spare/ssd/cbournhonesque/src/other/bevygap/bevygap_matchmaker` and verified the native local Bevygap flow with `just bevygap-local-smoke 8 config/test.ron 7777 3000 9876 3001`. The passing run at `logs/bevygap/20260528-004801` covered NATS, fake Edgegap context, server cert-digest publication, mock `Session Ready`, Lightyear `ConnectToken` decode, WebTransport client connect, and server-side Lightyear connect observation.
+- Hardened Bevygap local testing: native `bevy_nfws` now uses a dedicated Tokio runtime thread, the Bevygap server task helper skips nested `block_on` when Bevy already runs inside Tokio, raw connect tokens are redacted from matchmaker/HTTPD/client logs, and Lightrider disconnect cleanup no longer queues room-removal commands before immediate player/snake despawn.
+- Added production netcode identity configuration. Lightrider server/client and Bevygap matchmaker now read `LIGHTRIDER_PROTOCOL_ID` plus `LIGHTRIDER_PRIVATE_KEY`, accept hex or comma-separated keys, and reject zero/dev identity when `LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1`. `just netcode-secret` prints a fresh env block.
+- Wired Bevygap admissions into Lightyear. The local Lightyear fork exposes a netcode connection-request handler setter; `bevygap_server_plugin` watches Bevygap NATS KV for issued client ids, installs the handler before starting the server, and rejects tokens whose client id was not issued by the matchmaker.
+- Added production packaging for the two-image plan. `Dockerfile.server` builds the Bevygap-enabled game server image, while `Dockerfile.matchmaker` bundles NATS, `bevygap_matchmaker`, `bevygap_matchmaker_httpd`, nginx, and the `lightrider-web` WASM client files.
+- Added browser entrypoint and static client shell. `lightrider-web` defaults to same-origin `/matchmaker/ws` and accepts `?matchmaker_url=`; `web/index.html` loads the generated wasm-bindgen package.
+- Added image recipes for the new plan: `matchmaker-build`, `matchmaker-push`, `matchmaker-build-push`, `prod-images-build`, and `prod-images-push`. `edgegap-context` now stages sibling `../bevygap` along with Lightrider and local Lightyear for container builds.
+- Verification for this slice: `cargo fmt --all` in Lightrider/Bevygap/Lightyear; `cargo check -p server --features bevygap -j 2`; `cargo check -p client --features bevygap -j 2`; wasm `cargo check` for `lightrider-web`; Bevygap plugin/matchmaker/httpd checks; `cargo test -p shared --lib -j 2`; `just --dry-run` for the production image recipes; `just edgegap-context`; `bash -n` on both entrypoints; `git diff --check`; and `just bevygap-local-smoke 8 config/test.ron 7777 3000 9876 3001`, with the latest passing logs under `logs/bevygap/20260528-102335`.
+- Added `DEPLOYMENT.md` with full operator steps for direct local WebTransport testing, local Bevygap mock smoke testing, real Edgegap-session local testing, and the current two-image production deployment plan.
+- Clarified the real Edgegap-session local test: it uses real Edgegap sessions/deployments through our `bevygap_matchmaker`, does not require Edgegap's managed matchmaker, and needs a NATS endpoint reachable by both the local matchmaker and the Edgegap-hosted game server. The local recipes now also accept `EDGEGAP_API_TOKEN` from `secrets/edgegap.env`.
+- Real Edgegap read-only preflight on 2026-05-28 verified `lightrider/v0.0.1` is active and the matchmaker can start/listen against the real Edgegap API without creating a session. The full real-session test is blocked until the Edgegap game-server app version has public NATS env vars and matching production netcode identity; the current app version has no env vars configured.
+- Fixed Bevygap matchmaker's Edgegap API base path to avoid generated `//v1/...` URLs.
+- Stored Linode control-host credentials in ignored `secrets/linode.env`. Linode API access works for instance `98268043` at `45.79.138.102`, the instance is running, and the local `lightrider_linode_ed25519.pub` fingerprint matches the Linode account key. Shell SSH could not be verified from this environment because outbound TCP/22 is blocked or filtered here; `github.com:22` also times out.
+- Linode firewall check: firewall `default`/`26277595` is attached to the public Linode interface, but inbound policy is `ACCEPT`, so it is permissive and not a production-ready restriction. Recommended final posture is inbound default `DROP`, allow 80/443, restricted admin SSH, NATS 4222 only as narrowly as Edgegap allows, and no public 8222/8080.
+- LISH/SSH analysis on 2026-05-28: direct node SSH on 22 times out from this host; node 443 and LISH 443 both establish TCP but close before SSH banner/auth (`kex_exchange_identification`), while LISH 2200 times out. Linode profile has `lish_auth_method=keys_only` with the expected key, so the 443 LISH failure is not a rejected key. Need web LISH/Cloud Manager console or a network path that can use TCP/22 to repair/inspect sshd.
+- Weblish/Glish analysis on 2026-05-28: Cloud Manager HTTPS loads, but `us-east.webconsole.linode.com:8181` and `:8080` time out from this host. The browser console failure is consistent with local/corporate network blocking the Weblish/Glish gateway ports.
+- Added prioritized Bevygap work tracking to this document. P0 items are server readiness publication and production NATS setup hardening; app/version automation, cert-digest keying, local/mock server-plugin mode, real Edgegap smoke, and richer smoke assertions remain queued.
+- Hardened `bevygap_server_plugin` readiness publication so context and WebTransport certificate digest publication retries until NATS, Edgegap context, cert digest, and the NATS sender all exist, then publishes once.
+- Hardened Bevygap NATS configuration: `NATS_INSECURE` is now parsed as a truthy flag instead of presence-only, `BEVYGAP_REQUIRE_SECURE_NATS=1` rejects insecure NATS and default development credentials, and the matchmaker/control entrypoint fails fast for production NATS setups without TLS unless explicitly allowed for temporary testing.
+- Verification for the Bevygap P0 slice: `cargo check --manifest-path ../bevygap/Cargo.toml -p bevygap_server_plugin -p bevygap_shared -j 2`, `cargo check -p server --features bevygap -j 2`, `bash -n tools/matchmaker-container-entrypoint.sh`, `git diff --check` in Lightrider and Bevygap, entrypoint fail-fast probes, and `just bevygap-local-smoke 8 config/test.ron 7777 3000 9876 3001` passed. The latest passing smoke logs are under `logs/bevygap/20260528-133903`.
+- Added `tools/edgegap_app_version.sh` and `just` wrappers for Edgegap app-version automation. The script can print desired state, show current Edgegap state, redacted-diff desired vs current, sync by creating/updating the app version, and verify deploy-critical fields. It manages server image/tag, UDP/7777 game port, Bevygap session config, required Lightrider/NATS env vars, optional registry credentials, and writes a redacted `.edgegap-build/edgegap-app-version.json` manifest.
+- Fixed the three Bevygap server-side gaps that were not blocked by public NATS: `bevygap_server_plugin` now supports `BEVYGAP_CONTEXT_MODE=local` for in-process local Edgegap context, WebTransport cert digests are published and resolved by deployment request id plus endpoint `ip:port` with legacy public-IP fallback, and the local mock flow now verifies active connection reporting through both the server KV write and matchmaker active-connection watcher. Verification: `cargo check -j 2 -p bevygap_server_plugin -p bevygap_matchmaker`, `cargo test -j 2 -p bevygap_shared --features nats`, `cargo test -j 2 -p bevygap_server_plugin local_context_contains_expected_endpoint`, `just --dry-run` for affected Bevygap recipes, and `just bevygap-local-smoke 3 config/test.ron 7777 3000 9876 3001` passed with logs under `logs/bevygap/20260528-144045`.
+- Improved Bevygap P1 items 2-7: added `BEVYGAP_NATS_NAMESPACE` and shared subject/bucket helpers, exposed Bevygap TTL envs, routed matchmaker request subjects through shared helpers, hardened server-plugin NATS connect/watch/event handling, converted matchmaker/HTTPD runtime panics into logged or streamed errors, added unit tests for namespace naming, updated local/prod recipes and Edgegap app-version automation, and tightened the Edgegap OpenAPI client regeneration script. Verification: `cargo test -j 2 -p bevygap_shared --features nats`, `cargo check -j 2 -p bevygap_server_plugin -p bevygap_matchmaker -p bevygap_matchmaker_httpd`, script `bash -n` checks, `just --dry-run` for affected recipes, `cargo test -j 2 -p bevygap_server_plugin local_context_contains_expected_endpoint`, `git diff --check`, and `just bevygap-local-smoke 3 config/test.ron 7777 3000 9876 3001` passed with logs under `logs/bevygap/20260528-150923`.

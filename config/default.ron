@@ -15,7 +15,7 @@
         boost_distance: 20.0,
     ),
     render: (
-        tail_width: 3.0,
+        tail_width: 2.0,
         head_size: 10.0,
         map_outline_width: 3.0,
         normal_camera_scale: 0.35,

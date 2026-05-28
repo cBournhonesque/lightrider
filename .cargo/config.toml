@@ -1,4 +1,5 @@
 [build]
+jobs = 2
 rustflags = ["--cfg", "web_sys_unstable_apis"]
 
 [target.aarch64-apple-darwin]

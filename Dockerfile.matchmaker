@@ -1,0 +1,69 @@
+FROM nats:latest AS nats
+
+FROM rustlang/rust:nightly-bookworm AS builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        clang \
+        curl \
+        libasound2-dev \
+        libudev-dev \
+        libwayland-dev \
+        libx11-dev \
+        libxcursor-dev \
+        libxi-dev \
+        libxinerama-dev \
+        libxkbcommon-dev \
+        libxrandr-dev \
+        pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add wasm32-unknown-unknown && \
+    cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
+WORKDIR /src/lightrider
+COPY lightyear /src/lightyear
+COPY bevygap /src/bevygap
+COPY lightrider /src/lightrider
+
+RUN CARGO_INCREMENTAL=0 cargo build --release -j 2 \
+        --manifest-path /src/bevygap/Cargo.toml \
+        -p bevygap_matchmaker \
+        -p bevygap_matchmaker_httpd && \
+    cp /src/bevygap/target/release/bevygap_matchmaker /tmp/bevygap_matchmaker && \
+    cp /src/bevygap/target/release/bevygap_matchmaker_httpd /tmp/bevygap_matchmaker_httpd
+
+RUN CARGO_INCREMENTAL=0 cargo build --release -j 2 \
+        -p client \
+        --features bevygap \
+        --bin lightrider-web \
+        --target wasm32-unknown-unknown && \
+    mkdir -p /tmp/lightrider-web/pkg && \
+    wasm-bindgen \
+        --target web \
+        --out-dir /tmp/lightrider-web/pkg \
+        /src/lightrider/target/wasm32-unknown-unknown/release/lightrider_web.wasm && \
+    cp /src/lightrider/web/index.html /tmp/lightrider-web/index.html && \
+    rm -rf /src/lightrider/target /src/bevygap/target /usr/local/cargo/git /usr/local/cargo/registry
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        nginx && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=nats /nats-server /app/nats-server
+COPY --from=builder /tmp/bevygap_matchmaker /app/bevygap_matchmaker
+COPY --from=builder /tmp/bevygap_matchmaker_httpd /app/bevygap_matchmaker_httpd
+COPY --from=builder /tmp/lightrider-web /usr/share/nginx/html
+COPY lightrider/tools/matchmaker-container-entrypoint.sh /app/matchmaker-container-entrypoint.sh
+
+EXPOSE 8080/tcp
+EXPOSE 4222/tcp
+EXPOSE 8222/tcp
+
+ENTRYPOINT ["/app/matchmaker-container-entrypoint.sh"]

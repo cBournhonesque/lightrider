@@ -15,6 +15,9 @@ use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
 use shared::network::protocol::prelude::RoomJoinMode;
 use shared::SharedPlugin;
 
+#[cfg(feature = "bevygap")]
+use bevygap_client_plugin::prelude::{BevygapClientConfig, BevygapClientPlugin, BevygapConnectExt};
+
 mod bot;
 mod camera;
 mod collision;
@@ -59,19 +62,38 @@ pub struct Cli {
     #[arg(long, default_value_t = CLIENT_PORT)]
     client_port: u16,
 
+    /// Hex SHA-256 digest for the WebTransport server certificate.
+    ///
+    /// Native local clients may leave this empty when using the dangerous WebTransport
+    /// test configuration. Browser clients must get this from matchmaking.
+    #[arg(long, alias = "certificate-digest", default_value = "")]
+    cert_digest: String,
+
+    /// Use Bevygap matchmaking instead of direct server address connection.
+    #[cfg(feature = "bevygap")]
+    #[arg(long)]
+    matchmaker_url: Option<String>,
+
+    /// Bevygap game name sent to the matchmaker.
+    #[cfg(feature = "bevygap")]
+    #[arg(long, default_value = "lightrider")]
+    matchmaker_game: String,
+
+    /// Bevygap game version sent to the matchmaker.
+    #[cfg(feature = "bevygap")]
+    #[arg(long, default_value = "dev")]
+    matchmaker_version: String,
+
+    /// Override client IP sent to Bevygap matchmaker, useful for local testing.
+    #[cfg(feature = "bevygap")]
+    #[arg(long)]
+    matchmaker_fake_client_ip: Option<String>,
+
     #[arg(long, default_value_t = Ipv4Addr::LOCALHOST)]
     server_addr: Ipv4Addr,
 
     #[arg(short, long, default_value_t = SERVER_PORT)]
     server_port: u16,
-
-    /// Hex SHA-256 digest of the WebTransport server certificate.
-    ///
-    /// Native local development can leave this empty because the dev build enables Lightyear's
-    /// dangerous WebTransport configuration. Browser builds should pass the digest printed by the
-    /// server, for example through deployment config or page bootstrap.
-    #[arg(long, default_value = "")]
-    certificate_digest: String,
 
     #[arg(long, default_value = "auto", value_parser = rooms::parse_room_join_mode)]
     room: RoomJoinMode,
@@ -81,6 +103,30 @@ pub struct Cli {
 
     #[arg(long)]
     config: Option<PathBuf>,
+}
+
+#[cfg(feature = "bevygap")]
+impl Cli {
+    pub fn web_defaults(matchmaker_url: String) -> Self {
+        Self {
+            inspector: false,
+            debug: false,
+            headless: false,
+            mode: ClientMode::Player,
+            client_id: 0,
+            client_port: CLIENT_PORT,
+            cert_digest: String::new(),
+            matchmaker_url: Some(matchmaker_url),
+            matchmaker_game: "lightrider".to_string(),
+            matchmaker_version: "dev".to_string(),
+            matchmaker_fake_client_ip: None,
+            server_addr: Ipv4Addr::LOCALHOST,
+            server_port: SERVER_PORT,
+            room: RoomJoinMode::Auto,
+            name: String::new(),
+            config: None,
+        }
+    }
 }
 
 pub fn app(cli: Cli) -> App {
@@ -112,12 +158,46 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(DefaultPlugins.set(log_plugin));
     }
 
+    #[cfg(feature = "bevygap")]
+    let bevygap_config = cli
+        .matchmaker_url
+        .as_ref()
+        .map(|matchmaker_url| BevygapClientConfig {
+            matchmaker_url: matchmaker_url.clone(),
+            fake_client_ip: cli.matchmaker_fake_client_ip.clone(),
+            game_name: cli.matchmaker_game.clone(),
+            game_version: cli.matchmaker_version.clone(),
+        });
+
+    #[cfg(feature = "bevygap")]
+    let network_connection = if bevygap_config.is_some() {
+        network::config::ClientConnectionConfig::bevygap(cli.client_port)
+    } else {
+        network::config::ClientConnectionConfig::direct(
+            cli.client_id,
+            cli.client_port,
+            (cli.server_addr, cli.server_port).into(),
+            cli.cert_digest.clone(),
+        )
+    };
+
+    #[cfg(not(feature = "bevygap"))]
+    let network_connection = network::config::ClientConnectionConfig::direct(
+        cli.client_id,
+        cli.client_port,
+        (cli.server_addr, cli.server_port).into(),
+        cli.cert_digest.clone(),
+    );
+
     app.add_plugins(network::NetworkPlugin {
-        client_id: cli.client_id,
-        client_port: cli.client_port,
-        server_addr: (cli.server_addr, cli.server_port).into(),
-        certificate_digest: cli.certificate_digest,
+        connection: network_connection,
     });
+    #[cfg(feature = "bevygap")]
+    if let Some(bevygap_config) = bevygap_config {
+        app.insert_resource(bevygap_config);
+        app.add_plugins(BevygapClientPlugin);
+        app.add_systems(bevy::prelude::Startup, request_bevygap_session);
+    }
     app.add_plugins(SharedPlugin);
     app.add_plugins(RuntimeDebugPlugin::client());
     app.add_plugins(collision::CollisionPlugin);
@@ -138,6 +218,11 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(render::RenderPlugin);
     }
     app
+}
+
+#[cfg(feature = "bevygap")]
+fn request_bevygap_session(mut commands: bevy::prelude::Commands) {
+    commands.bevygap_connect_client();
 }
 
 fn player_name(cli: &Cli) -> String {

@@ -143,7 +143,7 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         Self {
-            tail_width: 3.0,
+            tail_width: 2.0,
             head_size: 10.0,
             map_outline_width: 3.0,
             normal_camera_scale: 0.35,
@@ -334,7 +334,7 @@ mod tests {
 
         assert_eq!(config.arena.width, 5000.0);
         assert_eq!(config.arena.height, 1600.0);
-        assert_eq!(config.render.tail_width, 3.0);
+        assert_eq!(config.render.tail_width, 2.0);
         assert_eq!(config.render.map_outline_width, 3.0);
         assert_eq!(config.render.normal_camera_scale, 0.35);
         assert_eq!(config.render.normal_camera_max_scale, 1.0);

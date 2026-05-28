@@ -8,6 +8,9 @@ use shared::config::GameConfig;
 use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
 use shared::SharedPlugin;
 
+#[cfg(feature = "bevygap")]
+use bevygap_server_plugin::prelude::BevygapServerPlugin;
+
 mod bots;
 pub(crate) mod collision;
 mod debug;
@@ -31,6 +34,11 @@ pub struct Cli {
     #[arg(short, long, default_value_t = SERVER_PORT)]
     port: u16,
 
+    /// Enable Edgegap/Bevygap NATS integration. Requires the `bevygap` Cargo feature.
+    #[cfg(feature = "bevygap")]
+    #[arg(long, default_value = "false")]
+    bevygap: bool,
+
     #[arg(long)]
     config: Option<PathBuf>,
 }
@@ -53,7 +61,15 @@ pub async fn app(cli: Cli) -> App {
     }
 
     // networking
-    app.add_plugins(network::NetworkPluginGroup::new(cli.port).build());
+    #[cfg(feature = "bevygap")]
+    let start_server_immediately = !cli.bevygap;
+    #[cfg(not(feature = "bevygap"))]
+    let start_server_immediately = true;
+    app.add_plugins(network::NetworkPluginGroup::new(cli.port, start_server_immediately).build());
+    #[cfg(feature = "bevygap")]
+    if cli.bevygap {
+        app.add_plugins(BevygapServerPlugin);
+    }
 
     // shared
     app.add_plugins(SharedPlugin);

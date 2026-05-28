@@ -9,21 +9,28 @@ mod inputs;
 
 pub(crate) struct NetworkPluginGroup {
     pub(crate) port: u16,
+    pub(crate) start_immediately: bool,
 }
 
 impl PluginGroup for NetworkPluginGroup {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(config::ServerConnectionPlugin {
-                config: config::ServerConnectionConfig { port: self.port },
+                config: config::ServerConnectionConfig {
+                    port: self.port,
+                    start_immediately: self.start_immediately,
+                },
             })
             .add(NetworkPlugin)
     }
 }
 
 impl NetworkPluginGroup {
-    pub fn new(port: u16) -> Self {
-        Self { port }
+    pub fn new(port: u16, start_immediately: bool) -> Self {
+        Self {
+            port,
+            start_immediately,
+        }
     }
 }
 
