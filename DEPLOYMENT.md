@@ -623,6 +623,12 @@ After the workflow succeeds, the VPS can pull the already-built control image:
 just deploy-web-server-pull <vps-ip> <release-tag>
 ```
 
+If SSH needs an explicit identity file, pass it as a kwarg:
+
+```bash
+just deploy-web-server-pull host=<vps-ip> tag=<release-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
 The Edgegap app version still needs to be synced separately with the same tag and the correct NATS/netcode env:
 
 ```bash
@@ -680,6 +686,12 @@ tag="$(git rev-parse --short HEAD)"
 just deploy-web-server host=45.79.138.102 ssh_port=22 tag="$tag" env=secrets/web-server.env
 ```
 
+If the VPS key is not loaded in your SSH agent or default identities, pass it explicitly:
+
+```bash
+just deploy-web-server host=45.79.138.102 ssh_port=22 ssh_key=~/.ssh/lightrider_linode_ed25519 tag="$tag" env=secrets/web-server.env
+```
+
 The matchmaker/control image build defaults to a balanced 32G+ RAM profile: two Cargo jobs, thin LTO for native control binaries, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1`.
 
 `MATCHMAKER_CARGO_INCREMENTAL=1` and `WEB_CARGO_INCREMENTAL=1` are available as opt-in build args, but they are not a substitute for Podman layer caching. A changed source tree still invalidates the image build layer unless the builder can reuse cached layers or cache mounts. For repeated deployment attempts, prefer building once locally, pushing the image, and using `SKIP_IMAGE_BUILD=1` for the VPS install.
@@ -694,6 +706,19 @@ If the image is already pushed and you only want to reinstall/update the VPS ser
 
 ```bash
 SKIP_IMAGE_BUILD=1 just deploy-web-server host=45.79.138.102 tag=<already-pushed-tag>
+```
+
+Equivalent wrapper:
+
+```bash
+just deploy-web-server-pull host=45.79.138.102 tag=<already-pushed-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
+If the service fails to become healthy, the installer prints recent `journalctl` output. The service intentionally keeps the failed container around so these commands are useful:
+
+```bash
+ssh -i ~/.ssh/lightrider_linode_ed25519 root@45.79.138.102 \
+  'systemctl status lightrider-matchmaker --no-pager; journalctl -u lightrider-matchmaker -n 160 --no-pager; podman logs lightrider-matchmaker || true'
 ```
 
 If a stale container build cache appears to keep an old Rust target/toolchain layer, force a clean image build:

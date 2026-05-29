@@ -202,7 +202,7 @@ Restart=always
 RestartSec=5
 TimeoutStopSec=30
 ExecStartPre=-/usr/bin/podman rm -f $service_name
-ExecStart=/usr/bin/podman run --rm --name $service_name \\
+ExecStart=/usr/bin/podman run --name $service_name \\
   --env-file $runtime_env \\
   -p 80:8080 \\
   -p 4222:4222 \\
@@ -224,8 +224,17 @@ if [[ "$start_service" == 1 ]]; then
   systemctl --no-pager --full status "$service_name" || true
   echo
   echo "Local health checks:"
-  curl -fsS http://127.0.0.1/ >/dev/null && echo "  web: ok" || echo "  web: not ready"
-  curl -fsS http://127.0.0.1:8222/healthz >/dev/null && echo "  nats: ok" || echo "  nats: not ready"
+  web_ready=0
+  nats_ready=0
+  curl -fsS http://127.0.0.1/ >/dev/null && web_ready=1
+  curl -fsS http://127.0.0.1:8222/healthz >/dev/null && nats_ready=1
+  [[ "$web_ready" == 1 ]] && echo "  web: ok" || echo "  web: not ready"
+  [[ "$nats_ready" == 1 ]] && echo "  nats: ok" || echo "  nats: not ready"
+  if [[ "$web_ready" != 1 || "$nats_ready" != 1 ]]; then
+    echo
+    echo "Recent service logs:"
+    journalctl -u "$service_name" -n 120 --no-pager || true
+  fi
 fi
 
 cat <<EOF

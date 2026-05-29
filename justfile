@@ -897,6 +897,7 @@ deploy-web-server-pull *args:
     host=""
     tag=""
     ssh_port="22"
+    ssh_key=""
     env_file="secrets/web-server.env"
     positional=0
     for arg in {{args}}; do
@@ -904,6 +905,7 @@ deploy-web-server-pull *args:
         host=*) host="${arg#host=}" ;;
         tag=*) tag="${arg#tag=}" ;;
         ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
+        ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
         env=*) env_file="${arg#env=}" ;;
         *)
           case "$positional" in
@@ -911,6 +913,7 @@ deploy-web-server-pull *args:
             1) tag="$arg" ;;
             2) ssh_port="$arg" ;;
             3) env_file="$arg" ;;
+            4) ssh_key="$arg" ;;
             *)
               echo "unexpected extra argument for deploy-web-server-pull: $arg" >&2
               exit 2
@@ -921,11 +924,11 @@ deploy-web-server-pull *args:
       esac
     done
     if [[ -z "$host" || -z "$tag" ]]; then
-      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env]" >&2
-      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [ssh_port=22] [env=secrets/web-server.env]" >&2
+      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env] [ssh_key]" >&2
+      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key]" >&2
       exit 2
     fi
-    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" tag="$tag" env="$env_file"
+    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" ssh_key="$ssh_key" tag="$tag" env="$env_file"
 
 web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102":
     #!/usr/bin/env bash
@@ -985,18 +988,32 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     chmod 600 "{{file}}"
     echo "Wrote {{file}}"
 
-web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.env":
+web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.env" ssh_key="":
     #!/usr/bin/env bash
     set -euo pipefail
     test -f "{{env}}" || {
       echo "{{env}} does not exist. Run: just web-server-env-template" >&2
       exit 1
     }
+    ssh_key="{{ssh_key}}"
+    if [[ "$ssh_key" == "~/"* ]]; then
+      ssh_key="${HOME}/${ssh_key#~/}"
+    fi
+    ssh_opts=(-p "{{ssh_port}}")
+    scp_opts=(-P "{{ssh_port}}")
+    if [[ -n "$ssh_key" ]]; then
+      test -f "$ssh_key" || {
+        echo "SSH key not found: $ssh_key" >&2
+        exit 1
+      }
+      ssh_opts+=(-i "$ssh_key" -o IdentitiesOnly=yes)
+      scp_opts+=(-i "$ssh_key" -o IdentitiesOnly=yes)
+    fi
     remote_dir="/tmp/lightrider-web-server-setup"
-    ssh -p "{{ssh_port}}" "root@{{host}}" "mkdir -p '$remote_dir'"
-    scp -P "{{ssh_port}}" tools/setup_web_server_host.sh "root@{{host}}:$remote_dir/setup_web_server_host.sh"
-    scp -P "{{ssh_port}}" "{{env}}" "root@{{host}}:$remote_dir/web-server.env"
-    ssh -p "{{ssh_port}}" "root@{{host}}" "bash '$remote_dir/setup_web_server_host.sh' --env-file '$remote_dir/web-server.env'; rm -f '$remote_dir/web-server.env'"
+    ssh "${ssh_opts[@]}" "root@{{host}}" "mkdir -p '$remote_dir'"
+    scp "${scp_opts[@]}" tools/setup_web_server_host.sh "root@{{host}}:$remote_dir/setup_web_server_host.sh"
+    scp "${scp_opts[@]}" "{{env}}" "root@{{host}}:$remote_dir/web-server.env"
+    ssh "${ssh_opts[@]}" "root@{{host}}" "bash '$remote_dir/setup_web_server_host.sh' --env-file '$remote_dir/web-server.env'; rm -f '$remote_dir/web-server.env'"
 
 web-server-health host="45.79.138.102":
     #!/usr/bin/env bash
@@ -1009,6 +1026,7 @@ deploy-web-server *args:
     set -euo pipefail
     vps_host=""
     ssh_port="22"
+    ssh_key=""
     tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
     env_file="secrets/web-server.env"
     build_memory=""
@@ -1021,6 +1039,7 @@ deploy-web-server *args:
         host=*) vps_host="${arg#host=}" ;;
         ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
         port=*) ssh_port="${arg#port=}" ;;
+        ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
         tag=*) tag="${arg#tag=}" ;;
         env=*) env_file="${arg#env=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
@@ -1037,6 +1056,7 @@ deploy-web-server *args:
             1) ssh_port="$arg" ;;
             2) tag="$arg" ;;
             3) env_file="$arg" ;;
+            4) ssh_key="$arg" ;;
             *)
               echo "unexpected extra argument: $arg" >&2
               exit 2
@@ -1047,7 +1067,7 @@ deploy-web-server *args:
       esac
     done
     if [[ -z "$vps_host" ]]; then
-      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [tag=<tag>] [env=<file>]" >&2
+      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [env=<file>]" >&2
       echo "example: just deploy-web-server host=45.79.138.102" >&2
       exit 2
     fi
@@ -1057,7 +1077,7 @@ deploy-web-server *args:
       just matchmaker-build-push "$tag" "$build_memory" "$build_cpus" "$build_cpu_quota" "$build_cpuset_cpus"
     fi
     FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host"
-    just web-server-install "$vps_host" "$ssh_port" "$env_file"
+    just web-server-install "$vps_host" "$ssh_port" "$env_file" "$ssh_key"
     just web-server-health "$vps_host"
 
 netcode-secret protocol_id="":

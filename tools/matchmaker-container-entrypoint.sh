@@ -4,6 +4,20 @@ set -euo pipefail
 pids=()
 
 cleanup() {
+  status=$?
+  if [[ "$status" != "0" ]]; then
+    echo "lightrider-matchmaker: entrypoint exiting with status $status" >&2
+    for log_file in \
+      /var/log/nats.log \
+      /var/log/bevygap_matchmaker.log \
+      /var/log/bevygap_matchmaker_httpd.log \
+      /var/log/nginx/error.log; do
+      if [[ -s "$log_file" ]]; then
+        echo "==> $log_file <==" >&2
+        tail -n 200 "$log_file" >&2 || true
+      fi
+    done
+  fi
   for pid in "${pids[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
@@ -146,6 +160,7 @@ pids+=("$!")
   > /var/log/bevygap_matchmaker_httpd.log 2>&1 &
 pids+=("$!")
 
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
 cat > /etc/nginx/conf.d/default.conf <<NGINX
 server {
     listen ${web_port};

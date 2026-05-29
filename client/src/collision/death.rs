@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use lightyear::prelude::{Client, Controlled, MessageReceiver, Predicted};
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::{
-    DeathReason, HasPlayer, Player, PlayerDeath, PlayerDeathStats,
+    DeathReason, HasPlayer, Player, PlayerDeath, PlayerDeathStats, TailPoints,
 };
 
 pub(crate) struct DeathPlugin;
@@ -16,6 +16,7 @@ pub(crate) struct DeathPlugin;
 pub(crate) struct ConfirmedDeath {
     pub(crate) message: PlayerDeath,
     pub(crate) local_player: bool,
+    pub(crate) position: Option<Vec2>,
 }
 
 #[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
@@ -70,6 +71,7 @@ fn handle_death_message(
     time: Res<Time>,
     mut receivers: Query<&mut MessageReceiver<PlayerDeath>, With<Client>>,
     player: Query<Entity, (With<Player>, With<Controlled>)>,
+    tails: Query<&TailPoints>,
     mut confirmed_deaths: MessageWriter<ConfirmedDeath>,
 ) {
     let Ok(mut receiver) = receivers.single_mut() else {
@@ -80,6 +82,7 @@ fn handle_death_message(
         trace!(?message, "Received death message");
         let local_player_died = local_player == Some(message.killed_player);
         confirmed_deaths.write(ConfirmedDeath {
+            position: death_sound_position(&message, &tails),
             message: message.clone(),
             local_player: local_player_died,
         });
@@ -93,6 +96,14 @@ fn handle_death_message(
             next_state.set(GameState::Dead);
         }
     }
+}
+
+fn death_sound_position(message: &PlayerDeath, tails: &Query<&TailPoints>) -> Option<Vec2> {
+    tails
+        .get(message.killed_snake)
+        .or_else(|_| tails.get(message.killer_snake))
+        .ok()
+        .map(|tail| tail.front().0)
 }
 
 fn death_camera_target(message: &PlayerDeath) -> Option<Entity> {

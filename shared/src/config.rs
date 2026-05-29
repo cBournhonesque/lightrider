@@ -168,6 +168,14 @@ pub struct SoundConfig {
     pub master_volume: f32,
     pub death_volume: f32,
     pub food_volume: f32,
+    pub spatial_audio: bool,
+    pub spatial_scale: f32,
+    pub spatial_listener_ear_gap: f32,
+    pub remote_sound_full_volume_distance: f32,
+    pub remote_sound_max_distance: f32,
+    pub remote_death_volume: f32,
+    pub remote_food_volume: f32,
+    pub remote_speed_volume: f32,
     pub speed_loop_start_speed: f32,
     pub speed_loop_min_volume: f32,
     pub speed_loop_max_volume: f32,
@@ -182,6 +190,14 @@ impl Default for SoundConfig {
             master_volume: 1.0,
             death_volume: 0.2,
             food_volume: 0.3,
+            spatial_audio: true,
+            spatial_scale: 0.02,
+            spatial_listener_ear_gap: 8.0,
+            remote_sound_full_volume_distance: 120.0,
+            remote_sound_max_distance: 900.0,
+            remote_death_volume: 1.0,
+            remote_food_volume: 0.65,
+            remote_speed_volume: 0.45,
             speed_loop_start_speed: 1.0,
             speed_loop_min_volume: 0.05,
             speed_loop_max_volume: 0.8,
@@ -378,6 +394,8 @@ mod tests {
         assert_eq!(config.render.debug_camera_scale, 1.0);
         assert!(config.sound.enabled);
         assert_eq!(config.sound.death_volume, 0.2);
+        assert_eq!(config.sound.remote_sound_max_distance, 900.0);
+        assert_eq!(config.sound.remote_speed_volume, 0.45);
         assert_eq!(config.sound.speed_loop_max_volume, 0.8);
         assert_eq!(config.food.visual_radius, 3.0);
         assert_eq!(config.food.radius, 8.0);
