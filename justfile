@@ -498,14 +498,19 @@ matchmaker-build tag=edgegap-default-tag: edgegap-context
     set -euo pipefail
     source secrets/edgegap.env
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:{{tag}}"
-    # Defaults are intentionally conservative because the matchmaker image builds
-    # Bevygap plus the WASM client in one container, and release LTO can OOM.
+    # Defaults are balanced for a 32G+ build machine. Drop the env values to
+    # 1/false/16 if rustc is OOM-killed on a smaller host.
+    cache_args=()
+    if [[ "${NO_CACHE:-0}" == "1" ]]; then
+      cache_args+=(--no-cache)
+    fi
     podman build \
-      --build-arg "MATCHMAKER_CARGO_JOBS=${MATCHMAKER_CARGO_JOBS:-1}" \
-      --build-arg "MATCHMAKER_RELEASE_OPT_LEVEL=${MATCHMAKER_RELEASE_OPT_LEVEL:-1}" \
-      --build-arg "MATCHMAKER_RELEASE_LTO=${MATCHMAKER_RELEASE_LTO:-false}" \
-      --build-arg "MATCHMAKER_RELEASE_CODEGEN_UNITS=${MATCHMAKER_RELEASE_CODEGEN_UNITS:-16}" \
-      --build-arg "WEB_CARGO_JOBS=${WEB_CARGO_JOBS:-1}" \
+      "${cache_args[@]}" \
+      --build-arg "MATCHMAKER_CARGO_JOBS=${MATCHMAKER_CARGO_JOBS:-2}" \
+      --build-arg "MATCHMAKER_RELEASE_OPT_LEVEL=${MATCHMAKER_RELEASE_OPT_LEVEL:-2}" \
+      --build-arg "MATCHMAKER_RELEASE_LTO=${MATCHMAKER_RELEASE_LTO:-thin}" \
+      --build-arg "MATCHMAKER_RELEASE_CODEGEN_UNITS=${MATCHMAKER_RELEASE_CODEGEN_UNITS:-8}" \
+      --build-arg "WEB_CARGO_JOBS=${WEB_CARGO_JOBS:-2}" \
       --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-s}" \
       --build-arg "WEB_RELEASE_LTO=${WEB_RELEASE_LTO:-false}" \
       --build-arg "WEB_RELEASE_CODEGEN_UNITS=${WEB_RELEASE_CODEGEN_UNITS:-16}" \

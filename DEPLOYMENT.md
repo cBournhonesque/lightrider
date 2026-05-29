@@ -425,16 +425,30 @@ tag="$(git rev-parse --short HEAD)"
 just deploy-web-server host=45.79.138.102 ssh_port=22 tag="$tag" env=secrets/web-server.env
 ```
 
-The matchmaker/control image build is intentionally memory-conservative by default. It builds with one Cargo job, disables release LTO, and uses more codegen units because Bevygap's upstream release profile is expensive enough to be killed by the OS on smaller machines. If the image is already pushed and you only want to reinstall/update the VPS service, skip the local build:
+The matchmaker/control image build defaults to a balanced 32G+ RAM profile: two Cargo jobs, thin LTO for native control binaries, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1`.
+
+The image build also installs the `wasm32-unknown-unknown` Rust target after copying the repo, so the target is installed for the active `rust-toolchain.toml` override. If you build the browser client directly outside Docker and see `can't find crate for 'core'`, install the target locally:
+
+```bash
+rustup target add wasm32-unknown-unknown
+```
+
+If the image is already pushed and you only want to reinstall/update the VPS service, skip the local build:
 
 ```bash
 SKIP_IMAGE_BUILD=1 just deploy-web-server host=45.79.138.102 tag=<already-pushed-tag>
 ```
 
-On a larger machine you can opt into faster/heavier image builds:
+If a stale container build cache appears to keep an old Rust target/toolchain layer, force a clean image build:
 
 ```bash
-MATCHMAKER_CARGO_JOBS=2 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=2 just matchmaker-build <tag>
+NO_CACHE=1 just matchmaker-build <tag>
+```
+
+On a larger machine you can opt into a heavier build:
+
+```bash
+MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 just matchmaker-build <tag>
 ```
 
 Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup.
