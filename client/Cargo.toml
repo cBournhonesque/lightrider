@@ -16,10 +16,6 @@ publish = false
 name = "lightrider-client"
 path = "src/bin/main.rs"
 
-[[bin]]
-name = "lightrider-web"
-path = "src/bin/web.rs"
-
 [features]
 default = []
 bevygap = ["dep:bevygap_client_plugin"]

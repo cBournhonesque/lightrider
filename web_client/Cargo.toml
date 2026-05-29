@@ -1,0 +1,34 @@
+[package]
+name = "web_client"
+version = "0.1.0"
+authors = ["Charles Bournhonesque <charlesbour@gmail.com>"]
+edition = "2021"
+rust-version = "1.89"
+description = "Browser shell for the lightrider game"
+repository = "https://github.com/cBournhonesque/lightrider"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "lightrider-web"
+path = "src/main.rs"
+
+[dependencies]
+client = { path = "../client", default-features = false }
+shared = { path = "../shared" }
+bevy.workspace = true
+leptos = { version = "0.8", features = ["csr"] }
+leptos-bevy-canvas = "0.5.2"
+
+[features]
+default = []
+bevygap = ["client/bevygap"]
+bevygap-matchmaker-tls = ["bevygap", "client/bevygap-matchmaker-tls"]
+
+[target."cfg(target_family = \"wasm\")".dependencies]
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = [
+    "Location",
+    "UrlSearchParams",
+    "Window",
+] }

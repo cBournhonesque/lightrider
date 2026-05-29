@@ -3,7 +3,7 @@ use lightyear::connection::client::Connected;
 use lightyear::prelude::{Client, MessageSender};
 
 use shared::network::protocol::prelude::{
-    GameChannel, PlayerNameUpdate, RoomId, RoomJoinMode, RoomJoinRequest,
+    GameChannel, PlayerNameUpdate, RoomCode, RoomId, RoomJoinMode, RoomJoinRequest,
 };
 
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
@@ -31,10 +31,17 @@ pub(crate) fn parse_room_join_mode(value: &str) -> Result<RoomJoinMode, String> 
     match value.to_ascii_lowercase().as_str() {
         "auto" | "random" => Ok(RoomJoinMode::Auto),
         "new" | "create" => Ok(RoomJoinMode::New),
-        _ => value
-            .parse::<u64>()
-            .map(|id| RoomJoinMode::Specific(RoomId(id)))
-            .map_err(|_| "expected `auto`, `new`, or a numeric room id".to_string()),
+        _ => RoomCode::parse(value)
+            .map(RoomJoinMode::Private)
+            .or_else(|_| {
+                value
+                    .parse::<u64>()
+                    .map(|id| RoomJoinMode::Specific(RoomId(id)))
+            })
+            .map_err(|_| {
+                "expected `auto`, `new`, a four-letter private code, or a numeric room id"
+                    .to_string()
+            }),
     }
 }
 
@@ -90,6 +97,10 @@ mod tests {
     fn parses_room_join_modes() {
         assert_eq!(parse_room_join_mode("auto"), Ok(RoomJoinMode::Auto));
         assert_eq!(parse_room_join_mode("new"), Ok(RoomJoinMode::New));
+        assert_eq!(
+            parse_room_join_mode("abcd"),
+            Ok(RoomJoinMode::Private(RoomCode::parse("ABCD").unwrap()))
+        );
         assert_eq!(
             parse_room_join_mode("42"),
             Ok(RoomJoinMode::Specific(RoomId(42)))

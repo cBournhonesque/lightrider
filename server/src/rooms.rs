@@ -27,6 +27,14 @@ pub(crate) struct RoomState {
     pub(crate) game_room: RoomId,
     pub(crate) lightyear_room: LightyearRoomId,
     human_count: usize,
+    private: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RoomMetrics {
+    pub(crate) game_room: RoomId,
+    pub(crate) human_count: usize,
+    pub(crate) private: bool,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -54,6 +62,14 @@ impl RoomDirectory {
             .map(|room| room.lightyear_room)
     }
 
+    pub(crate) fn metrics(&self) -> impl Iterator<Item = RoomMetrics> + '_ {
+        self.rooms.iter().map(|room| RoomMetrics {
+            game_room: room.game_room,
+            human_count: room.human_count,
+            private: room.private,
+        })
+    }
+
     pub(crate) fn assign_auto(
         &mut self,
         commands: &mut Commands,
@@ -61,17 +77,36 @@ impl RoomDirectory {
         config: &GameConfig,
         roll: usize,
     ) -> RoomAssignment {
-        match select_auto_room(
-            self.rooms.iter().map(|room| room.human_count),
-            config.rooms.max_players_per_room,
-            config.rooms.max_rooms,
-            roll,
-        ) {
-            AutoRoomSelection::Existing(index) | AutoRoomSelection::Fallback(index) => {
-                self.assignment_at(index)
-            }
-            AutoRoomSelection::Create => self.create_room(commands, room_allocator, config, None),
+        let max_players_per_room = config.rooms.max_players_per_room.max(1);
+        let max_rooms = config.rooms.max_rooms.max(1);
+        let public_indices = self
+            .rooms
+            .iter()
+            .enumerate()
+            .filter_map(|(index, room)| (!room.private).then_some(index))
+            .collect::<Vec<_>>();
+        let candidates = public_indices
+            .iter()
+            .copied()
+            .filter(|index| self.rooms[*index].human_count < max_players_per_room)
+            .collect::<Vec<_>>();
+
+        if !candidates.is_empty() {
+            return self.assignment_at(candidates[roll % candidates.len()]);
         }
+        if self.rooms.len() < max_rooms {
+            return self.create_room(commands, room_allocator, config, None);
+        }
+
+        if let Some(fallback) = public_indices
+            .into_iter()
+            .min_by_key(|index| self.rooms[*index].human_count)
+        {
+            return self.assignment_at(fallback);
+        }
+
+        // Preserve private-room isolation even when all configured room slots are private.
+        self.create_room(commands, room_allocator, config, None)
     }
 
     pub(crate) fn assign_for_mode(
@@ -92,16 +127,46 @@ impl RoomDirectory {
                 }
             }
             RoomJoinMode::Specific(room_id) => {
-                if let Some(existing) = self.rooms.iter().position(|room| room.game_room == room_id)
-                {
-                    self.assignment_at(existing)
-                } else if self.rooms.len() < config.rooms.max_rooms.max(1) {
-                    self.create_room(commands, room_allocator, config, Some(room_id))
-                } else {
-                    self.assign_auto(commands, room_allocator, config, roll)
-                }
+                self.assign_specific(commands, room_allocator, config, room_id, roll)
+            }
+            RoomJoinMode::Private(code) => {
+                self.assign_private(commands, room_allocator, config, code.room_id())
             }
         }
+    }
+
+    fn assign_specific(
+        &mut self,
+        commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
+        config: &GameConfig,
+        room_id: RoomId,
+        roll: usize,
+    ) -> RoomAssignment {
+        if let Some(existing) = self.rooms.iter().position(|room| room.game_room == room_id) {
+            self.assignment_at(existing)
+        } else if self.rooms.len() < config.rooms.max_rooms.max(1) {
+            self.create_room(commands, room_allocator, config, Some(room_id))
+        } else {
+            self.assign_auto(commands, room_allocator, config, roll)
+        }
+    }
+
+    fn assign_private(
+        &mut self,
+        commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
+        config: &GameConfig,
+        room_id: RoomId,
+    ) -> RoomAssignment {
+        if let Some(existing) = self.rooms.iter().position(|room| room.game_room == room_id) {
+            return self.assignment_at(existing);
+        }
+
+        // A full server should not route a private-code request into a public room.
+        // Treat max_rooms as a soft guard here; Bevygap/server capacity policy should
+        // prevent this path in production.
+        self.create_room(commands, room_allocator, config, Some(room_id))
     }
 
     pub(crate) fn register_human(&mut self, room_id: RoomId) {
@@ -140,7 +205,9 @@ impl RoomDirectory {
         requested: Option<RoomId>,
     ) -> RoomAssignment {
         let game_room = requested.unwrap_or_else(|| RoomId(self.next_room_id));
-        self.next_room_id = self.next_room_id.max(game_room.0.saturating_add(1));
+        if requested.is_none() || !RoomCode::is_private_room_id(game_room) {
+            self.next_room_id = self.next_room_id.max(game_room.0.saturating_add(1));
+        }
         let lightyear_room = room_allocator.allocate();
         commands.spawn(Name::from(format!("Room {}", game_room.0)));
         spawn_room_map(commands, config, game_room);
@@ -148,50 +215,13 @@ impl RoomDirectory {
             game_room,
             lightyear_room,
             human_count: 0,
+            private: RoomCode::is_private_room_id(game_room),
         });
         RoomAssignment {
             game_room,
             lightyear_room,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AutoRoomSelection {
-    Existing(usize),
-    Create,
-    Fallback(usize),
-}
-
-fn select_auto_room(
-    occupancies: impl IntoIterator<Item = usize>,
-    max_players_per_room: usize,
-    max_rooms: usize,
-    roll: usize,
-) -> AutoRoomSelection {
-    let max_rooms = max_rooms.max(1);
-    let max_players_per_room = max_players_per_room.max(1);
-    let occupancies = occupancies.into_iter().collect::<Vec<_>>();
-    let candidates = occupancies
-        .iter()
-        .enumerate()
-        .filter_map(|(index, count)| (*count < max_players_per_room).then_some(index))
-        .collect::<Vec<_>>();
-
-    if !candidates.is_empty() {
-        return AutoRoomSelection::Existing(candidates[roll % candidates.len()]);
-    }
-    if occupancies.len() < max_rooms {
-        return AutoRoomSelection::Create;
-    }
-
-    let fallback = occupancies
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, count)| **count)
-        .map(|(index, _)| index)
-        .unwrap_or(0);
-    AutoRoomSelection::Fallback(fallback)
 }
 
 pub(crate) struct ServerRoomsPlugin;
@@ -441,23 +471,105 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auto_room_selects_available_room_with_roll() {
+    fn auto_room_does_not_assign_private_rooms() {
+        #[derive(Resource, Default)]
+        struct Results {
+            private: Option<RoomAssignment>,
+            public: Option<RoomAssignment>,
+        }
+
+        fn assign_rooms(
+            mut commands: Commands,
+            config: Res<GameConfig>,
+            mut room_allocator: ResMut<RoomAllocator>,
+            mut directory: ResMut<RoomDirectory>,
+            mut results: ResMut<Results>,
+        ) {
+            let private = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Private(RoomCode::parse("ABCD").unwrap()),
+                0,
+            );
+            let public = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Auto,
+                0,
+            );
+            results.private = Some(private);
+            results.public = Some(public);
+        }
+
+        let mut app = App::new();
+        app.init_resource::<RoomAllocator>();
+        app.init_resource::<RoomDirectory>();
+        app.init_resource::<Results>();
+        app.insert_resource(GameConfig::default());
+        app.add_systems(Update, assign_rooms);
+
+        app.update();
+
+        let results = app.world().resource::<Results>();
         assert_eq!(
-            select_auto_room([0, 2, 1], 2, 4, 1),
-            AutoRoomSelection::Existing(2)
+            results.private.unwrap().game_room,
+            RoomCode::parse("ABCD").unwrap().room_id()
         );
+        assert_eq!(results.public.unwrap().game_room, RoomId(0));
     }
 
     #[test]
-    fn auto_room_creates_when_all_rooms_are_full_but_limit_allows() {
-        assert_eq!(select_auto_room([2, 2], 2, 3, 0), AutoRoomSelection::Create);
-    }
+    fn private_room_does_not_fall_back_to_public_when_room_limit_is_full() {
+        #[derive(Resource, Default)]
+        struct Results {
+            public: Option<RoomAssignment>,
+            private: Option<RoomAssignment>,
+        }
 
-    #[test]
-    fn auto_room_falls_back_to_least_populated_at_room_limit() {
+        fn assign_rooms(
+            mut commands: Commands,
+            config: Res<GameConfig>,
+            mut room_allocator: ResMut<RoomAllocator>,
+            mut directory: ResMut<RoomDirectory>,
+            mut results: ResMut<Results>,
+        ) {
+            let public = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Auto,
+                0,
+            );
+            let private = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Private(RoomCode::parse("WXYZ").unwrap()),
+                0,
+            );
+            results.public = Some(public);
+            results.private = Some(private);
+        }
+
+        let mut config = GameConfig::default();
+        config.rooms.max_rooms = 1;
+
+        let mut app = App::new();
+        app.init_resource::<RoomAllocator>();
+        app.init_resource::<RoomDirectory>();
+        app.init_resource::<Results>();
+        app.insert_resource(config);
+        app.add_systems(Update, assign_rooms);
+
+        app.update();
+
+        let results = app.world().resource::<Results>();
+        assert_eq!(results.public.unwrap().game_room, RoomId(0));
         assert_eq!(
-            select_auto_room([4, 2, 3], 2, 3, 0),
-            AutoRoomSelection::Fallback(1)
+            results.private.unwrap().game_room,
+            RoomCode::parse("WXYZ").unwrap().room_id()
         );
     }
 

@@ -242,6 +242,9 @@ bevygap-matchmaker-local app_name="lightrider" app_version="dev":
       --app-name {{app_name}} \
       --app-version {{app_version}} \
       --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}" \
+      --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
+      --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
+      --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
       ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"}
 
 bevygap-matchmaker-mock-local app_name="lightrider" app_version="dev" public_ip="127.0.0.1" port="7777":
@@ -256,6 +259,9 @@ bevygap-matchmaker-mock-local app_name="lightrider" app_version="dev" public_ip=
       --app-name {{app_name}} \
       --app-version {{app_version}} \
       --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}" \
+      --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
+      --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
+      --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
       ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"} \
       --mock-edgegap \
       --mock-public-ip {{public_ip}} \
@@ -518,6 +524,80 @@ prod-images-build tag=edgegap-default-tag:
 prod-images-push tag=edgegap-default-tag:
     just edgegap-push {{tag}}
     just matchmaker-push {{tag}}
+
+linode-control-env-template tag=edgegap-default-tag file="secrets/linode-control-host.env" host="45.79.138.102":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -f "{{file}}" && "${FORCE:-0}" != "1" ]]; then
+      echo "{{file}} already exists; set FORCE=1 to overwrite" >&2
+      exit 1
+    fi
+    if [[ -f secrets/edgegap.env ]]; then
+      source secrets/edgegap.env
+    fi
+    if [[ -f secrets/prod-netcode.env ]]; then
+      source secrets/prod-netcode.env
+    fi
+    if [[ -z "${LIGHTRIDER_PROTOCOL_ID:-}" ]]; then
+      LIGHTRIDER_PROTOCOL_ID="$(od -An -N8 -tu8 /dev/urandom | tr -d ' ')"
+    fi
+    if [[ -z "${LIGHTRIDER_PRIVATE_KEY:-}" ]]; then
+      LIGHTRIDER_PRIVATE_KEY="$(openssl rand -hex 32)"
+    fi
+    if [[ -z "${NATS_PASSWORD:-}" ]]; then
+      NATS_PASSWORD="$(openssl rand -hex 24)"
+    fi
+    mkdir -p "$(dirname "{{file}}")"
+    write_env() {
+      printf '%s=' "$1"
+      printf '%q\n' "$2"
+    }
+    {
+      echo "# Lightrider Linode control-host install env."
+      echo "# This file is shell-sourced locally, then converted to a container env file on the Linode."
+      echo "# Keep LIGHTRIDER_PROTOCOL_ID/LIGHTRIDER_PRIVATE_KEY in sync with the Edgegap game-server app version."
+      write_env LIGHTRIDER_MATCHMAKER_IMAGE "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-matchmaker:{{tag}}"
+      write_env LIGHTRIDER_MATCHMAKER_TAG "{{tag}}"
+      write_env EDGEGAP_APP_NAME "${EDGEGAP_APP_NAME:-lightrider}"
+      write_env EDGEGAP_APP_VERSION "${EDGEGAP_APP_VERSION:-{{tag}}}"
+      write_env EDGEGAP_API_KEY "${EDGEGAP_API_KEY:-${EDGEGAP_API_TOKEN:-}}"
+      write_env EDGEGAP_REGISTRY_URL "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}"
+      write_env EDGEGAP_REGISTRY_PROJECT "${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}"
+      write_env EDGEGAP_REGISTRY_USERNAME "${EDGEGAP_REGISTRY_USERNAME:-}"
+      write_env EDGEGAP_REGISTRY_TOKEN "${EDGEGAP_REGISTRY_TOKEN:-}"
+      write_env LIGHTRIDER_PROTOCOL_ID "$LIGHTRIDER_PROTOCOL_ID"
+      write_env LIGHTRIDER_PRIVATE_KEY "$LIGHTRIDER_PRIVATE_KEY"
+      write_env LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE "1"
+      write_env NATS_USER "${NATS_USER:-lightrider}"
+      write_env NATS_PASSWORD "$NATS_PASSWORD"
+      write_env NATS_ALLOW_INSECURE "${NATS_ALLOW_INSECURE:-1}"
+      write_env MATCHMAKER_CORS "${MATCHMAKER_CORS:-http://{{host}}}"
+      write_env BEVYGAP_NATS_NAMESPACE "${BEVYGAP_NATS_NAMESPACE:-lightrider_{{tag}}}"
+      write_env BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}"
+      write_env BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}"
+      write_env BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}"
+    } > "{{file}}"
+    chmod 600 "{{file}}"
+    echo "Wrote {{file}}"
+
+linode-control-install host="45.79.138.102" ssh_port="22" env="secrets/linode-control-host.env":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -f "{{env}}" || {
+      echo "{{env}} does not exist. Run: just linode-control-env-template" >&2
+      exit 1
+    }
+    remote_dir="/tmp/lightrider-control-setup"
+    ssh -p "{{ssh_port}}" "root@{{host}}" "mkdir -p '$remote_dir'"
+    scp -P "{{ssh_port}}" tools/setup_linode_control_host.sh "root@{{host}}:$remote_dir/setup_linode_control_host.sh"
+    scp -P "{{ssh_port}}" "{{env}}" "root@{{host}}:$remote_dir/linode-control-host.env"
+    ssh -p "{{ssh_port}}" "root@{{host}}" "bash '$remote_dir/setup_linode_control_host.sh' --env-file '$remote_dir/linode-control-host.env'"
+
+linode-control-health host="45.79.138.102":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    curl -fsS "http://{{host}}/" >/dev/null
+    echo "web ok: http://{{host}}/"
 
 netcode-secret:
     #!/usr/bin/env bash

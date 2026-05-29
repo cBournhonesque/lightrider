@@ -34,7 +34,7 @@ RUN CARGO_INCREMENTAL=0 cargo build --release -j 2 \
     cp /src/bevygap/target/release/bevygap_matchmaker_httpd /tmp/bevygap_matchmaker_httpd
 
 RUN CARGO_INCREMENTAL=0 cargo build --release -j 2 \
-        -p client \
+        -p web_client \
         --features bevygap \
         --bin lightrider-web \
         --target wasm32-unknown-unknown && \

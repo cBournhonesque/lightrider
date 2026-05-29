@@ -11,6 +11,8 @@ use shared::SharedPlugin;
 #[cfg(feature = "bevygap")]
 use bevygap_server_plugin::prelude::BevygapServerPlugin;
 
+#[cfg(feature = "bevygap")]
+mod bevygap_metrics;
 mod bots;
 pub(crate) mod collision;
 mod debug;
@@ -77,6 +79,10 @@ pub async fn app(cli: Cli) -> App {
 
     // rooms
     app.add_plugins(rooms::ServerRoomsPlugin);
+    #[cfg(feature = "bevygap")]
+    if cli.bevygap {
+        app.add_plugins(bevygap_metrics::ServerBevygapMetricsPlugin);
+    }
 
     // debug
     app.add_plugins(debug::DebugPlugin);

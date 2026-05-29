@@ -4,6 +4,7 @@ members = [
   "client",
   "server",
   "shared",
+  "web_client",
 ]
 
 [workspace.dependencies]

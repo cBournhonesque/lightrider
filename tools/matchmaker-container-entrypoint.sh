@@ -116,6 +116,9 @@ matchmaker_args=(
   --app-name "${EDGEGAP_APP_NAME:-lightrider}"
   --app-version "${EDGEGAP_APP_VERSION:-dev}"
   --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}"
+  --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}"
+  --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}"
+  --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}"
 )
 
 if [[ -n "${LIGHTRIDER_PRIVATE_KEY:-}" ]]; then

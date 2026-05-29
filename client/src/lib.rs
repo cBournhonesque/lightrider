@@ -5,8 +5,10 @@ use std::time::Duration;
 use bevy::app::{App, PluginGroup, ScheduleRunnerPlugin};
 use bevy::diagnostic::DiagnosticsPlugin;
 use bevy::input::InputPlugin;
+use bevy::prelude::default;
 use bevy::state::app::StatesPlugin;
 use bevy::transform::TransformPlugin;
+use bevy::window::{Window, WindowPlugin};
 use bevy::{DefaultPlugins, MinimalPlugins};
 use clap::{Parser, ValueEnum};
 
@@ -16,7 +18,10 @@ use shared::network::protocol::prelude::RoomJoinMode;
 use shared::SharedPlugin;
 
 #[cfg(feature = "bevygap")]
-use bevygap_client_plugin::prelude::{BevygapClientConfig, BevygapClientPlugin, BevygapConnectExt};
+use bevygap_client_plugin::prelude::{
+    BevygapClientConfig, BevygapClientPlugin, BevygapConnectExt,
+    RoomSelection as BevygapRoomSelection,
+};
 
 mod bot;
 mod camera;
@@ -103,6 +108,20 @@ pub struct Cli {
 
     #[arg(long)]
     config: Option<PathBuf>,
+
+    #[arg(skip)]
+    canvas_selector: Option<String>,
+}
+
+#[cfg(feature = "bevygap")]
+#[derive(Clone, Debug)]
+pub struct WebClientOptions {
+    pub matchmaker_url: String,
+    pub matchmaker_game: String,
+    pub matchmaker_version: String,
+    pub room: RoomJoinMode,
+    pub name: String,
+    pub canvas_selector: String,
 }
 
 #[cfg(feature = "bevygap")]
@@ -125,8 +144,20 @@ impl Cli {
             room: RoomJoinMode::Auto,
             name: String::new(),
             config: None,
+            canvas_selector: Some("#bevy_canvas".to_string()),
         }
     }
+}
+
+#[cfg(feature = "bevygap")]
+pub fn web_app(options: WebClientOptions) -> App {
+    let mut cli = Cli::web_defaults(options.matchmaker_url);
+    cli.matchmaker_game = options.matchmaker_game;
+    cli.matchmaker_version = options.matchmaker_version;
+    cli.room = options.room;
+    cli.name = options.name;
+    cli.canvas_selector = Some(options.canvas_selector);
+    app(cli)
 }
 
 pub fn app(cli: Cli) -> App {
@@ -155,7 +186,19 @@ pub fn app(cli: Cli) -> App {
             log_plugin,
         ));
     } else {
-        app.add_plugins(DefaultPlugins.set(log_plugin));
+        let mut plugins = DefaultPlugins.set(log_plugin);
+        if let Some(canvas_selector) = cli.canvas_selector.clone() {
+            plugins = plugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    canvas: Some(canvas_selector),
+                    fit_canvas_to_parent: true,
+                    prevent_default_event_handling: false,
+                    ..default()
+                }),
+                ..default()
+            });
+        }
+        app.add_plugins(plugins);
     }
 
     #[cfg(feature = "bevygap")]
@@ -167,6 +210,7 @@ pub fn app(cli: Cli) -> App {
             fake_client_ip: cli.matchmaker_fake_client_ip.clone(),
             game_name: cli.matchmaker_game.clone(),
             game_version: cli.matchmaker_version.clone(),
+            room: bevygap_room_selection(cli.room),
         });
 
     #[cfg(feature = "bevygap")]
@@ -223,6 +267,16 @@ pub fn app(cli: Cli) -> App {
 #[cfg(feature = "bevygap")]
 fn request_bevygap_session(mut commands: bevy::prelude::Commands) {
     commands.bevygap_connect_client();
+}
+
+#[cfg(feature = "bevygap")]
+fn bevygap_room_selection(room: RoomJoinMode) -> BevygapRoomSelection {
+    match room {
+        RoomJoinMode::Auto => BevygapRoomSelection::Auto,
+        RoomJoinMode::New => BevygapRoomSelection::New,
+        RoomJoinMode::Specific(room_id) => BevygapRoomSelection::Id(room_id.0.to_string()),
+        RoomJoinMode::Private(code) => BevygapRoomSelection::Code(code.to_string()),
+    }
 }
 
 fn player_name(cli: &Cli) -> String {

@@ -1,0 +1,249 @@
+#[cfg(all(target_arch = "wasm32", feature = "bevygap"))]
+mod wasm {
+    use client::WebClientOptions;
+    use leptos::prelude::*;
+    use leptos_bevy_canvas::prelude::*;
+    use shared::network::protocol::prelude::{RoomCode, RoomId, RoomJoinMode};
+
+    const DEFAULT_GAME: &str = "lightrider";
+    const DEFAULT_VERSION: &str = "dev";
+    const CANVAS_ID: &str = "bevy_canvas";
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct BrowserSettings {
+        matchmaker_url: String,
+        matchmaker_game: String,
+        matchmaker_version: String,
+        player_name: String,
+        room: RoomJoinMode,
+    }
+
+    pub fn run() {
+        console_error_panic_hook::set_once();
+        leptos::mount::mount_to_body(|| view! { <LightriderWebApp /> });
+    }
+
+    #[component]
+    fn LightriderWebApp() -> impl IntoView {
+        let settings = BrowserSettings::from_location();
+        let initial_room_code = room_input_value(settings.room);
+        let show_modal = settings.player_name.trim().is_empty();
+        let bevy_options = settings.bevy_options();
+
+        let (name, set_name) = signal(settings.player_name.clone());
+        let (room_code, set_room_code) = signal(initial_room_code);
+        let (modal_open, set_modal_open) = signal(show_modal);
+        let (error, set_error) = signal(String::new());
+
+        let on_name_input = move |event| {
+            set_name.set(event_target_value(&event));
+        };
+        let on_room_input = move |event| {
+            set_room_code.set(event_target_value(&event).to_ascii_uppercase());
+        };
+        let on_submit = move |event: web_sys::SubmitEvent| {
+            event.prevent_default();
+            let player_name = sanitize_player_name(&name.get());
+            let room = room_code.get();
+            match parse_room_input(&room) {
+                Ok(room_mode) => {
+                    set_error.set(String::new());
+                    apply_settings_to_url(&player_name, room_mode);
+                    set_modal_open.set(false);
+                }
+                Err(message) => set_error.set(message),
+            }
+        };
+
+        view! {
+            <main class="lightrider-web-shell">
+                <div class="game-stage">
+                    <BevyCanvas
+                        canvas_id=CANVAS_ID
+                        init=move || client::web_app(bevy_options.clone())
+                    />
+                </div>
+                <div class=move || if modal_open.get() { "menu-backdrop" } else { "menu-backdrop hidden" }>
+                    <section class="join-modal" aria-label="Lightrider menu">
+                        <h1>"LIGHTRIDER"</h1>
+                        <form on:submit=on_submit>
+                            <input
+                                class="name-input"
+                                autocomplete="nickname"
+                                maxlength="18"
+                                placeholder="Name"
+                                prop:value=name
+                                on:input=on_name_input
+                            />
+                            <div class="room-row">
+                                <input
+                                    class="room-input"
+                                    autocomplete="off"
+                                    maxlength="4"
+                                    placeholder="ROOM"
+                                    prop:value=room_code
+                                    on:input=on_room_input
+                                />
+                                <button class="play-button" type="submit">"PLAY"</button>
+                            </div>
+                            <p class=move || if error.get().is_empty() { "form-error hidden" } else { "form-error" }>
+                                {move || error.get()}
+                            </p>
+                        </form>
+                        <div class="modal-links">
+                            <button type="button" on:click=move |_| {
+                                set_room_code.set(String::new());
+                            }>"PUBLIC"</button>
+                            <a href="https://github.com/cBournhonesque/lightrider" target="_blank" rel="noreferrer">"GitHub"</a>
+                        </div>
+                    </section>
+                </div>
+                <button
+                    class=move || if modal_open.get() { "menu-button hidden" } else { "menu-button" }
+                    type="button"
+                    aria-label="Open menu"
+                    on:click=move |_| set_modal_open.set(true)
+                >
+                    "MENU"
+                </button>
+            </main>
+        }
+    }
+
+    impl BrowserSettings {
+        fn from_location() -> Self {
+            let location = window_location();
+            let search = location.search().unwrap_or_default();
+            let params = web_sys::UrlSearchParams::new_with_str(&search)
+                .expect("failed to parse query parameters");
+            let room = parse_room_param(params.get("room"));
+            Self {
+                matchmaker_url: params
+                    .get("matchmaker_url")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(default_matchmaker_url),
+                matchmaker_game: params
+                    .get("matchmaker_game")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| DEFAULT_GAME.to_string()),
+                matchmaker_version: params
+                    .get("matchmaker_version")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| DEFAULT_VERSION.to_string()),
+                player_name: params
+                    .get("name")
+                    .map(|name| sanitize_player_name(&name))
+                    .unwrap_or_default(),
+                room,
+            }
+        }
+
+        fn bevy_options(&self) -> WebClientOptions {
+            WebClientOptions {
+                matchmaker_url: self.matchmaker_url.clone(),
+                matchmaker_game: self.matchmaker_game.clone(),
+                matchmaker_version: self.matchmaker_version.clone(),
+                room: self.room,
+                name: self.player_name.clone(),
+                canvas_selector: format!("#{CANVAS_ID}"),
+            }
+        }
+    }
+
+    fn window_location() -> web_sys::Location {
+        web_sys::window()
+            .expect("browser window is unavailable")
+            .location()
+    }
+
+    fn default_matchmaker_url() -> String {
+        let location = window_location();
+        let protocol = match location.protocol().as_deref() {
+            Ok("https:") => "wss",
+            _ => "ws",
+        };
+        let host = location
+            .host()
+            .expect("browser location host is unavailable");
+        format!("{protocol}://{host}/matchmaker/ws")
+    }
+
+    fn parse_room_param(value: Option<String>) -> RoomJoinMode {
+        let Some(value) = value else {
+            return RoomJoinMode::Auto;
+        };
+        parse_room_input(&value).unwrap_or(RoomJoinMode::Auto)
+    }
+
+    fn parse_room_input(value: &str) -> Result<RoomJoinMode, String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+            return Ok(RoomJoinMode::Auto);
+        }
+        if trimmed.eq_ignore_ascii_case("new") {
+            return Ok(RoomJoinMode::New);
+        }
+        RoomCode::parse(trimmed)
+            .map(RoomJoinMode::Private)
+            .or_else(|_| {
+                trimmed
+                    .parse::<u64>()
+                    .map(|id| RoomJoinMode::Specific(RoomId(id)))
+            })
+            .map_err(|_| "Use a four-letter room code.".to_string())
+    }
+
+    fn room_input_value(room: RoomJoinMode) -> String {
+        match room {
+            RoomJoinMode::Auto => String::new(),
+            RoomJoinMode::New => "NEW".to_string(),
+            RoomJoinMode::Specific(id) => id.0.to_string(),
+            RoomJoinMode::Private(code) => code.to_string(),
+        }
+    }
+
+    fn sanitize_player_name(name: &str) -> String {
+        name.trim().chars().take(18).collect()
+    }
+
+    fn apply_settings_to_url(name: &str, room: RoomJoinMode) {
+        let location = window_location();
+        let search = location.search().unwrap_or_default();
+        let params = web_sys::UrlSearchParams::new_with_str(&search)
+            .expect("failed to parse query parameters");
+        if name.is_empty() {
+            params.delete("name");
+        } else {
+            params.set("name", name);
+        }
+        match room {
+            RoomJoinMode::Auto => params.delete("room"),
+            _ => params.set("room", &room_input_value(room)),
+        }
+        let pathname = location.pathname().unwrap_or_else(|_| "/".to_string());
+        let query = params.to_string().as_string().unwrap_or_default();
+        let href = if query.is_empty() {
+            pathname
+        } else {
+            format!("{pathname}?{query}")
+        };
+        if location.href().ok().as_deref() != Some(&href) {
+            let _ = location.set_href(&href);
+        }
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "bevygap"))]
+fn main() {
+    wasm::run();
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "bevygap")))]
+fn main() {
+    panic!("lightrider-web must be built with the `bevygap` feature");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    eprintln!("lightrider-web is intended for wasm32-unknown-unknown builds");
+}

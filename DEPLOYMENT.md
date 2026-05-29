@@ -406,6 +406,45 @@ The image exposes:
 
 Production should serve the web client over HTTPS. The image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context.
 
+#### Automated Linode Setup
+
+For the current Linode control host, the repo provides a one-command installer. It installs Podman on the host, logs into the Edgegap registry, pulls the `lightrider-matchmaker` image, creates a systemd service, maps public web traffic to the bundled nginx server, exposes NATS for Edgegap game servers, and persists NATS data under `/var/lib/lightrider/nats`.
+
+On your local machine, after the matchmaker image has been pushed:
+
+```bash
+tag="$(git rev-parse --short HEAD)"
+
+just linode-control-env-template "$tag" secrets/linode-control-host.env 45.79.138.102
+```
+
+Review `secrets/linode-control-host.env`. It should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version.
+
+Then run the single remote install command from a network that can SSH to the Linode:
+
+```bash
+just linode-control-install 45.79.138.102 22 secrets/linode-control-host.env
+```
+
+The remote script is [tools/setup_linode_control_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/tools/setup_linode_control_host.sh). The installed systemd service is `lightrider-matchmaker`.
+
+After install:
+
+```bash
+ssh root@45.79.138.102
+systemctl status lightrider-matchmaker --no-pager
+journalctl -u lightrider-matchmaker -f
+podman logs lightrider-matchmaker
+```
+
+The installer publishes:
+
+- `80/tcp`: web client and `/matchmaker/ws`.
+- `4222/tcp`: NATS for Edgegap game servers.
+- `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the Linode only.
+
+The first setup uses `NATS_ALLOW_INSECURE=1` because there is no domain/TLS yet. This is acceptable for a smoke test but should become TLS plus firewall restrictions before wider use.
+
 Example direct container run for initial testing before NATS TLS is configured:
 
 ```bash
@@ -423,6 +462,9 @@ podman run -d --name lightrider-matchmaker \
   -e LIGHTRIDER_PROTOCOL_ID="$LIGHTRIDER_PROTOCOL_ID" \
   -e LIGHTRIDER_PRIVATE_KEY="$LIGHTRIDER_PRIVATE_KEY" \
   -e LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1 \
+  -e BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=800 \
+  -e BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT=16 \
+  -e BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT=85 \
   -e NATS_ALLOW_INSECURE=1 \
   -e NATS_USER=<strong-nats-user> \
   -e NATS_PASSWORD=<strong-nats-password> \
@@ -439,6 +481,7 @@ For a real public deployment, prefer:
 - A persistent volume mounted at `/data/nats`.
 - Strong `NATS_USER` and `NATS_PASSWORD`.
 - `8222` not exposed publicly.
+- Matchmaker packing limits sized for the server image: `BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT`, `BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT`, and `BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT`.
 
 If using NATS TLS inside the matchmaker image, mount the cert/key into the container and provide:
 
@@ -523,7 +566,17 @@ NATS_PASSWORD=<same-nats-password>
 BEVYGAP_NATS_NAMESPACE=<app-or-app-version-namespace>
 ```
 
-Optional Bevygap TTL tuning envs are `BEVYGAP_SESSION_MAPPING_TTL_MS`, `BEVYGAP_UNCLAIMED_SESSION_TTL_SECS`, `BEVYGAP_ACTIVE_CONNECTION_TTL_SECS`, and `BEVYGAP_CERT_DIGEST_TTL_SECS`. Defaults are suitable for the first deployment; set them only when you have a clear retention reason.
+Optional Bevygap TTL tuning envs are `BEVYGAP_SESSION_MAPPING_TTL_MS`, `BEVYGAP_UNCLAIMED_SESSION_TTL_SECS`, `BEVYGAP_ACTIVE_CONNECTION_TTL_SECS`, `BEVYGAP_CERT_DIGEST_TTL_SECS`, and `BEVYGAP_DEPLOYMENT_METRICS_TTL_SECS`. Defaults are suitable for the first deployment; set them only when you have a clear retention reason.
+
+The matchmaker/control service decides whether to place a new room on an existing Edgegap deployment using game-server room metrics from NATS KV plus these policy env vars:
+
+```bash
+BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=800
+BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT=16
+BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT=85
+```
+
+These are matchmaker-side limits. The server still enforces per-room behavior from `config/default.ron`, including `rooms.max_players_per_room` and `rooms.max_rooms`.
 
 If NATS is not using TLS during early testing, also set:
 
@@ -567,13 +620,16 @@ https://<your-domain>/?matchmaker_url=wss://<matchmaker-domain>/matchmaker/ws
 Expected flow:
 
 1. Browser loads `index.html` and `pkg/lightrider_web.js`.
-2. Browser connects to `/matchmaker/ws`.
-3. Matchmaker creates or reuses an Edgegap session.
-4. Edgegap starts a `lightrider-server` deployment if needed.
-5. Game server publishes its context and certificate digest to NATS.
-6. Matchmaker returns `SessionReady` with a Lightyear connect token and certificate digest.
-7. Browser connects to the Edgegap external game port over WebTransport.
-8. Game server logs a Lightyear connect event.
+2. Leptos mounts the web shell and embeds the Bevy client canvas behind the join modal.
+3. Browser connects to `/matchmaker/ws`.
+4. Matchmaker creates or reuses an Edgegap session.
+5. Edgegap starts a `lightrider-server` deployment if needed.
+6. Game server publishes its context and certificate digest to NATS.
+7. Matchmaker returns `SessionReady` with a Lightyear connect token and certificate digest.
+8. Browser connects to the Edgegap external game port over WebTransport.
+9. Game server logs a Lightyear connect event and handles the requested room mode.
+
+The first-pass browser shell accepts URL parameters `name`, `room`, `matchmaker_url`, `matchmaker_game`, and `matchmaker_version`. `room` can be `auto`, `new`, a four-letter private room code, or a numeric room id.
 
 Useful native token-path test:
 

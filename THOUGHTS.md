@@ -62,6 +62,7 @@ Use `/spare/ssd/cbournhonesque/src/other/snakegame/original/powerline.io` as ins
 
 - The game will be served online through Edgegap.
 - Users can join a random room or create a new room.
+- Browser users can also enter a four-letter private room code. The code maps to a stable private `RoomId`; joining the same code should route clients to the same private room when capacity permits.
 - A single server process should support multiple game rooms through the room system.
 - The authoritative server owns room simulation, player spawning, bot spawning, food spawning, collision, scoring, death, and respawn.
 - Clients render the world and send input. They do not decide kills, food pickups, or score.
@@ -75,6 +76,7 @@ Use `/spare/ssd/cbournhonesque/src/other/snakegame/original/powerline.io` as ins
 - The first Bevygap integration slice is runtime-tested behind optional Cargo features. A `client --features bevygap -- --matchmaker-url ...` run spawns an unconnected Lightyear client entity and lets `bevygap_client_plugin` request a token and attach token auth, peer address, and WebTransport IO. A `server --features bevygap -- --bevygap` run adds the server-side Bevygap/NATS plugin; direct mode does not read Edgegap or NATS env vars.
 - Bevygap local mock validation works through `just bevygap-local-smoke`: local NATS + in-process `BEVYGAP_CONTEXT_MODE=local` server context + Lightrider WebTransport server + mock `bevygap_matchmaker` + `bevygap_matchmaker_httpd` + headless Lightrider bot client. The client receives a redacted `Session Ready` response, decodes the Lightyear `ConnectToken`, connects over WebTransport, and the server and matchmaker both observe the active-connection path.
 - Production netcode identity is environment-driven. `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` must match between game server and matchmaker; `LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1` makes zero/dev defaults a startup error. `LIGHTRIDER_PRIVATE_KEY` accepts either 64 hex characters or the Bevygap-compatible comma-separated 32-byte form.
+- Edgegap should be treated as coarse deployment/session capacity. Lightrider rooms are game-specific state and should be routed by Bevygap, not by Edgegap directly. A warm Edgegap deployment can host multiple public/private rooms until game-server capacity is reached.
 - Client prediction is enabled only for the local player's snake.
 - Other player snakes are interpolated, not predicted.
 - Movement is predicted, but deaths are server-authoritative.
@@ -98,7 +100,7 @@ Use `/spare/ssd/cbournhonesque/src/other/snakegame/original/powerline.io` as ins
 
 ### Current Repo Snapshot
 
-- Workspace members: `client`, `server`, `shared`.
+- Workspace members: `client`, `server`, `shared`, and `web_client`.
 - Dependency state: Bevy `0.18.1`, Lightyear git `main` at the commit locked in `Cargo.lock`, `bevy_enhanced_input = "0.24.4"`, `bevy_turborand = "0.13"`, `bevy-inspector-egui = "0.36"`, and no direct physics-engine dependency.
 - Lightrider transport features currently enable Lightyear WebTransport, self-signed WebTransport certificates, and the dangerous native no-certificate-validation test path.
 - Data-driven config lives in `shared/src/config.rs` with RON files at `config/default.ron` and `config/test.ron`.
@@ -119,6 +121,10 @@ Use `/spare/ssd/cbournhonesque/src/other/snakegame/original/powerline.io` as ins
 - Optional client feature `bevygap-matchmaker-tls` forwards to `bevygap_client_plugin/matchmaker-tls` for TLS matchmaker WebSocket support.
 - Client networking now has two startup modes: direct WebTransport/manual auth, or Bevygap token mode. In token mode the client entity starts with Lightyear base components and waits for the Bevygap plugin to connect it.
 - Browser builds have a dedicated `lightrider-web` WASM entrypoint. It avoids Clap and defaults the matchmaker WebSocket to same-origin `/matchmaker/ws`, with `?matchmaker_url=` as an override.
+- Browser UI now lives in the `web_client` workspace crate. It is a Leptos CSR shell using `leptos-bevy-canvas` to mount the existing Bevy client in the background canvas while web UI owns the Powerline-style join modal, player-name input, private room code input, and external links.
+- Browser query parameters currently drive initial Bevy startup: `name`, `room`, `matchmaker_url`, `matchmaker_game`, and `matchmaker_version`. `room` accepts `auto`, `new`, a four-letter private room code, or a numeric room id. The modal writes settings back to the URL; replacing this URL reload with a Leptos-to-Bevy message bridge is the next polish step.
+- Bevygap room-aware matchmaking is implemented in the local Bevygap repo. Clients include `RoomSelection` in `RequestSession`; HTTPD forwards the full request; game servers publish deployment room metrics to NATS KV; the matchmaker reuses an existing Edgegap deployment by setting `SessionModel.deployment_request_id` when capacity policy allows.
+- Matchmaker capacity policy is CLI/env driven: `--max-players-per-deployment`, `--max-rooms-per-deployment`, and `--max-cpu-percent-per-deployment` are wired through local just recipes and the matchmaker/control container as `BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT`, `BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT`, and `BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT`.
 - Client input systems tolerate the token-mode startup window before `LocalId` is available.
 - Non-headless clients must spawn `ReplicationReceiver::default()` on the client entity, or the network connection can succeed without replicated game entities arriving.
 - Custom snake interpolation uses `ConfirmedHistory<TailPoints>`, `ConfirmedHistory<TailLength>`, and `InterpolationSystems::Interpolate`, adapted from the old prototype and the Lightyear `replication_groups` example.
@@ -128,6 +134,7 @@ Use `/spare/ssd/cbournhonesque/src/other/snakegame/original/powerline.io` as ins
 - The root `justfile` has `server`, `client`, `client-debug`, `bot`, `bots`, `local`, `trace-local`, `trace-summary`, and Edgegap image recipes.
 - Bevygap local-smoke recipes now include `bevygap-help`, `bevygap-nats-pull`, `bevygap-nats`, `bevygap-nats-health`, `bevygap-fake-context`, `bevygap-server-local`, `bevygap-matchmaker-local`, `bevygap-matchmaker-mock-local`, `bevygap-httpd-local`, `bevygap-client-bot`, and `bevygap-local-smoke`. Use `bevygap-help` for the required order.
 - `bevygap-local-smoke` writes service logs under `logs/bevygap/<timestamp>/` and updates `logs/bevygap/latest`. It scans for cert digest publication, mock session creation, redacted session readiness, client connection attempt, server-side Lightyear connect event, server active-connection KV write, and matchmaker active-connection watcher observation.
+- Linode control-host setup is scripted by `tools/setup_linode_control_host.sh` and wrapped by `just linode-control-env-template`, `just linode-control-install`, and `just linode-control-health`. The installer runs the bundled matchmaker/control image as a systemd-managed Podman container with web on `80/tcp`, NATS on `4222/tcp`, and NATS monitoring bound to local `8222/tcp`.
 
 ### Observability And Debugging
 
@@ -177,10 +184,11 @@ Status: complete enough for prototype validation.
 Status: complete enough for deployable prototype work.
 
 1. Room entities/resources exist in `server/src/rooms.rs`.
-2. Clients can auto-join, create a new room, or request a numeric room id through `RoomJoinRequest`.
+2. Clients can auto-join a public room, create a new public room, request a numeric room id, or request a four-letter private room code through `RoomJoinRequest`.
 3. Room config covers max rooms, max players per room, arena size, food target, and bot target counts.
 4. Replication, collision, food, proximity, respawn, and ranking are room-scoped.
-5. Minimal leaderboard/rank state exists as replicated `PlayerRank`.
+5. Public auto-join selection ignores private-code rooms so random players do not backfill private games.
+6. Minimal leaderboard/rank state exists as replicated `PlayerRank`.
 
 ### Phase 4: Bots And Fake Clients
 
@@ -251,16 +259,18 @@ Reference docs for this plan:
      - `edgegap_async`: generated Edgegap API client used by the matchmaker.
    - Preferred flow:
      1. Game client connects to `bevygap_matchmaker_httpd` over WebSocket.
-     2. Client sends `RequestSession { game, version, client_ip }`.
+     2. Client sends `RequestSession { game, version, client_ip, room }`, where `room` is auto, new, a private code, or a numeric room id.
      3. HTTPD publishes a NATS request to `bevygap_matchmaker`.
-     4. Matchmaker creates an Edgegap session, waits until ready, reads public IP/external port, assigns a Lightyear client id, builds a `ConnectToken`, stores session/client mappings in NATS KV, and streams feedback.
-     5. Client receives `SessionReady`, decodes token, configures the Lightyear connection, and connects to the game server.
-     6. Game server reports active connection state through NATS.
-     7. Matchmaker deletes sessions after disconnect or after unclaimed-session timeout.
+     4. Matchmaker reads game-server deployment metrics from NATS KV. For public auto-join it chooses a not-full public room or a warm deployment with room capacity; for private codes and numeric room ids it prefers the deployment already hosting that room; otherwise it creates a room on a warm deployment if capacity allows. If no warm deployment passes policy, it creates a new Edgegap session/deployment.
+     5. When a new deployment is needed, the matchmaker creates an Edgegap session, waits until ready, reads public IP/external port, assigns a Lightyear client id, builds a `ConnectToken`, stores session/client mappings in NATS KV, and streams feedback.
+     6. Client receives `SessionReady`, decodes token, configures the Lightyear connection, and connects to the game server.
+     7. Game server handles the room request through normal `RoomJoinRequest` logic and reports active connection state through NATS.
+     8. Matchmaker deletes sessions after disconnect or after unclaimed-session timeout.
    - NATS role in current Bevygap:
      - NATS core request/reply links `bevygap_matchmaker_httpd` to `bevygap_matchmaker`.
      - NATS JetStream KV stores client-id to Edgegap-session mappings, active connections, and WebTransport certificate digests.
      - Edgegap-hosted game servers must reach the same public NATS service so they can publish their context/digest and active connection state.
+     - Game servers publish a small room-capacity heartbeat to the `deployment_metrics` KV bucket: deployment/request id, endpoint, current rooms, public/private marker, current humans, max rooms, max players per room, and optional CPU percentage.
      - In the current packaging plan, this NATS server is bundled into the matchmaker/control image for the simplest first deployment; it can be split into managed NATS or a separate VPS service later.
    - Required env vars are `NATS_HOST`, `NATS_USER`, `NATS_PASSWORD`, and optionally `NATS_CA` or `NATS_CA_CONTENTS` for TLS trust.
    - Recommended env var `BEVYGAP_NATS_NAMESPACE` must match between matchmaker/control services and Edgegap-hosted game servers for a given app/version.
@@ -278,8 +288,9 @@ Reference docs for this plan:
      6. P1 complete: NATS namespacing and session TTL polish. `BEVYGAP_NATS_NAMESPACE` now scopes Bevygap request subjects, gameserver announcements, delete-session streams, and JetStream KV buckets. Local recipes default to `lightrider_dev`; Edgegap app-version automation defaults to `<app>_<version>`. TTL envs exist for session mappings, unclaimed sessions, active connections, and certificate digests.
      7. P1 complete: recoverable async/runtime errors in the main Bevygap path now log or stream errors instead of panicking. The server plugin retries NATS connect/watch setup, NATS event sends handle closed channels, malformed KV values are rejected cleanly, and matchmaker/HTTPD request handling avoids request-path `unwrap`/`expect` panics.
      8. P1 complete: generated Edgegap client hygiene improved. `utils/gen-edgegap-client.sh` uses a pinned OpenAPI generator image by default, supports Podman or Docker, stores the downloaded spec under `target/`, applies only a small Cargo metadata post-process, and documents that generated source files should not be hand-edited.
-     9. P1 pending: run the real Edgegap-session smoke once the public NATS/control host is reachable and the app version has production env vars.
-     10. P2 pending: extend `bevygap-local-smoke` with DuckDB movement assertions and add production browser bootstrap/player-name UI polish.
+     9. P1 complete: room-aware deployment packing. Lightrider servers publish per-room deployment metrics; the matchmaker uses configurable max players, max rooms, and max CPU policy before deciding whether to set `deployment_request_id` on a new Edgegap session or let Edgegap create a fresh deployment.
+     10. P1 pending: run the real Edgegap-session smoke once the public NATS/control host is reachable and the app version has production env vars.
+     11. P2 pending: extend `bevygap-local-smoke` with DuckDB movement assertions and add production browser bootstrap/player-name UI polish.
    - Implementation slices:
      1. Complete: add optional path dependencies under feature `bevygap`: client gates `bevygap_client_plugin`; server gates `bevygap_server_plugin`; shared code remains transport-only.
      2. Complete: add client CLI mode `--matchmaker-url <ws://...>` only when `bevygap` is enabled. Direct `--server-addr/--server-port` remains the default and stays available for local tests.
@@ -289,12 +300,13 @@ Reference docs for this plan:
      6. Complete: extend `justfile` with feature-gated recipes. Local direct WebTransport remains unchanged; Bevygap recipes run NATS, `bevygap_matchmaker_httpd`, `bevygap_matchmaker`, and Lightrider with `--features bevygap`; the old fake context helper is retained but no longer needed by the default smoke.
      7. Complete: update Docker packaging/context for Bevygap. `edgegap-context` includes sibling `../bevygap`; `Dockerfile.server` builds the Bevygap-enabled game server; `Dockerfile.matchmaker` builds the matchmaker/control image with NATS and WASM assets.
      8. Partial: add a headless integration smoke that requests a token from matchmaker HTTPD and starts a bot client through the token path. `just bevygap-local-smoke` verifies the connect-token path through logs; DuckDB movement-row checks remain to be added.
-     9. Decide whether to keep NATS long term. If replacing it, preserve the same responsibilities: request/reply between HTTPD and matchmaker, session/client mappings with TTL/watch semantics, cert digest storage, active connection tracking, and cleanup triggers.
+     9. Complete: extend Bevygap protocol and placement for multi-room deployments. Room intent flows from browser/native client to matchmaker, room metrics flow from game server to NATS KV, and the matchmaker can reuse a warm Edgegap deployment for another room.
+     10. Decide whether to keep NATS long term. If replacing it, preserve the same responsibilities: request/reply between HTTPD and matchmaker, session/client mappings with TTL/watch semantics, cert digest storage, deployment metrics, active connection tracking, and cleanup triggers.
    - Missing work:
      - Run a token-path smoke against real Edgegap session creation instead of the local mock session mode.
      - Build and run the new production images in containers; source checks, Docker dry-runs, context generation, and local native smoke pass, but full image builds were not run yet to avoid a large disk/CPU spike.
      - Extend `bevygap-local-smoke` to emit Lightyear debug JSONL and verify connection plus movement rows in DuckDB.
-     - Browser UI still needs player-name/room controls; the current WASM entrypoint uses defaults and query-string matchmaker override.
+     - Browser UI now has a first-pass player-name/private-room modal. It still needs true spectator preview and no-reload Leptos-to-Bevy updates.
      - Stand up a public production NATS/control host with TLS, strong credentials, persistent storage, and restricted monitoring access.
    - Remaining server-side validation gap:
      - Real Edgegap active-connection validation still requires a public NATS/control host. The local mock flow now validates the server active-connection KV write and the matchmaker watcher, but it cannot prove Edgegap's real session cleanup until Edgegap-hosted game servers can reach NATS.
@@ -358,3 +370,6 @@ Reference docs for this plan:
 - Added `tools/edgegap_app_version.sh` and `just` wrappers for Edgegap app-version automation. The script can print desired state, show current Edgegap state, redacted-diff desired vs current, sync by creating/updating the app version, and verify deploy-critical fields. It manages server image/tag, UDP/7777 game port, Bevygap session config, required Lightrider/NATS env vars, optional registry credentials, and writes a redacted `.edgegap-build/edgegap-app-version.json` manifest.
 - Fixed the three Bevygap server-side gaps that were not blocked by public NATS: `bevygap_server_plugin` now supports `BEVYGAP_CONTEXT_MODE=local` for in-process local Edgegap context, WebTransport cert digests are published and resolved by deployment request id plus endpoint `ip:port` with legacy public-IP fallback, and the local mock flow now verifies active connection reporting through both the server KV write and matchmaker active-connection watcher. Verification: `cargo check -j 2 -p bevygap_server_plugin -p bevygap_matchmaker`, `cargo test -j 2 -p bevygap_shared --features nats`, `cargo test -j 2 -p bevygap_server_plugin local_context_contains_expected_endpoint`, `just --dry-run` for affected Bevygap recipes, and `just bevygap-local-smoke 3 config/test.ron 7777 3000 9876 3001` passed with logs under `logs/bevygap/20260528-144045`.
 - Improved Bevygap P1 items 2-7: added `BEVYGAP_NATS_NAMESPACE` and shared subject/bucket helpers, exposed Bevygap TTL envs, routed matchmaker request subjects through shared helpers, hardened server-plugin NATS connect/watch/event handling, converted matchmaker/HTTPD runtime panics into logged or streamed errors, added unit tests for namespace naming, updated local/prod recipes and Edgegap app-version automation, and tightened the Edgegap OpenAPI client regeneration script. Verification: `cargo test -j 2 -p bevygap_shared --features nats`, `cargo check -j 2 -p bevygap_server_plugin -p bevygap_matchmaker -p bevygap_matchmaker_httpd`, script `bash -n` checks, `just --dry-run` for affected recipes, `cargo test -j 2 -p bevygap_server_plugin local_context_contains_expected_endpoint`, `git diff --check`, and `just bevygap-local-smoke 3 config/test.ron 7777 3000 9876 3001` passed with logs under `logs/bevygap/20260528-150923`.
+- Started the browser UI implementation. Added the `web_client` workspace crate using Leptos CSR plus `leptos-bevy-canvas`, moved the `lightrider-web` WASM binary out of the native client crate, mounted Bevy on a fixed canvas selector, added the Powerline-style join modal, player-name field, four-letter private room field, and URL-driven browser settings. Added `RoomCode` and `RoomJoinMode::Private`, made server room assignment map codes to stable private rooms, and fixed public auto-join so it ignores private rooms. Updated `Dockerfile.matchmaker` to build `-p web_client --bin lightrider-web`. Verification: `cargo fmt --all`, `cargo test -j 2 -p shared --lib room_codes`, `cargo test -j 2 -p client --lib rooms`, rustup cargo wasm check for `web_client --features bevygap`, `cargo check -j 2 -p server --features bevygap`, `cargo check -j 2 -p client --features bevygap`, `cargo test -j 2 -p server --lib auto_room_does_not_assign_private_rooms`, and `cargo test -j 2 -p server --lib private_room_does_not_fall_back_to_public_when_room_limit_is_full`.
+- Added multi-room Bevygap deployment packing. `RequestSession` now carries optional room intent, `bevygap_client_plugin` sends it, HTTPD forwards the full request, Lightrider clients map `RoomJoinMode` into Bevygap `RoomSelection`, game servers publish `BevygapDeploymentMetrics` from `RoomDirectory`, and `bevygap_matchmaker` reads deployment metrics from NATS KV to decide whether to reuse a warm Edgegap deployment or create a new one. Verification: `cargo test -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_shared`, `cargo test -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker`, `cargo check -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker -p bevygap_matchmaker_httpd -p bevygap_client_plugin -p bevygap_server_plugin`, `cargo test -j 2 -p shared --lib room_codes`, `cargo test -j 2 -p server --features bevygap room_metrics`, `cargo check -j 2 -p client --features bevygap`, and wasm `cargo check -j 2 -p web_client --target wasm32-unknown-unknown --features bevygap`.
+- Added Linode control-host automation. `tools/setup_linode_control_host.sh` installs Podman, pulls the matchmaker/control image, writes a systemd service, persists NATS data, and exposes web/NATS ports. `just linode-control-env-template` writes an ignored shell env file from local Edgegap/netcode secrets, `just linode-control-install` copies the env and script to the Linode and runs the setup, and `DEPLOYMENT.md` now documents the flow. Verification: `bash -n tools/setup_linode_control_host.sh`, `just --dry-run linode-control-env-template`, `just --dry-run linode-control-install`, and `git diff --check`.
