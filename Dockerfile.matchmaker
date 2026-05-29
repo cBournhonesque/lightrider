@@ -1,9 +1,12 @@
 FROM nats:latest AS nats
 
-FROM rustlang/rust:nightly-bookworm AS builder
+FROM rustlang/rust:nightly-bookworm AS chef
+
+ARG CARGO_CHEF_VERSION=0.1.77
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        ca-certificates \
         clang \
         curl \
         lld \
@@ -17,15 +20,24 @@ RUN apt-get update && \
         libxkbcommon-dev \
         libxrandr-dev \
         pkg-config && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN rustup target add wasm32-unknown-unknown && \
-    CARGO_BUILD_JOBS=1 cargo install wasm-bindgen-cli --version 0.2.122 --locked
+    rm -rf /var/lib/apt/lists/* && \
+    CARGO_BUILD_JOBS=1 cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
 
 WORKDIR /src/lightrider
+
+FROM chef AS planner
+
 COPY lightyear /src/lightyear
 COPY bevygap /src/bevygap
 COPY lightrider /src/lightrider
+
+WORKDIR /src/bevygap
+RUN cargo chef prepare --recipe-path /tmp/bevygap-matchmaker-recipe.json
+
+WORKDIR /src/lightrider
+RUN cargo chef prepare --recipe-path /tmp/lightrider-web-recipe.json
+
+FROM chef AS builder
 
 ARG MATCHMAKER_CARGO_JOBS=2
 ARG MATCHMAKER_CARGO_INCREMENTAL=0
@@ -38,8 +50,42 @@ ARG WEB_RELEASE_OPT_LEVEL=s
 ARG WEB_RELEASE_LTO=false
 ARG WEB_RELEASE_CODEGEN_UNITS=16
 
-RUN rustup show && rustup target add wasm32-unknown-unknown
+RUN rustup target add wasm32-unknown-unknown && \
+    CARGO_BUILD_JOBS=1 cargo install wasm-bindgen-cli --version 0.2.122 --locked
 
+COPY --from=planner /tmp/bevygap-matchmaker-recipe.json /tmp/bevygap-matchmaker-recipe.json
+COPY --from=planner /tmp/lightrider-web-recipe.json /tmp/lightrider-web-recipe.json
+
+WORKDIR /src/bevygap
+RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${MATCHMAKER_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${MATCHMAKER_RELEASE_CODEGEN_UNITS}" \
+    RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    cargo chef cook --release -j "${MATCHMAKER_CARGO_JOBS}" \
+        --recipe-path /tmp/bevygap-matchmaker-recipe.json \
+        --package bevygap_matchmaker \
+        --package bevygap_matchmaker_httpd
+
+WORKDIR /src/lightrider
+RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${WEB_RELEASE_CODEGEN_UNITS}" \
+    cargo chef cook --release -j "${WEB_CARGO_JOBS}" \
+        --recipe-path /tmp/lightrider-web-recipe.json \
+        --package web_client \
+        --features bevygap \
+        --bin lightrider-web \
+        --target wasm32-unknown-unknown
+
+COPY lightyear /src/lightyear
+COPY bevygap /src/bevygap
+COPY lightrider /src/lightrider
+
+WORKDIR /src/bevygap
 RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \
@@ -47,19 +93,19 @@ RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${MATCHMAKER_RELEASE_CODEGEN_UNITS}" \
     RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
     cargo build --release -j "${MATCHMAKER_CARGO_JOBS}" \
-        --manifest-path /src/bevygap/Cargo.toml \
-        -p bevygap_matchmaker \
-        -p bevygap_matchmaker_httpd && \
+        --package bevygap_matchmaker \
+        --package bevygap_matchmaker_httpd && \
     cp /src/bevygap/target/release/bevygap_matchmaker /tmp/bevygap_matchmaker && \
     cp /src/bevygap/target/release/bevygap_matchmaker_httpd /tmp/bevygap_matchmaker_httpd
 
+WORKDIR /src/lightrider
 RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
     CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${WEB_RELEASE_CODEGEN_UNITS}" \
     cargo build --release -j "${WEB_CARGO_JOBS}" \
-        -p web_client \
+        --package web_client \
         --features bevygap \
         --bin lightrider-web \
         --target wasm32-unknown-unknown && \

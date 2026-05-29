@@ -119,6 +119,8 @@ matchmaker_args=(
   --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}"
   --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}"
   --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}"
+  --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}"
+  --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}"
 )
 
 if [[ -n "${LIGHTRIDER_PRIVATE_KEY:-}" ]]; then

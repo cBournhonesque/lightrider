@@ -222,14 +222,17 @@ bevygap-server-local config="config/test.ron" port="7777" context_url="http://12
 bevygap-matchmaker-local app_name="lightrider" app_version="dev":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ -f secrets/edgegap.env ]]; then
-      source secrets/edgegap.env
-    fi
+    for env_file in secrets/edgegap.env secrets/prod-netcode.env secrets/nats.env; do
+      if [[ -f "$env_file" ]]; then
+        source "$env_file"
+      fi
+    done
     export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
     export NATS_USER="${NATS_USER:-lightrider}"
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
     export NATS_INSECURE="${NATS_INSECURE:-1}"
     export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
+    echo "bevygap-matchmaker-local: NATS_HOST=$NATS_HOST NATS_USER=$NATS_USER NATS_INSECURE=$NATS_INSECURE BEVYGAP_NATS_NAMESPACE=$BEVYGAP_NATS_NAMESPACE"
     if [[ -z "${EDGEGAP_API_KEY:-}" && -n "${EDGEGAP_API_TOKEN:-}" ]]; then
       export EDGEGAP_API_KEY="$EDGEGAP_API_TOKEN"
     fi
@@ -244,6 +247,8 @@ bevygap-matchmaker-local app_name="lightrider" app_version="dev":
       --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
       --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
       --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
+      --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}" \
+      --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}" \
       ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"}
 
 bevygap-matchmaker-mock-local app_name="lightrider" app_version="dev" public_ip="127.0.0.1" port="7777":
@@ -261,6 +266,8 @@ bevygap-matchmaker-mock-local app_name="lightrider" app_version="dev" public_ip=
       --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
       --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
       --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
+      --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}" \
+      --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}" \
       ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"} \
       --mock-edgegap \
       --mock-public-ip {{public_ip}} \
@@ -270,11 +277,17 @@ bevygap-matchmaker-mock-local app_name="lightrider" app_version="dev" public_ip=
 bevygap-matchmaker-httpd-local bind="127.0.0.1:3000" cors="http://localhost:8000" fake_ip="81.128.157.100":
     #!/usr/bin/env bash
     set -euo pipefail
+    for env_file in secrets/nats.env; do
+      if [[ -f "$env_file" ]]; then
+        source "$env_file"
+      fi
+    done
     export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
     export NATS_USER="${NATS_USER:-lightrider}"
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
     export NATS_INSECURE="${NATS_INSECURE:-1}"
     export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
+    echo "bevygap-matchmaker-httpd-local: NATS_HOST=$NATS_HOST NATS_USER=$NATS_USER NATS_INSECURE=$NATS_INSECURE BEVYGAP_NATS_NAMESPACE=$BEVYGAP_NATS_NAMESPACE"
     cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker_httpd -- \
       --bind {{bind}} \
       --cors {{cors}} \
@@ -303,6 +316,8 @@ bevygap-matchmaker-mock-stack-local app_name="lightrider" app_version="dev" publ
       --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
       --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
       --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
+      --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}" \
+      --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}" \
       ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"} \
       --mock-edgegap \
       --mock-public-ip {{public_ip}} \
@@ -528,12 +543,80 @@ edgegap-login:
       --username "$EDGEGAP_REGISTRY_USERNAME" \
       --password-stdin
 
-edgegap-build tag=edgegap-default-tag: edgegap-context
+edgegap-build *args: edgegap-context
     #!/usr/bin/env bash
     set -euo pipefail
     source secrets/edgegap.env
-    image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-server:{{tag}}"
-    podman build \
+    tag="{{edgegap-default-tag}}"
+    build_memory=""
+    build_cpus=""
+    build_cpu_quota=""
+    build_cpuset_cpus=""
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        tag=*) tag="${arg#tag=}" ;;
+        memory=*) build_memory="${arg#memory=}" ;;
+        build_memory=*) build_memory="${arg#build_memory=}" ;;
+        cpus=*) build_cpus="${arg#cpus=}" ;;
+        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
+        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
+        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
+        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
+        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
+        *)
+          case "$positional" in
+            0) tag="$arg" ;;
+            1) build_memory="$arg" ;;
+            2) build_cpus="$arg" ;;
+            3) build_cpu_quota="$arg" ;;
+            4) build_cpuset_cpus="$arg" ;;
+            *)
+              echo "unexpected extra argument: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-server:$tag"
+    build_cmd=(podman build --layers)
+    if [[ "${NO_CACHE:-0}" == "1" ]]; then
+      build_cmd+=(--no-cache)
+    fi
+    build_memory="${PODMAN_BUILD_MEMORY:-$build_memory}"
+    build_cpus="${PODMAN_BUILD_CPUS:-$build_cpus}"
+    build_cpu_quota="${PODMAN_BUILD_CPU_QUOTA:-$build_cpu_quota}"
+    build_cpuset_cpus="${PODMAN_BUILD_CPUSET_CPUS:-$build_cpuset_cpus}"
+    if [[ -n "${PODMAN_CACHE_FROM:-}" ]]; then
+      build_cmd+=(--cache-from "$PODMAN_CACHE_FROM")
+    fi
+    if [[ -n "${PODMAN_CACHE_TO:-}" ]]; then
+      build_cmd+=(--cache-to "$PODMAN_CACHE_TO")
+    fi
+    if [[ -n "$build_memory" ]]; then
+      build_cmd+=(--memory "$build_memory")
+    fi
+    if [[ -n "$build_cpus" ]]; then
+      if [[ ! "$build_cpus" =~ ^[0-9]+$ ]]; then
+        echo "edgegap-build cpus must be an integer because podman build has no --cpus flag; got '$build_cpus'" >&2
+        exit 2
+      fi
+      build_cmd+=(--cpu-period 100000 --cpu-quota "$((build_cpus * 100000))")
+    fi
+    if [[ -n "$build_cpu_quota" ]]; then
+      build_cmd+=(--cpu-quota "$build_cpu_quota")
+    fi
+    if [[ -n "$build_cpuset_cpus" ]]; then
+      build_cmd+=(--cpuset-cpus "$build_cpuset_cpus")
+    fi
+    "${build_cmd[@]}" \
+      --build-arg "SERVER_CARGO_JOBS=${SERVER_CARGO_JOBS:-2}" \
+      --build-arg "SERVER_CARGO_INCREMENTAL=${SERVER_CARGO_INCREMENTAL:-0}" \
+      --build-arg "SERVER_RELEASE_OPT_LEVEL=${SERVER_RELEASE_OPT_LEVEL:-3}" \
+      --build-arg "SERVER_RELEASE_LTO=${SERVER_RELEASE_LTO:-false}" \
+      --build-arg "SERVER_RELEASE_CODEGEN_UNITS=${SERVER_RELEASE_CODEGEN_UNITS:-16}" \
       -f .edgegap-build/context/lightrider/Dockerfile.server \
       -t "$image" \
       .edgegap-build/context
@@ -548,9 +631,44 @@ edgegap-push tag=edgegap-default-tag: edgegap-login
     podman push "$image"
     echo "Pushed $image"
 
-edgegap-build-push tag=edgegap-default-tag:
-    just edgegap-build {{tag}}
-    just edgegap-push {{tag}}
+edgegap-build-push *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{edgegap-default-tag}}"
+    build_memory=""
+    build_cpus=""
+    build_cpu_quota=""
+    build_cpuset_cpus=""
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        tag=*) tag="${arg#tag=}" ;;
+        memory=*) build_memory="${arg#memory=}" ;;
+        build_memory=*) build_memory="${arg#build_memory=}" ;;
+        cpus=*) build_cpus="${arg#cpus=}" ;;
+        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
+        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
+        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
+        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
+        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
+        *)
+          case "$positional" in
+            0) tag="$arg" ;;
+            1) build_memory="$arg" ;;
+            2) build_cpus="$arg" ;;
+            3) build_cpu_quota="$arg" ;;
+            4) build_cpuset_cpus="$arg" ;;
+            *)
+              echo "unexpected extra argument: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    just edgegap-build tag="$tag" memory="$build_memory" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
+    just edgegap-push "$tag"
 
 edgegap-app-show version="dev" app="lightrider":
     tools/edgegap_app_version.sh show --app "{{app}}" --version "{{version}}"
@@ -607,7 +725,7 @@ matchmaker-build *args: edgegap-context
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:$tag"
     # Defaults are balanced for a 32G+ build machine. Drop the env values to
     # 1/false/16 if rustc is OOM-killed on a smaller host.
-    build_cmd=(podman build)
+    build_cmd=(podman build --layers)
     if [[ "${NO_CACHE:-0}" == "1" ]]; then
       build_cmd+=(--no-cache)
     fi
@@ -615,6 +733,12 @@ matchmaker-build *args: edgegap-context
     build_cpus="${PODMAN_BUILD_CPUS:-$build_cpus}"
     build_cpu_quota="${PODMAN_BUILD_CPU_QUOTA:-$build_cpu_quota}"
     build_cpuset_cpus="${PODMAN_BUILD_CPUSET_CPUS:-$build_cpuset_cpus}"
+    if [[ -n "${PODMAN_CACHE_FROM:-}" ]]; then
+      build_cmd+=(--cache-from "$PODMAN_CACHE_FROM")
+    fi
+    if [[ -n "${PODMAN_CACHE_TO:-}" ]]; then
+      build_cmd+=(--cache-to "$PODMAN_CACHE_TO")
+    fi
     if [[ -n "$build_memory" ]]; then
       build_cmd+=(--memory "$build_memory")
     fi
@@ -695,13 +819,105 @@ matchmaker-build-push *args:
     just matchmaker-build tag="$tag" memory="$build_memory" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
     just matchmaker-push "$tag"
 
-prod-images-build tag=edgegap-default-tag:
-    just edgegap-build {{tag}}
-    just matchmaker-build {{tag}}
+prod-images-build *args:
+    just edgegap-build {{args}}
+    just matchmaker-build {{args}}
 
-prod-images-push tag=edgegap-default-tag:
-    just edgegap-push {{tag}}
-    just matchmaker-push {{tag}}
+prod-images-push *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{edgegap-default-tag}}"
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        tag=*) tag="${arg#tag=}" ;;
+        memory=*|build_memory=*|cpus=*|build_cpus=*|cpu_quota=*|build_cpu_quota=*|cpuset_cpus=*|build_cpuset_cpus=*)
+          ;;
+        *)
+          case "$positional" in
+            0) tag="$arg" ;;
+            1|2|3|4) ;;
+            *)
+              echo "unexpected extra argument for prod-images-push: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    just edgegap-push "$tag"
+    just matchmaker-push "$tag"
+
+prod-images-build-push *args:
+    just prod-images-build {{args}}
+    just prod-images-push {{args}}
+
+github-release tag=edgegap-default-tag title="" notes="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v gh >/dev/null 2>&1 || {
+      echo "gh CLI is required to create a GitHub release from the command line" >&2
+      exit 1
+    }
+    release_title="{{title}}"
+    release_notes="{{notes}}"
+    if [[ -z "$release_title" ]]; then
+      release_title="{{tag}}"
+    fi
+    if [[ -z "$release_notes" ]]; then
+      release_notes="Release {{tag}}"
+    fi
+    gh release create "{{tag}}" --title "$release_title" --notes "$release_notes"
+
+edgegap-release-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app="lightrider":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source secrets/edgegap.env
+    source secrets/prod-netcode.env
+    export NATS_HOST="{{nats_host}}"
+    export NATS_USER="${NATS_USER:-lightrider}"
+    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
+    export EDGEGAP_NATS_INSECURE="${EDGEGAP_NATS_INSECURE:-1}"
+    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-{{app}}_{{tag}}}"
+    just edgegap-app-sync "{{tag}}" "{{tag}}" "{{app}}"
+    just edgegap-app-verify "{{tag}}" "{{tag}}" "{{app}}"
+
+deploy-web-server-pull *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host=""
+    tag=""
+    ssh_port="22"
+    env_file="secrets/web-server.env"
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        host=*) host="${arg#host=}" ;;
+        tag=*) tag="${arg#tag=}" ;;
+        ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
+        env=*) env_file="${arg#env=}" ;;
+        *)
+          case "$positional" in
+            0) host="$arg" ;;
+            1) tag="$arg" ;;
+            2) ssh_port="$arg" ;;
+            3) env_file="$arg" ;;
+            *)
+              echo "unexpected extra argument for deploy-web-server-pull: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    if [[ -z "$host" || -z "$tag" ]]; then
+      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env]" >&2
+      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [ssh_port=22] [env=secrets/web-server.env]" >&2
+      exit 2
+    fi
+    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" tag="$tag" env="$env_file"
 
 web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102":
     #!/usr/bin/env bash

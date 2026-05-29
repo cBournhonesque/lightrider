@@ -1,8 +1,12 @@
-FROM rustlang/rust:nightly-bookworm AS builder
+FROM rustlang/rust:nightly-bookworm AS chef
+
+ARG CARGO_CHEF_VERSION=0.1.77
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        ca-certificates \
         clang \
+        lld \
         libasound2-dev \
         libudev-dev \
         libwayland-dev \
@@ -13,14 +17,55 @@ RUN apt-get update && \
         libxkbcommon-dev \
         libxrandr-dev \
         pkg-config && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
 
 WORKDIR /src/lightrider
+
+FROM chef AS planner
+
 COPY lightyear /src/lightyear
 COPY bevygap /src/bevygap
 COPY lightrider /src/lightrider
 
-RUN CARGO_INCREMENTAL=0 cargo build --release -j 2 -p server --features bevygap --bin lightrider-server && \
+RUN cargo chef prepare --recipe-path /tmp/lightrider-server-recipe.json
+
+FROM chef AS builder
+
+ARG SERVER_CARGO_JOBS=2
+ARG SERVER_CARGO_INCREMENTAL=0
+ARG SERVER_RELEASE_OPT_LEVEL=3
+ARG SERVER_RELEASE_LTO=false
+ARG SERVER_RELEASE_CODEGEN_UNITS=16
+
+COPY --from=planner /tmp/lightrider-server-recipe.json /tmp/lightrider-server-recipe.json
+
+RUN CARGO_INCREMENTAL="${SERVER_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${SERVER_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${SERVER_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${SERVER_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${SERVER_RELEASE_CODEGEN_UNITS}" \
+    RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    cargo chef cook --release -j "${SERVER_CARGO_JOBS}" \
+        --recipe-path /tmp/lightrider-server-recipe.json \
+        --package server \
+        --features bevygap \
+        --bin lightrider-server
+
+COPY lightyear /src/lightyear
+COPY bevygap /src/bevygap
+COPY lightrider /src/lightrider
+
+RUN CARGO_INCREMENTAL="${SERVER_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${SERVER_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${SERVER_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${SERVER_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${SERVER_RELEASE_CODEGEN_UNITS}" \
+    RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    cargo build --release -j "${SERVER_CARGO_JOBS}" \
+        --package server \
+        --features bevygap \
+        --bin lightrider-server && \
     cp /src/lightrider/target/release/lightrider-server /tmp/lightrider-server && \
     rm -rf /src/lightrider/target /usr/local/cargo/git /usr/local/cargo/registry
 

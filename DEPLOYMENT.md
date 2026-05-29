@@ -537,6 +537,12 @@ just matchmaker-build "$tag"
 just matchmaker-push "$tag"
 ```
 
+One-line local build-and-push, with optional Podman resource limits:
+
+```bash
+just prod-images-build-push "$tag" memory=24g cpus=8
+```
+
 The matchmaker/control image can be built on any machine that has this repo, Podman, and registry credentials. It does not need to be built on the VPS. The common path is:
 
 ```bash
@@ -545,6 +551,81 @@ SKIP_IMAGE_BUILD=1 just deploy-web-server host=<vps-ip> tag="$tag"
 ```
 
 That builds and pushes to the Edgegap container registry locally, then makes the VPS pull and run the already-pushed image.
+
+Both production Dockerfiles use `cargo-chef` to cache Rust dependencies as separate image layers. The build context includes `lightrider`, `bevygap`, and `lightyear`; their manifests participate in the dependency recipe, while source-only changes in those repos should only invalidate the final app build layers. The first build is still slow, but rebuilds after ordinary Rust source edits should reuse more cached dependency work.
+
+Local production image builds use Podman layer caching by default through `podman build --layers`, plus the `cargo-chef` dependency layers in the Dockerfiles. Keep `NO_CACHE=1` for cases where the build cache is known stale. Direct non-container Rust builds still use the repo's local incremental Cargo profile for iteration, but the production image default keeps `CARGO_INCREMENTAL=0` to avoid large incremental state inside image layers.
+
+#### GitHub Release Image Builds
+
+The workflow [.github/workflows/release-images.yml](/spare/ssd/cbournhonesque/src/other/lightrider/.github/workflows/release-images.yml) builds and pushes both production images only when a GitHub Release is published. It does not run on every push.
+
+Required GitHub Actions secrets:
+
+```text
+EDGEGAP_REGISTRY_USERNAME
+EDGEGAP_REGISTRY_TOKEN
+```
+
+Required GitHub Actions variable or secret:
+
+```text
+EDGEGAP_REGISTRY_PROJECT
+```
+
+Optional GitHub Actions secret:
+
+```text
+CHECKOUT_TOKEN
+```
+
+Use `CHECKOUT_TOKEN` when the GitHub Actions `GITHUB_TOKEN` cannot read `cBournhonesque/lightyear` or `cBournhonesque/bevygap`. It should be a token with read access to those repos.
+
+Optional GitHub Actions variables:
+
+```text
+EDGEGAP_REGISTRY_URL=registry.edgegap.com
+LIGHTYEAR_REF=main
+BEVYGAP_REF=main
+```
+
+The workflow checks out Lightrider at the published release ref. Lightyear and Bevygap fall back to their `main` branches by default. If a release depends on unmerged work in either sibling repo, push that work and set `LIGHTYEAR_REF` and/or `BEVYGAP_REF` to a branch, tag, or commit SHA before publishing the release.
+
+GitHub image caching is enabled through Docker Buildx GitHub Actions cache scopes:
+
+```text
+lightrider-server
+lightrider-matchmaker
+```
+
+The Buildx cache stores Docker layers, including the `cargo-chef` dependency layers. This should make repeat release builds much faster when `Cargo.toml`/lockfile inputs did not change. The CI build intentionally uses one Cargo job and no Rust incremental state to reduce memory and cache size on GitHub runners.
+
+The release tag is used as the Docker image tag, so use a Docker-compatible release tag such as `v0.1.0`, `test-20260529`, or `webtest-20260529-110706`.
+
+One-line command to create the release and trigger the GitHub build:
+
+```bash
+just github-release "<release-tag>"
+```
+
+The workflow pushes:
+
+```text
+registry.edgegap.com/<project>/lightrider-server:<release-tag>
+registry.edgegap.com/<project>/lightrider-matchmaker:<release-tag>
+```
+
+After the workflow succeeds, the VPS can pull the already-built control image:
+
+```bash
+just deploy-web-server-pull <vps-ip> <release-tag>
+```
+
+The Edgegap app version still needs to be synced separately with the same tag and the correct NATS/netcode env:
+
+```bash
+just edgegap-release-sync "<release-tag>" "<public-nats-host>:4222" lightrider
+```
 
 For a larger build container, pass Podman limits as just kwargs:
 
