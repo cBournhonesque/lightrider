@@ -406,27 +406,28 @@ The image exposes:
 
 Production should serve the web client over HTTPS. The image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context.
 
-#### Automated Linode Setup
+#### Automated VPS Setup
 
-For the current Linode control host, the repo provides a one-command installer. It installs Podman on the host, logs into the Edgegap registry, pulls the `lightrider-matchmaker` image, creates a systemd service, maps public web traffic to the bundled nginx server, exposes NATS for Edgegap game servers, and persists NATS data under `/var/lib/lightrider/nats`.
+For the current VPS control host, the repo provides a one-command installer. It installs Podman on the host, logs into the Edgegap registry, pulls the `lightrider-matchmaker` image, creates a systemd service, maps public web traffic to the bundled nginx server, exposes NATS for Edgegap game servers, and persists NATS data under `/var/lib/lightrider/nats`.
 
-On your local machine, after the matchmaker image has been pushed:
+On your local machine, run the whole build/push/install flow with one command:
+
+```bash
+just deploy-web-server
+```
+
+This defaults to host `45.79.138.102`, SSH port `22`, tag `git rev-parse --short HEAD`, and env file `secrets/web-server.env`. It builds and pushes the matchmaker image, writes the ignored web-server env file, uploads the installer/env to the VPS, starts the service, deletes the temporary uploaded env file, and checks `http://45.79.138.102/`.
+
+Equivalent explicit form:
 
 ```bash
 tag="$(git rev-parse --short HEAD)"
-
-just linode-control-env-template "$tag" secrets/linode-control-host.env 45.79.138.102
+just deploy-web-server 45.79.138.102 22 "$tag" secrets/web-server.env
 ```
 
-Review `secrets/linode-control-host.env`. It should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version.
+Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup.
 
-Then run the single remote install command from a network that can SSH to the Linode:
-
-```bash
-just linode-control-install 45.79.138.102 22 secrets/linode-control-host.env
-```
-
-The remote script is [tools/setup_linode_control_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/tools/setup_linode_control_host.sh). The installed systemd service is `lightrider-matchmaker`.
+The remote script is [tools/setup_web_server_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/tools/setup_web_server_host.sh). The installed systemd service is `lightrider-matchmaker`.
 
 After install:
 
@@ -441,7 +442,7 @@ The installer publishes:
 
 - `80/tcp`: web client and `/matchmaker/ws`.
 - `4222/tcp`: NATS for Edgegap game servers.
-- `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the Linode only.
+- `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
 
 The first setup uses `NATS_ALLOW_INSECURE=1` because there is no domain/TLS yet. This is acceptable for a smoke test but should become TLS plus firewall restrictions before wider use.
 

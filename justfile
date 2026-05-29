@@ -525,12 +525,15 @@ prod-images-push tag=edgegap-default-tag:
     just edgegap-push {{tag}}
     just matchmaker-push {{tag}}
 
-linode-control-env-template tag=edgegap-default-tag file="secrets/linode-control-host.env" host="45.79.138.102":
+web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f "{{file}}" && "${FORCE:-0}" != "1" ]]; then
       echo "{{file}} already exists; set FORCE=1 to overwrite" >&2
       exit 1
+    fi
+    if [[ -f "{{file}}" ]]; then
+      source "{{file}}"
     fi
     if [[ -f secrets/edgegap.env ]]; then
       source secrets/edgegap.env
@@ -553,8 +556,8 @@ linode-control-env-template tag=edgegap-default-tag file="secrets/linode-control
       printf '%q\n' "$2"
     }
     {
-      echo "# Lightrider Linode control-host install env."
-      echo "# This file is shell-sourced locally, then converted to a container env file on the Linode."
+      echo "# Lightrider web-server/control-host install env."
+      echo "# This file is shell-sourced locally, then converted to a container env file on the VPS."
       echo "# Keep LIGHTRIDER_PROTOCOL_ID/LIGHTRIDER_PRIVATE_KEY in sync with the Edgegap game-server app version."
       write_env LIGHTRIDER_MATCHMAKER_IMAGE "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-matchmaker:{{tag}}"
       write_env LIGHTRIDER_MATCHMAKER_TAG "{{tag}}"
@@ -580,24 +583,41 @@ linode-control-env-template tag=edgegap-default-tag file="secrets/linode-control
     chmod 600 "{{file}}"
     echo "Wrote {{file}}"
 
-linode-control-install host="45.79.138.102" ssh_port="22" env="secrets/linode-control-host.env":
+web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.env":
     #!/usr/bin/env bash
     set -euo pipefail
     test -f "{{env}}" || {
-      echo "{{env}} does not exist. Run: just linode-control-env-template" >&2
+      echo "{{env}} does not exist. Run: just web-server-env-template" >&2
       exit 1
     }
-    remote_dir="/tmp/lightrider-control-setup"
+    remote_dir="/tmp/lightrider-web-server-setup"
     ssh -p "{{ssh_port}}" "root@{{host}}" "mkdir -p '$remote_dir'"
-    scp -P "{{ssh_port}}" tools/setup_linode_control_host.sh "root@{{host}}:$remote_dir/setup_linode_control_host.sh"
-    scp -P "{{ssh_port}}" "{{env}}" "root@{{host}}:$remote_dir/linode-control-host.env"
-    ssh -p "{{ssh_port}}" "root@{{host}}" "bash '$remote_dir/setup_linode_control_host.sh' --env-file '$remote_dir/linode-control-host.env'"
+    scp -P "{{ssh_port}}" tools/setup_web_server_host.sh "root@{{host}}:$remote_dir/setup_web_server_host.sh"
+    scp -P "{{ssh_port}}" "{{env}}" "root@{{host}}:$remote_dir/web-server.env"
+    ssh -p "{{ssh_port}}" "root@{{host}}" "bash '$remote_dir/setup_web_server_host.sh' --env-file '$remote_dir/web-server.env'; rm -f '$remote_dir/web-server.env'"
 
-linode-control-health host="45.79.138.102":
+web-server-health host="45.79.138.102":
     #!/usr/bin/env bash
     set -euo pipefail
     curl -fsS "http://{{host}}/" >/dev/null
     echo "web ok: http://{{host}}/"
+
+deploy-web-server host="45.79.138.102" ssh_port="22" tag=edgegap-default-tag env="secrets/web-server.env":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just matchmaker-build-push {{tag}}
+    FORCE=1 just web-server-env-template {{tag}} {{env}} {{host}}
+    just web-server-install {{host}} {{ssh_port}} {{env}}
+    just web-server-health {{host}}
+
+linode-control-env-template tag=edgegap-default-tag file="secrets/linode-control-host.env" host="45.79.138.102":
+    just web-server-env-template {{tag}} {{file}} {{host}}
+
+linode-control-install host="45.79.138.102" ssh_port="22" env="secrets/linode-control-host.env":
+    just web-server-install {{host}} {{ssh_port}} {{env}}
+
+linode-control-health host="45.79.138.102":
+    just web-server-health {{host}}
 
 netcode-secret:
     #!/usr/bin/env bash

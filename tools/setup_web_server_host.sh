@@ -4,10 +4,10 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  setup_linode_control_host.sh --env-file /path/to/linode-control-host.env [options]
+  setup_web_server_host.sh --env-file /path/to/web-server.env [options]
 
 Installs and starts the Lightrider matchmaker/control container on a Debian
-Linode host. The container bundles NATS, the web server, the WASM client,
+VPS host. The container bundles NATS, the web server, the WASM client,
 bevygap_matchmaker_httpd, and bevygap_matchmaker.
 
 Options:
