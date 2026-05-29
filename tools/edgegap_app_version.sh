@@ -176,6 +176,7 @@ api_request() {
 }
 
 build_desired_payload() {
+  local mode="${1:-create}"
   local nats_insecure=""
   local secure_nats="${BEVYGAP_REQUIRE_SECURE_NATS:-1}"
   if truthy "${EDGEGAP_NATS_INSECURE:-${NATS_INSECURE:-}}"; then
@@ -197,6 +198,7 @@ build_desired_payload() {
   fi
 
   jq -n \
+    --arg payload_mode "$mode" \
     --arg name "$version" \
     --arg repository "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}" \
     --arg image "${EDGEGAP_REGISTRY_PROJECT}/lightrider-server" \
@@ -241,8 +243,6 @@ build_desired_payload() {
       docker_repository: $repository,
       docker_image: $image,
       docker_tag: $tag,
-      req_cpu: ($req_cpu | tonumber),
-      req_memory: ($req_memory | tonumber),
       use_telemetry: true,
       force_cache: bool($force_cache),
       session_config: {
@@ -281,6 +281,10 @@ build_desired_payload() {
         maybe_env("BEVYGAP_CERT_DIGEST_TTL_SECS"; $cert_digest_ttl_secs; false)
       ]
     }
+    + (if $payload_mode == "patch" then {} else {
+      req_cpu: ($req_cpu | tonumber),
+      req_memory: ($req_memory | tonumber)
+    } end)
     + (if $private_username != "" then {private_username: $private_username} else {} end)
     + (if $private_token != "" then {private_token: $private_token} else {} end)
     '
@@ -480,7 +484,9 @@ case "$command" in
     ensure_app_exists
     desired_file="$(mktemp)"
     current_file="$(mktemp)"
+    patch_file="$(mktemp)"
     build_desired_payload > "$desired_file"
+    build_desired_payload patch > "$patch_file"
     status="$(get_app_version "$current_file")"
     app_enc="$(urlencode "$app")"
     version_enc="$(urlencode "$version")"
@@ -489,29 +495,29 @@ case "$command" in
       status="$(api_request POST "/v1/app/${app_enc}/version" "$desired_file" "$current_file")"
     elif [[ "$status" =~ ^2 ]]; then
       echo "Updating Edgegap app version ${app}/${version}"
-      status="$(api_request PATCH "/v1/app/${app_enc}/version/${version_enc}" "$desired_file" "$current_file")"
+      status="$(api_request PATCH "/v1/app/${app_enc}/version/${version_enc}" "$patch_file" "$current_file")"
     else
       echo "edgegap-app-version: failed to fetch ${app}/${version} before sync (HTTP $status)" >&2
       cat "$current_file" >&2 || true
-      rm -f "$desired_file" "$current_file"
+      rm -f "$desired_file" "$current_file" "$patch_file"
       exit 1
     fi
     if [[ ! "$status" =~ ^2 ]]; then
       echo "edgegap-app-version: sync failed for ${app}/${version} (HTTP $status)" >&2
       cat "$current_file" >&2 || true
-      rm -f "$desired_file" "$current_file"
+      rm -f "$desired_file" "$current_file" "$patch_file"
       exit 1
     fi
     status="$(get_app_version "$current_file")"
     if [[ ! "$status" =~ ^2 ]]; then
       echo "edgegap-app-version: failed to refetch ${app}/${version} after sync (HTTP $status)" >&2
       cat "$current_file" >&2 || true
-      rm -f "$desired_file" "$current_file"
+      rm -f "$desired_file" "$current_file" "$patch_file"
       exit 1
     fi
     verify_current_matches_desired "$current_file" "$desired_file"
     write_manifest "$desired_file"
-    rm -f "$desired_file" "$current_file"
+    rm -f "$desired_file" "$current_file" "$patch_file"
     ;;
   verify)
     require_api

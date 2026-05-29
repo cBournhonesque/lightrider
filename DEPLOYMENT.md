@@ -345,6 +345,8 @@ Use `EDGEGAP_NATS_INSECURE=1` only for temporary no-TLS NATS testing. With NATS 
 
 The app-version sync defaults `EDGEGAP_FORCE_CACHE=false` because the current Edgegap organization has no enabled image-cache quota. Set `EDGEGAP_FORCE_CACHE=true` only after Edgegap cache capacity is available.
 
+The Edgegap API accepts `req_cpu` and `req_memory` on app-version creation but rejects them on app-version update. The sync tool sends those fields only for create, uses a PATCH-safe payload for updates, and then verifies the refetched deploy-critical state.
+
 Then run the local services in separate terminals:
 
 ```bash
