@@ -1,12 +1,14 @@
 use crate::collision::death::DeathView;
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
 use bevy::prelude::*;
+use lightyear::connection::client::Connected;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
-use lightyear::prelude::{Controlled, Predicted};
+use lightyear::prelude::{Client, Controlled, Link, Predicted};
 use shared::config::{ArenaConfig, GameConfig};
 use shared::network::protocol::prelude::{
     Player, PlayerDeathStats, PlayerRank, PlayerScore, PlayerStatus, RoomId, TailPoints,
 };
+use std::time::Duration;
 
 const TOP_LEADERBOARD_ROWS: usize = 5;
 const NEARBY_LEADERBOARD_ROWS: usize = 5;
@@ -16,8 +18,16 @@ const MINIMAP_HEIGHT: f32 = 82.0;
 const MINIMAP_DOT_SIZE: f32 = 8.0;
 const MINIMAP_CROWN_WIDTH: f32 = 16.0;
 const MINIMAP_CROWN_HEIGHT: f32 = 14.0;
+const DEBUG_BUTTON_WIDTH: f32 = 78.0;
+const DEBUG_BUTTON_HEIGHT: f32 = 30.0;
+const DEBUG_PANEL_WIDTH: f32 = 150.0;
 
 pub(crate) struct HudRenderPlugin;
+
+#[derive(Resource, Default)]
+struct DebugPanelState {
+    visible: bool,
+}
 
 #[derive(Component)]
 struct LeaderboardText;
@@ -30,6 +40,15 @@ struct DeathOverlayTitle;
 
 #[derive(Component)]
 struct DeathOverlayStatsText;
+
+#[derive(Component)]
+struct DebugToggleButton;
+
+#[derive(Component)]
+struct DebugPanelRoot;
+
+#[derive(Component)]
+struct DebugStatsText;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 struct MiniMapDot(MiniMapDotKind);
@@ -53,8 +72,17 @@ struct LeaderboardEntry {
 
 impl Plugin for HudRenderPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<DebugPanelState>();
         app.add_systems(Startup, spawn_hud);
-        app.add_systems(Update, (update_leaderboard, update_death_overlay));
+        app.add_systems(
+            Update,
+            (
+                update_leaderboard,
+                update_death_overlay,
+                toggle_debug_panel,
+                update_debug_stats,
+            ),
+        );
         app.add_systems(
             PostUpdate,
             update_minimap.after(FrameInterpolationSystems::Interpolate),
@@ -137,6 +165,65 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
 
     commands
         .spawn((
+            DebugPanelRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(12.0),
+                bottom: Val::Px(50.0),
+                width: Val::Px(DEBUG_PANEL_WIDTH),
+                padding: UiRect::all(Val::Px(8.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.68)),
+            Visibility::Hidden,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("Network"),
+                TextColor(Color::srgb(0.75, 0.95, 1.0)),
+                title_font.clone(),
+            ));
+            parent.spawn((
+                DebugStatsText,
+                Text::new(format_network_debug_stats(None)),
+                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                body_font.clone(),
+            ));
+        });
+
+    commands
+        .spawn((
+            Button,
+            DebugToggleButton,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(12.0),
+                bottom: Val::Px(12.0),
+                width: Val::Px(DEBUG_BUTTON_WIDTH),
+                height: Val::Px(DEBUG_BUTTON_HEIGHT),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(debug_button_color(false, Interaction::None)),
+            BorderColor::all(Color::srgba(0.55, 0.95, 1.0, 0.32)),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("DEBUG"),
+                TextColor(Color::srgb(0.82, 0.94, 1.0)),
+                TextFont {
+                    font_size: 12.0,
+                    ..default()
+                },
+            ));
+        });
+
+    commands
+        .spawn((
             DeathOverlayRoot,
             Node {
                 position_type: PositionType::Absolute,
@@ -182,6 +269,48 @@ fn minimap_node(size: Vec2) -> Node {
         height: Val::Px(size.y),
         ..default()
     }
+}
+
+fn toggle_debug_panel(
+    mut state: ResMut<DebugPanelState>,
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (Changed<Interaction>, With<DebugToggleButton>),
+    >,
+    mut panels: Query<&mut Visibility, With<DebugPanelRoot>>,
+) {
+    for (interaction, mut color) in &mut buttons {
+        if *interaction == Interaction::Pressed {
+            state.visible = !state.visible;
+            for mut visibility in &mut panels {
+                *visibility = if state.visible {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+            }
+        }
+        *color = BackgroundColor(debug_button_color(state.visible, *interaction));
+    }
+}
+
+fn update_debug_stats(
+    clients: Query<(&Link, Has<Connected>), With<Client>>,
+    mut stats_text: Query<&mut Text, With<DebugStatsText>>,
+) {
+    let Ok(mut text) = stats_text.single_mut() else {
+        return;
+    };
+    let stats = clients
+        .iter()
+        .next()
+        .map(|(link, connected)| NetworkDebugStats {
+            connected,
+            ping: link.stats.rtt,
+            jitter: link.stats.jitter,
+        });
+
+    text.0 = format_network_debug_stats(stats);
 }
 
 fn update_leaderboard(
@@ -409,6 +538,47 @@ fn push_unique(rows: &mut Vec<LeaderboardEntry>, entry: &LeaderboardEntry) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NetworkDebugStats {
+    connected: bool,
+    ping: Duration,
+    jitter: Duration,
+}
+
+fn debug_button_color(visible: bool, interaction: Interaction) -> Color {
+    match (visible, interaction) {
+        (_, Interaction::Pressed) => Color::srgba(0.16, 0.64, 0.92, 0.62),
+        (true, Interaction::Hovered) => Color::srgba(0.12, 0.48, 0.72, 0.62),
+        (false, Interaction::Hovered) => Color::srgba(0.06, 0.18, 0.26, 0.58),
+        (true, Interaction::None) => Color::srgba(0.08, 0.34, 0.52, 0.58),
+        (false, Interaction::None) => Color::srgba(0.015, 0.018, 0.022, 0.38),
+    }
+}
+
+fn format_network_debug_stats(stats: Option<NetworkDebugStats>) -> String {
+    let Some(stats) = stats else {
+        return "Status: offline\nPing: --\nJitter: --".to_string();
+    };
+    if !stats.connected {
+        return "Status: connecting\nPing: --\nJitter: --".to_string();
+    }
+
+    format!(
+        "Status: connected\nPing: {}\nJitter: {}",
+        format_latency(stats.ping),
+        format_latency(stats.jitter)
+    )
+}
+
+fn format_latency(duration: Duration) -> String {
+    let millis = duration.as_secs_f64() * 1000.0;
+    if millis < 10.0 {
+        format!("{millis:.1} ms")
+    } else {
+        format!("{millis:.0} ms")
+    }
+}
+
 fn format_leaderboard_rows(rows: &[LeaderboardEntry]) -> String {
     if rows.is_empty() {
         return "No players".to_string();
@@ -538,5 +708,30 @@ mod tests {
         assert!(text.contains("Kills: 3"));
         assert!(text.contains("Time as leader: 0:05"));
         assert!(text.contains("Food eaten: 7"));
+    }
+
+    #[test]
+    fn network_debug_stats_show_connection_state_and_latency() {
+        let text = format_network_debug_stats(Some(NetworkDebugStats {
+            connected: true,
+            ping: Duration::from_millis(42),
+            jitter: Duration::from_micros(3500),
+        }));
+
+        assert!(text.contains("Status: connected"));
+        assert!(text.contains("Ping: 42 ms"));
+        assert!(text.contains("Jitter: 3.5 ms"));
+    }
+
+    #[test]
+    fn network_debug_stats_show_connecting_without_latency() {
+        assert_eq!(
+            format_network_debug_stats(Some(NetworkDebugStats {
+                connected: false,
+                ping: Duration::ZERO,
+                jitter: Duration::ZERO,
+            })),
+            "Status: connecting\nPing: --\nJitter: --"
+        );
     }
 }

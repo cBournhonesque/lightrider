@@ -34,6 +34,13 @@ Useful optional env:
   BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=800
   BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT=16
   BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT=85
+  BEVYGAP_STATIC_CLIENT_COUNTRY_CODES=US
+  BEVYGAP_GEOIP_DB=/etc/lightrider/GeoLite2-Country.mmdb
+  LIGHTRIDER_RUN_STATIC_SERVER=1
+  LIGHTRIDER_STATIC_SERVER_IMAGE=<registry>/<project>/lightrider-server:<tag>
+  LIGHTRIDER_STATIC_PUBLIC_IP=<public-ip>
+  LIGHTRIDER_STATIC_PORT=7777
+  LIGHTRIDER_STATIC_REQUEST_ID=linode-us-east-1
 EOF
 }
 
@@ -108,10 +115,16 @@ fi
 EDGEGAP_APP_NAME="${EDGEGAP_APP_NAME:-lightrider}"
 EDGEGAP_APP_VERSION="${EDGEGAP_APP_VERSION:-${LIGHTRIDER_MATCHMAKER_TAG:-dev}}"
 LIGHTRIDER_MATCHMAKER_TAG="${LIGHTRIDER_MATCHMAKER_TAG:-$EDGEGAP_APP_VERSION}"
+LIGHTRIDER_RUN_STATIC_SERVER="${LIGHTRIDER_RUN_STATIC_SERVER:-0}"
 NATS_ALLOW_INSECURE="${NATS_ALLOW_INSECURE:-1}"
 BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT="${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}"
 BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT="${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}"
 BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT="${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}"
+BEVYGAP_STATIC_CLIENT_COUNTRY_CODES="${BEVYGAP_STATIC_CLIENT_COUNTRY_CODES:-US}"
+LIGHTRIDER_STATIC_PORT="${LIGHTRIDER_STATIC_PORT:-7777}"
+LIGHTRIDER_STATIC_REQUEST_ID="${LIGHTRIDER_STATIC_REQUEST_ID:-linode-us-east-1}"
+LIGHTRIDER_STATIC_COUNTRY_CODE="${LIGHTRIDER_STATIC_COUNTRY_CODE:-US}"
+LIGHTRIDER_STATIC_REGION="${LIGHTRIDER_STATIC_REGION:-us-east}"
 
 if [[ -z "${MATCHMAKER_CORS:-}" ]]; then
   if command -v curl >/dev/null 2>&1; then
@@ -121,11 +134,17 @@ if [[ -z "${MATCHMAKER_CORS:-}" ]]; then
   fi
   MATCHMAKER_CORS="http://${public_ip}"
 fi
+LIGHTRIDER_STATIC_PUBLIC_IP="${LIGHTRIDER_STATIC_PUBLIC_IP:-${public_ip:-$(hostname -I | awk '{print $1}')}}"
 
 if [[ -z "${LIGHTRIDER_MATCHMAKER_IMAGE:-}" ]]; then
   : "${EDGEGAP_REGISTRY_URL:?EDGEGAP_REGISTRY_URL is required when LIGHTRIDER_MATCHMAKER_IMAGE is unset}"
   : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT is required when LIGHTRIDER_MATCHMAKER_IMAGE is unset}"
   LIGHTRIDER_MATCHMAKER_IMAGE="${EDGEGAP_REGISTRY_URL}/${EDGEGAP_REGISTRY_PROJECT}/lightrider-matchmaker:${LIGHTRIDER_MATCHMAKER_TAG}"
+fi
+if [[ -z "${LIGHTRIDER_STATIC_SERVER_IMAGE:-}" ]]; then
+  : "${EDGEGAP_REGISTRY_URL:?EDGEGAP_REGISTRY_URL is required when LIGHTRIDER_STATIC_SERVER_IMAGE is unset}"
+  : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT is required when LIGHTRIDER_STATIC_SERVER_IMAGE is unset}"
+  LIGHTRIDER_STATIC_SERVER_IMAGE="${EDGEGAP_REGISTRY_URL}/${EDGEGAP_REGISTRY_PROJECT}/lightrider-server:${LIGHTRIDER_MATCHMAKER_TAG}"
 fi
 
 required_vars=(
@@ -162,6 +181,9 @@ fi
 
 if [[ "$pull_image" == 1 ]]; then
   podman pull "$LIGHTRIDER_MATCHMAKER_IMAGE"
+  if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+    podman pull "$LIGHTRIDER_STATIC_SERVER_IMAGE"
+  fi
 fi
 
 install -d -m 700 /etc/lightrider
@@ -185,8 +207,43 @@ BEVYGAP_NATS_NAMESPACE=${BEVYGAP_NATS_NAMESPACE:-${EDGEGAP_APP_NAME}_${EDGEGAP_A
 BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=$BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT
 BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT=$BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT
 BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT=$BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT
+BEVYGAP_STATIC_CLIENT_COUNTRY_CODES=$BEVYGAP_STATIC_CLIENT_COUNTRY_CODES
 EOF
+if [[ -n "${BEVYGAP_GEOIP_DB:-}" ]]; then
+  echo "BEVYGAP_GEOIP_DB=$BEVYGAP_GEOIP_DB" >> "$runtime_env"
+fi
 chmod 600 "$runtime_env"
+
+static_runtime_env="/etc/lightrider/lightrider-static-server.env"
+if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+  cat > "$static_runtime_env" <<EOF
+PORT=$LIGHTRIDER_STATIC_PORT
+LIGHTRIDER_CONFIG=${LIGHTRIDER_CONFIG:-/app/config/default.ron}
+LIGHTRIDER_BEVYGAP=1
+LIGHTRIDER_PROTOCOL_ID=$LIGHTRIDER_PROTOCOL_ID
+LIGHTRIDER_PRIVATE_KEY=$LIGHTRIDER_PRIVATE_KEY
+LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=${LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE:-1}
+NATS_HOST=127.0.0.1:4222
+NATS_USER=$NATS_USER
+NATS_PASSWORD=$NATS_PASSWORD
+NATS_INSECURE=1
+BEVYGAP_NATS_NAMESPACE=${BEVYGAP_NATS_NAMESPACE:-${EDGEGAP_APP_NAME}_${EDGEGAP_APP_VERSION}}
+BEVYGAP_CONTEXT_MODE=local
+BEVYGAP_DEPLOYMENT_PROVIDER=static
+BEVYGAP_DEPLOYMENT_COUNTRY_CODE=$LIGHTRIDER_STATIC_COUNTRY_CODE
+BEVYGAP_DEPLOYMENT_REGION=$LIGHTRIDER_STATIC_REGION
+ARBITRIUM_REQUEST_ID=$LIGHTRIDER_STATIC_REQUEST_ID
+ARBITRIUM_PUBLIC_IP=$LIGHTRIDER_STATIC_PUBLIC_IP
+ARBITRIUM_DELETE_URL=local-static://delete/$LIGHTRIDER_STATIC_REQUEST_ID
+ARBITRIUM_DELETE_TOKEN=local-static-delete-token
+ARBITRIUM_CONTEXT_URL=local-static://context/$LIGHTRIDER_STATIC_REQUEST_ID/1
+ARBITRIUM_CONTEXT_TOKEN=local-static-context-token
+ARBITRIUM_DEPLOYMENT_LOCATION={"city":"Linode","country":"US"}
+ARBITRIUM_PORTS_MAPPING={"game":{"name":"game","internal":$LIGHTRIDER_STATIC_PORT,"external":$LIGHTRIDER_STATIC_PORT,"protocol":"UDP"}}
+SELF_SIGNED_SANS=$LIGHTRIDER_STATIC_PUBLIC_IP,localhost,127.0.0.1
+EOF
+  chmod 600 "$static_runtime_env"
+fi
 
 service_file="/etc/systemd/system/${service_name}.service"
 cat > "$service_file" <<EOF
@@ -208,6 +265,7 @@ ExecStart=/usr/bin/podman run --name $service_name \\
   -p 4222:4222 \\
   -p 127.0.0.1:8222:8222 \\
   -v /var/lib/lightrider/nats:/data/nats \\
+  -v /etc/lightrider:/etc/lightrider:ro \\
   \${LIGHTRIDER_MATCHMAKER_IMAGE}
 ExecStop=/usr/bin/podman stop -t 20 $service_name
 
@@ -215,13 +273,52 @@ ExecStop=/usr/bin/podman stop -t 20 $service_name
 WantedBy=multi-user.target
 EOF
 
+static_service_name="lightrider-static-server"
+static_service_file="/etc/systemd/system/${static_service_name}.service"
+if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+  cat > "$static_service_file" <<EOF
+[Unit]
+Description=Lightrider static game server
+Wants=network-online.target ${service_name}.service
+After=network-online.target ${service_name}.service
+
+[Service]
+Environment=LIGHTRIDER_STATIC_SERVER_IMAGE=$LIGHTRIDER_STATIC_SERVER_IMAGE
+EnvironmentFile=$static_runtime_env
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+ExecStartPre=-/usr/bin/podman rm -f $static_service_name
+ExecStart=/usr/bin/podman run --name $static_service_name \\
+  --network host \\
+  --env-file $static_runtime_env \\
+  \${LIGHTRIDER_STATIC_SERVER_IMAGE}
+ExecStop=/usr/bin/podman stop -t 20 $static_service_name
+
+[Install]
+WantedBy=multi-user.target
+EOF
+else
+  systemctl disable "$static_service_name" >/dev/null 2>&1 || true
+  rm -f "$static_service_file"
+fi
+
 systemctl daemon-reload
 systemctl enable "$service_name"
+if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+  systemctl enable "$static_service_name"
+fi
 
 if [[ "$start_service" == 1 ]]; then
   systemctl restart "$service_name"
+  if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+    systemctl restart "$static_service_name"
+  fi
   sleep 2
   systemctl --no-pager --full status "$service_name" || true
+  if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+    systemctl --no-pager --full status "$static_service_name" || true
+  fi
   echo
   echo "Local health checks:"
   web_ready=0
@@ -255,7 +352,10 @@ Published host ports:
   80/tcp    web client + /matchmaker/ws
   4222/tcp  NATS for Edgegap game servers
   8222/tcp  NATS monitoring bound to localhost only
+  $LIGHTRIDER_STATIC_PORT/udp  optional static Lightrider game server
 
 Matchmaker image:
   $LIGHTRIDER_MATCHMAKER_IMAGE
+Static server image:
+  $LIGHTRIDER_STATIC_SERVER_IMAGE
 EOF

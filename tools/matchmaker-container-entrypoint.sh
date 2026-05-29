@@ -135,7 +135,12 @@ matchmaker_args=(
   --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}"
   --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}"
   --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}"
+  --static-client-country-codes "${BEVYGAP_STATIC_CLIENT_COUNTRY_CODES:-US}"
 )
+
+if [[ -n "${BEVYGAP_GEOIP_DB:-}" ]]; then
+  matchmaker_args+=(--geoip-db "$BEVYGAP_GEOIP_DB")
+fi
 
 if [[ -n "${LIGHTRIDER_PRIVATE_KEY:-}" ]]; then
   matchmaker_args+=(--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY")

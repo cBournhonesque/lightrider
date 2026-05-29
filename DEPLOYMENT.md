@@ -7,6 +7,8 @@ The current production shape uses two images:
 - `lightrider-server`: the Edgegap game-server image. It runs the Bevy/Lightyear server with Bevygap enabled.
 - `lightrider-matchmaker`: the public control/web image. It bundles NATS, `bevygap_matchmaker`, `bevygap_matchmaker_httpd`, nginx, and the browser WASM client files.
 
+The same `lightrider-server` image can also run as an optional static game server on the control VPS. That lets US public traffic use the VPS first, then fall back to Edgegap when the static deployment is full or above policy limits. Private/specific room codes ignore location so invited players can reach the room even when they are outside the static deployment's preferred region.
+
 Do not put real credentials in this document. Store local secrets in `secrets/edgegap.env`, which is ignored by git.
 
 ## Prerequisites
@@ -390,10 +392,46 @@ Production currently means:
 
 - browser clients load the WASM page from the matchmaker/control host,
 - browser clients talk to `bevygap_matchmaker_httpd` through WebSocket,
-- the matchmaker creates Edgegap sessions,
-- the Edgegap-hosted game server publishes readiness and certificate digest through NATS,
+- the matchmaker routes to an eligible static deployment or creates/reuses Edgegap sessions,
+- the selected game server publishes readiness, deployment metrics, and certificate digest through NATS,
 - the matchmaker returns a Lightyear `ConnectToken`,
-- the browser connects to the Edgegap server over WebTransport/QUIC.
+- the browser connects to the selected game server over WebTransport/QUIC.
+
+### Static VPS Plus Edgegap Routing
+
+The static VPS game-server path uses the same Bevygap metrics and token flow as Edgegap, but skips Edgegap session creation:
+
+1. `lightrider-static-server` runs on the control VPS using the `lightrider-server` image, `--network host`, UDP/WebTransport port `7777`, and `BEVYGAP_CONTEXT_MODE=local`.
+2. The static server publishes deployment metrics to NATS with `BEVYGAP_DEPLOYMENT_PROVIDER=static`, `BEVYGAP_DEPLOYMENT_COUNTRY_CODE=US`, and `BEVYGAP_DEPLOYMENT_REGION=us-east`.
+3. `bevygap_matchmaker` reads deployment metrics from NATS KV.
+4. For public `auto`/`new` rooms, the matchmaker only considers static deployments when the client IP GeoIP country is in `BEVYGAP_STATIC_CLIENT_COUNTRY_CODES` such as `US`.
+5. For private four-letter room codes and explicit room ids, the matchmaker ignores location and picks any deployment that can host or already hosts that room.
+6. If no deployment is selected, the matchmaker creates a normal Edgegap session.
+
+Public static routing requires a MaxMind GeoLite2/GeoIP2 country database. Without `BEVYGAP_GEOIP_DB`, public clients have unknown country and fall back to Edgegap. Private/specific rooms still work without GeoIP.
+
+To install a GeoIP DB on the VPS:
+
+```bash
+ssh -i ~/.ssh/lightrider_linode_ed25519 root@45.79.138.102 'mkdir -p /etc/lightrider'
+scp -i ~/.ssh/lightrider_linode_ed25519 GeoLite2-Country.mmdb root@45.79.138.102:/etc/lightrider/GeoLite2-Country.mmdb
+ssh -i ~/.ssh/lightrider_linode_ed25519 root@45.79.138.102 'chmod 644 /etc/lightrider/GeoLite2-Country.mmdb'
+```
+
+Then include the path when generating the control-host env:
+
+```bash
+BEVYGAP_GEOIP_DB=/etc/lightrider/GeoLite2-Country.mmdb \
+  just deploy-web-server-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
+The control-host generated env enables the static server by default through `LIGHTRIDER_RUN_STATIC_SERVER=1`. Set `LIGHTRIDER_RUN_STATIC_SERVER=0` before the deploy command to run only the matchmaker/web/NATS service.
+
+The VPS or provider firewall must allow:
+
+- `80/tcp` for the current HTTP web client and `/matchmaker/ws` path,
+- `4222/tcp` for Edgegap game servers to reach NATS,
+- `7777/udp` for the optional static WebTransport game server.
 
 ### Linode Control Host
 
@@ -758,6 +796,9 @@ The installer publishes:
 - `80/tcp`: web client and `/matchmaker/ws`.
 - `4222/tcp`: NATS for Edgegap game servers.
 - `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
+- `7777/udp`: optional static Lightrider game server when `LIGHTRIDER_RUN_STATIC_SERVER=1`.
+
+The old `bevygap_matchmaker_httpd` log line `got empty response, breaking` was the normal end-of-stream sentinel after the matchmaker had already sent `SessionReady` or `Error`. Current builds log `matchmaker response stream finished after N chunks` for that normal case and only warn if the stream ends before a terminal response. If you still see the old line, rebuild/push/redeploy the `lightrider-matchmaker` image.
 
 The `4222/tcp` NATS port is publicly reachable if the VPS firewall allows it. That is required for Edgegap-hosted game servers to publish readiness/certificate metadata, but it should be treated as a temporary smoke-test setup unless TLS and strong credentials are enabled. If the Linode firewall is restrictive, allow inbound TCP `4222` from Edgegap egress ranges if available, or from `0.0.0.0/0` only for a short test window.
 
