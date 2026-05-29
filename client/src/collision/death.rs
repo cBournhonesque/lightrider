@@ -12,6 +12,12 @@ use shared::network::protocol::prelude::{
 
 pub(crate) struct DeathPlugin;
 
+#[derive(Message, Clone, Debug, PartialEq)]
+pub(crate) struct ConfirmedDeath {
+    pub(crate) message: PlayerDeath,
+    pub(crate) local_player: bool,
+}
+
 #[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
 pub(crate) struct DeathView {
     pub(crate) killer_snake: Option<Entity>,
@@ -32,6 +38,7 @@ impl Plugin for DeathPlugin {
         // states
         app.init_state::<GameState>();
         app.init_resource::<DeathView>();
+        app.add_message::<ConfirmedDeath>();
 
         // systems
         // TODO: toggling the actions is not enough, ideally we would disable/enable the entire input plugin
@@ -63,16 +70,20 @@ fn handle_death_message(
     time: Res<Time>,
     mut receivers: Query<&mut MessageReceiver<PlayerDeath>, With<Client>>,
     player: Query<Entity, (With<Player>, With<Controlled>)>,
+    mut confirmed_deaths: MessageWriter<ConfirmedDeath>,
 ) {
-    let Ok(player) = player.single() else {
-        return;
-    };
     let Ok(mut receiver) = receivers.single_mut() else {
         return;
     };
+    let local_player = player.single().ok();
     for message in receiver.receive() {
         trace!(?message, "Received death message");
-        if message.killed_player == player {
+        let local_player_died = local_player == Some(message.killed_player);
+        confirmed_deaths.write(ConfirmedDeath {
+            message: message.clone(),
+            local_player: local_player_died,
+        });
+        if local_player_died {
             debug!("I died");
             death_view.killer_snake = death_camera_target(&message);
             death_view.respawn_allowed_at_seconds =

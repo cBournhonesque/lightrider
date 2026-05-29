@@ -2,6 +2,12 @@ FROM rustlang/rust:nightly-bookworm AS chef
 
 ARG CARGO_CHEF_VERSION=0.1.77
 
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    RUSTUP_USE_CURL=1
+
+COPY host-ca-certificates.crt /tmp/host-ca-certificates.crt
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -17,6 +23,9 @@ RUN apt-get update && \
         libxkbcommon-dev \
         libxrandr-dev \
         pkg-config && \
+    if [ -s /tmp/host-ca-certificates.crt ]; then \
+        cat /tmp/host-ca-certificates.crt >> /etc/ssl/certs/ca-certificates.crt; \
+    fi && \
     rm -rf /var/lib/apt/lists/* && \
     cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
 
@@ -39,6 +48,8 @@ ARG SERVER_RELEASE_LTO=false
 ARG SERVER_RELEASE_CODEGEN_UNITS=16
 
 COPY --from=planner /tmp/lightrider-server-recipe.json /tmp/lightrider-server-recipe.json
+COPY lightyear /src/lightyear
+COPY bevygap /src/bevygap
 
 RUN CARGO_INCREMENTAL="${SERVER_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${SERVER_CARGO_JOBS}" \

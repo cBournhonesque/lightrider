@@ -552,9 +552,11 @@ SKIP_IMAGE_BUILD=1 just deploy-web-server host=<vps-ip> tag="$tag"
 
 That builds and pushes to the Edgegap container registry locally, then makes the VPS pull and run the already-pushed image.
 
-Both production Dockerfiles use `cargo-chef` to cache Rust dependencies as separate image layers. The build context includes `lightrider`, `bevygap`, and `lightyear`; their manifests participate in the dependency recipe, while source-only changes in those repos should only invalidate the final app build layers. The first build is still slow, but rebuilds after ordinary Rust source edits should reuse more cached dependency work.
+Both production Dockerfiles use `cargo-chef` to cache Rust dependencies as separate image layers. The build context includes `lightrider`, `bevygap`, and `lightyear`. Lightrider source-only edits should mostly hit final app build layers; sibling path dependencies are copied into cook stages so Cargo can resolve them, so source edits in `bevygap` or `lightyear` can still invalidate dependency layers. The first build is still slow, but rebuilds after ordinary Lightrider source edits should reuse more cached dependency work.
 
 Local production image builds use Podman layer caching by default through `podman build --layers`, plus the `cargo-chef` dependency layers in the Dockerfiles. Keep `NO_CACHE=1` for cases where the build cache is known stale. Direct non-container Rust builds still use the repo's local incremental Cargo profile for iteration, but the production image default keeps `CARGO_INCREMENTAL=0` to avoid large incremental state inside image layers.
+
+The image build context also includes the host CA bundle as `host-ca-certificates.crt`. This lets local container builds trust enterprise TLS interception roots when `rustup` downloads the WASM target; CI copies the GitHub runner CA bundle the same way.
 
 #### GitHub Release Image Builds
 

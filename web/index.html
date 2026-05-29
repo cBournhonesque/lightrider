@@ -73,6 +73,7 @@
         box-shadow: 0 24px 90px rgb(0 0 0 / 56%);
         max-width: 420px;
         padding: 26px;
+        position: relative;
         width: min(420px, calc(100vw - 48px));
       }
 
@@ -122,7 +123,8 @@
 
       .play-button,
       .modal-links button,
-      .menu-button {
+      .menu-button,
+      .modal-close {
         border: 0;
         cursor: pointer;
       }
@@ -162,6 +164,47 @@
       .modal-links button {
         background: transparent;
         padding: 0;
+      }
+
+      .modal-close {
+        align-items: center;
+        background: rgb(255 255 255 / 8%);
+        border: 1px solid rgb(212 255 247 / 22%);
+        border-radius: 6px;
+        color: #cffffb;
+        display: flex;
+        font-size: 13px;
+        font-weight: 800;
+        height: 30px;
+        justify-content: center;
+        padding: 0;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        width: 30px;
+      }
+
+      .modal-close:hover,
+      .menu-button:hover,
+      .room-code-badge:hover {
+        border-color: rgb(112 255 238 / 52%);
+      }
+
+      .room-code-badge {
+        align-items: center;
+        background: rgb(2 10 16 / 72%);
+        border: 1px solid rgb(102 255 232 / 28%);
+        border-radius: 6px;
+        color: #bdfbf5;
+        display: flex;
+        font-size: 12px;
+        font-weight: 800;
+        height: 34px;
+        left: 14px;
+        padding: 0 12px;
+        position: absolute;
+        top: 14px;
+        z-index: 3;
       }
 
       .menu-button {

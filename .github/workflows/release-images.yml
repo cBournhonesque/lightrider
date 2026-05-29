@@ -78,6 +78,11 @@ jobs:
             --exclude .git \
             --exclude target \
             bevygap/ lightrider/.edgegap-build/context/bevygap/
+          if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+            cp /etc/ssl/certs/ca-certificates.crt lightrider/.edgegap-build/context/host-ca-certificates.crt
+          else
+            : > lightrider/.edgegap-build/context/host-ca-certificates.crt
+          fi
 
       - name: Set image names
         shell: bash

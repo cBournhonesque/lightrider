@@ -495,6 +495,9 @@ web-build:
       --target web \
       --out-dir web/pkg \
       target/wasm32-unknown-unknown/debug/lightrider-web.wasm
+    rm -rf web/assets
+    mkdir -p web/assets
+    cp -R assets/. web/assets/
     echo "Built web/pkg/lightrider-web.js"
 
 web-serve bind="127.0.0.1" port="8000": web-build
@@ -534,6 +537,11 @@ edgegap-context:
       --exclude .git \
       --exclude target \
       ../bevygap/ .edgegap-build/context/bevygap/
+    if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+      cp /etc/ssl/certs/ca-certificates.crt .edgegap-build/context/host-ca-certificates.crt
+    else
+      : > .edgegap-build/context/host-ca-certificates.crt
+    fi
 
 edgegap-login:
     #!/usr/bin/env bash

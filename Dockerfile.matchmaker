@@ -4,6 +4,12 @@ FROM rustlang/rust:nightly-bookworm AS chef
 
 ARG CARGO_CHEF_VERSION=0.1.77
 
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    RUSTUP_USE_CURL=1
+
+COPY host-ca-certificates.crt /tmp/host-ca-certificates.crt
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -20,6 +26,9 @@ RUN apt-get update && \
         libxkbcommon-dev \
         libxrandr-dev \
         pkg-config && \
+    if [ -s /tmp/host-ca-certificates.crt ]; then \
+        cat /tmp/host-ca-certificates.crt >> /etc/ssl/certs/ca-certificates.crt; \
+    fi && \
     rm -rf /var/lib/apt/lists/* && \
     CARGO_BUILD_JOBS=1 cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
 
@@ -55,6 +64,8 @@ RUN rustup target add wasm32-unknown-unknown && \
 
 COPY --from=planner /tmp/bevygap-matchmaker-recipe.json /tmp/bevygap-matchmaker-recipe.json
 COPY --from=planner /tmp/lightrider-web-recipe.json /tmp/lightrider-web-recipe.json
+COPY lightyear /src/lightyear
+COPY bevygap /src/bevygap
 
 WORKDIR /src/bevygap
 RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
@@ -115,6 +126,8 @@ RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
         --out-dir /tmp/lightrider-web/pkg \
         /src/lightrider/target/wasm32-unknown-unknown/release/lightrider-web.wasm && \
     cp /src/lightrider/web/index.html /tmp/lightrider-web/index.html && \
+    mkdir -p /tmp/lightrider-web/assets && \
+    cp -R /src/lightrider/assets/. /tmp/lightrider-web/assets/ && \
     rm -rf /src/lightrider/target /src/bevygap/target /usr/local/cargo/git /usr/local/cargo/registry
 
 FROM debian:bookworm-slim AS runtime

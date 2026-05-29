@@ -13,6 +13,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<ArenaConfig>();
         app.register_type::<MovementConfig>();
         app.register_type::<RenderConfig>();
+        app.register_type::<SoundConfig>();
         app.register_type::<FoodConfig>();
         app.register_type::<RoomConfig>();
         app.register_type::<BotConfig>();
@@ -30,6 +31,7 @@ pub struct GameConfig {
     pub arena: ArenaConfig,
     pub movement: MovementConfig,
     pub render: RenderConfig,
+    pub sound: SoundConfig,
     pub food: FoodConfig,
     pub rooms: RoomConfig,
     pub bots: BotConfig,
@@ -45,6 +47,7 @@ impl Default for GameConfig {
             arena: ArenaConfig::default(),
             movement: MovementConfig::default(),
             render: RenderConfig::default(),
+            sound: SoundConfig::default(),
             food: FoodConfig::default(),
             rooms: RoomConfig::default(),
             bots: BotConfig::default(),
@@ -131,9 +134,11 @@ impl MovementConfig {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
 #[serde(default)]
 pub struct RenderConfig {
+    pub use_assets: bool,
     pub tail_width: f32,
     pub head_size: f32,
     pub map_outline_width: f32,
+    pub background_tile_size: f32,
     pub normal_camera_scale: f32,
     pub normal_camera_growth_per_tail_length: f32,
     pub normal_camera_max_scale: f32,
@@ -143,13 +148,45 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         Self {
+            use_assets: true,
             tail_width: 2.0,
             head_size: 10.0,
             map_outline_width: 3.0,
+            background_tile_size: 128.0,
             normal_camera_scale: 0.35,
             normal_camera_growth_per_tail_length: 0.001,
             normal_camera_max_scale: 1.0,
             debug_camera_scale: 1.0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
+#[serde(default)]
+pub struct SoundConfig {
+    pub enabled: bool,
+    pub master_volume: f32,
+    pub death_volume: f32,
+    pub food_volume: f32,
+    pub speed_loop_start_speed: f32,
+    pub speed_loop_min_volume: f32,
+    pub speed_loop_max_volume: f32,
+    pub speed_fast_loop_start_speed: f32,
+    pub speed_fast_loop_volume: f32,
+}
+
+impl Default for SoundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            master_volume: 1.0,
+            death_volume: 0.2,
+            food_volume: 0.3,
+            speed_loop_start_speed: 1.0,
+            speed_loop_min_volume: 0.05,
+            speed_loop_max_volume: 0.8,
+            speed_fast_loop_start_speed: 3.0,
+            speed_fast_loop_volume: 1.4,
         }
     }
 }
@@ -339,6 +376,9 @@ mod tests {
         assert_eq!(config.render.normal_camera_scale, 0.35);
         assert_eq!(config.render.normal_camera_max_scale, 1.0);
         assert_eq!(config.render.debug_camera_scale, 1.0);
+        assert!(config.sound.enabled);
+        assert_eq!(config.sound.death_volume, 0.2);
+        assert_eq!(config.sound.speed_loop_max_volume, 0.8);
         assert_eq!(config.food.visual_radius, 3.0);
         assert_eq!(config.food.radius, 8.0);
         assert_eq!(config.food.magnet_radius, 75.0);

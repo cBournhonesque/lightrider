@@ -1,4 +1,5 @@
 use crate::collision::death::DeathView;
+use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
 use bevy::prelude::*;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Controlled, Predicted};
@@ -13,6 +14,8 @@ const MAX_LEADERBOARD_ROWS: usize = 10;
 const MINIMAP_WIDTH: f32 = 180.0;
 const MINIMAP_HEIGHT: f32 = 82.0;
 const MINIMAP_DOT_SIZE: f32 = 8.0;
+const MINIMAP_CROWN_WIDTH: f32 = 16.0;
+const MINIMAP_CROWN_HEIGHT: f32 = 14.0;
 
 pub(crate) struct HudRenderPlugin;
 
@@ -34,6 +37,7 @@ struct MiniMapDot(MiniMapDotKind);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MiniMapDotKind {
     Leader,
+    LeaderCrown,
     Player,
 }
 
@@ -58,7 +62,7 @@ impl Plugin for HudRenderPlugin {
     }
 }
 
-fn spawn_hud(mut commands: Commands) {
+fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
     let title_font = TextFont {
         font_size: 16.0,
         ..default()
@@ -104,20 +108,28 @@ fn spawn_hud(mut commands: Commands) {
                 bottom: Val::Px(12.0),
                 width: Val::Px(MINIMAP_WIDTH),
                 height: Val::Px(MINIMAP_HEIGHT),
+                border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.72)),
+            BorderColor::all(Color::srgba(0.55, 0.95, 1.0, 0.62)),
         ))
         .with_children(|parent| {
             parent.spawn((
                 MiniMapDot(MiniMapDotKind::Leader),
-                minimap_dot_node(),
+                minimap_node(Vec2::splat(MINIMAP_DOT_SIZE)),
                 BackgroundColor(Color::srgb(1.0, 0.86, 0.26)),
                 Visibility::Hidden,
             ));
             parent.spawn((
+                MiniMapDot(MiniMapDotKind::LeaderCrown),
+                minimap_node(Vec2::new(MINIMAP_CROWN_WIDTH, MINIMAP_CROWN_HEIGHT)),
+                ImageNode::new(sheet.image()).with_rect(PowerlineFrame::Crown.rect()),
+                Visibility::Hidden,
+            ));
+            parent.spawn((
                 MiniMapDot(MiniMapDotKind::Player),
-                minimap_dot_node(),
+                minimap_node(Vec2::splat(MINIMAP_DOT_SIZE)),
                 BackgroundColor(Color::srgb(0.16, 0.78, 1.0)),
                 Visibility::Hidden,
             ));
@@ -163,11 +175,11 @@ fn spawn_hud(mut commands: Commands) {
         });
 }
 
-fn minimap_dot_node() -> Node {
+fn minimap_node(size: Vec2) -> Node {
     Node {
         position_type: PositionType::Absolute,
-        width: Val::Px(MINIMAP_DOT_SIZE),
-        height: Val::Px(MINIMAP_DOT_SIZE),
+        width: Val::Px(size.x),
+        height: Val::Px(size.y),
         ..default()
     }
 }
@@ -241,11 +253,11 @@ fn update_minimap(
 
     for (dot, mut node, mut visibility) in &mut dots {
         let position = match dot.0 {
-            MiniMapDotKind::Leader => leader_position,
+            MiniMapDotKind::Leader | MiniMapDotKind::LeaderCrown => leader_position,
             MiniMapDotKind::Player => local_position,
         };
         if let Some(position) = position {
-            let panel_position = minimap_position(position, &config.arena);
+            let panel_position = minimap_position_for_kind(position, &config.arena, dot.0);
             node.left = Val::Px(panel_position.x);
             node.top = Val::Px(panel_position.y);
             *visibility = Visibility::Inherited;
@@ -303,13 +315,38 @@ fn snake_head(tail: &TailPoints) -> Vec2 {
     tail.front().0
 }
 
+#[cfg(test)]
 fn minimap_position(position: Vec2, arena: &ArenaConfig) -> Vec2 {
+    minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_DOT_SIZE), Vec2::ZERO)
+}
+
+fn minimap_position_for_kind(position: Vec2, arena: &ArenaConfig, kind: MiniMapDotKind) -> Vec2 {
+    match kind {
+        MiniMapDotKind::Leader => {
+            minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_DOT_SIZE), Vec2::ZERO)
+        }
+        MiniMapDotKind::LeaderCrown => minimap_position_for_size(
+            position,
+            arena,
+            Vec2::new(MINIMAP_CROWN_WIDTH, MINIMAP_CROWN_HEIGHT),
+            Vec2::new(0.0, -MINIMAP_CROWN_HEIGHT + 3.0),
+        ),
+        MiniMapDotKind::Player => {
+            minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_DOT_SIZE), Vec2::ZERO)
+        }
+    }
+}
+
+fn minimap_position_for_size(
+    position: Vec2,
+    arena: &ArenaConfig,
+    size: Vec2,
+    offset: Vec2,
+) -> Vec2 {
     let normalized_x = ((position.x / arena.width) + 0.5).clamp(0.0, 1.0);
     let normalized_y = (0.5 - (position.y / arena.height)).clamp(0.0, 1.0);
-    Vec2::new(
-        normalized_x * (MINIMAP_WIDTH - MINIMAP_DOT_SIZE),
-        normalized_y * (MINIMAP_HEIGHT - MINIMAP_DOT_SIZE),
-    )
+    let max = Vec2::new(MINIMAP_WIDTH - size.x, MINIMAP_HEIGHT - size.y).max(Vec2::ZERO);
+    (Vec2::new(normalized_x * max.x, normalized_y * max.y) + offset).clamp(Vec2::ZERO, max)
 }
 
 fn select_leaderboard_rows(entries: &mut [LeaderboardEntry]) -> Vec<LeaderboardEntry> {

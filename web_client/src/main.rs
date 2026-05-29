@@ -27,11 +27,13 @@ mod wasm {
     fn LightriderWebApp() -> impl IntoView {
         let settings = BrowserSettings::from_location();
         let initial_room_code = room_input_value(settings.room);
+        let initial_room_badge = room_badge_text(settings.room);
         let show_modal = settings.player_name.trim().is_empty();
         let bevy_options = settings.bevy_options();
 
         let (name, set_name) = signal(settings.player_name.clone());
         let (room_code, set_room_code) = signal(initial_room_code);
+        let (room_badge, set_room_badge) = signal(initial_room_badge);
         let (modal_open, set_modal_open) = signal(show_modal);
         let (error, set_error) = signal(String::new());
 
@@ -48,6 +50,7 @@ mod wasm {
             match parse_room_input(&room) {
                 Ok(room_mode) => {
                     set_error.set(String::new());
+                    set_room_badge.set(room_badge_text(room_mode));
                     apply_settings_to_url(&player_name, room_mode);
                     set_modal_open.set(false);
                 }
@@ -65,6 +68,14 @@ mod wasm {
                 </div>
                 <div class=move || if modal_open.get() { "menu-backdrop" } else { "menu-backdrop hidden" }>
                     <section class="join-modal" aria-label="Lightrider menu">
+                        <button
+                            class="modal-close"
+                            type="button"
+                            aria-label="Close menu"
+                            on:click=move |_| set_modal_open.set(false)
+                        >
+                            "X"
+                        </button>
                         <h1>"LIGHTRIDER"</h1>
                         <form on:submit=on_submit>
                             <input
@@ -98,6 +109,9 @@ mod wasm {
                         </div>
                     </section>
                 </div>
+                <div class=move || if room_badge.get().is_some() { "room-code-badge" } else { "room-code-badge hidden" }>
+                    {move || room_badge.get().unwrap_or_default()}
+                </div>
                 <button
                     class=move || if modal_open.get() { "menu-button hidden" } else { "menu-button" }
                     type="button"
@@ -107,6 +121,15 @@ mod wasm {
                     "MENU"
                 </button>
             </main>
+        }
+    }
+
+    fn room_badge_text(room: RoomJoinMode) -> Option<String> {
+        match room {
+            RoomJoinMode::Private(code) => Some(format!("ROOM {code}")),
+            RoomJoinMode::Specific(id) => Some(format!("ROOM {}", id.0)),
+            RoomJoinMode::New => Some("NEW ROOM".to_string()),
+            RoomJoinMode::Auto => None,
         }
     }
 

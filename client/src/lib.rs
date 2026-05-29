@@ -32,6 +32,7 @@ mod menu;
 pub(crate) mod network;
 mod render;
 mod rooms;
+mod sound;
 
 // Use a port of 0 to automatically select a port
 pub const CLIENT_PORT: u16 = 0;
@@ -199,6 +200,8 @@ pub fn app(cli: Cli) -> App {
             });
         }
         app.add_plugins(plugins);
+        #[cfg(target_family = "wasm")]
+        app.add_plugins(bevy_web_keepalive::WebKeepalivePlugin::default());
     }
 
     #[cfg(feature = "bevygap")]
@@ -260,6 +263,7 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(camera::CameraPlugin { debug_enabled });
         app.add_plugins(debug::DebugPlugin);
         app.add_plugins(render::RenderPlugin);
+        app.add_plugins(sound::SoundPlugin);
     }
     app
 }

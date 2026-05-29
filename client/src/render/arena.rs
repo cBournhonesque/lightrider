@@ -1,17 +1,80 @@
 use bevy::prelude::*;
 
+use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
 use shared::config::GameConfig;
 
 pub(crate) struct ArenaRenderPlugin;
 
+const BACKGROUND_Z: f32 = -100.0;
+const BORDER_Z: f32 = -90.0;
+
 impl Plugin for ArenaRenderPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(Color::srgb(0.015, 0.018, 0.022)));
+        app.add_systems(Startup, spawn_asset_arena);
         app.add_systems(Update, draw_arena);
     }
 }
 
+fn spawn_asset_arena(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    sheet: Res<PowerlineSpriteSheet>,
+) {
+    if !config.render.use_assets {
+        return;
+    }
+
+    let half_width = config.arena.width * 0.5;
+    let half_height = config.arena.height * 0.5;
+    let tile_size = config.render.background_tile_size.max(16.0);
+    let columns = (config.arena.width / tile_size).ceil() as i32 + 2;
+    let rows = (config.arena.height / tile_size).ceil() as i32 + 2;
+    let start_x = -columns as f32 * tile_size * 0.5 + tile_size * 0.5;
+    let start_y = -rows as f32 * tile_size * 0.5 + tile_size * 0.5;
+
+    for column in 0..columns {
+        for row in 0..rows {
+            let position = Vec3::new(
+                start_x + column as f32 * tile_size,
+                start_y + row as f32 * tile_size,
+                BACKGROUND_Z,
+            );
+            commands.spawn((
+                sheet.sprite(
+                    PowerlineFrame::Grid,
+                    Vec2::splat(tile_size),
+                    Color::srgba(0.72, 0.9, 1.0, 0.72),
+                ),
+                Transform::from_translation(position),
+            ));
+        }
+    }
+
+    let outline_width = config.render.map_outline_width.max(1.0);
+    let border_color = Color::srgba(0.68, 1.0, 1.0, 0.92);
+    let horizontal_size = Vec2::new(config.arena.width, outline_width);
+    let vertical_size = Vec2::new(config.arena.height, outline_width);
+    for y in [-half_height, half_height] {
+        commands.spawn((
+            sheet.sprite(PowerlineFrame::WallStretch, horizontal_size, border_color),
+            Transform::from_xyz(0.0, y, BORDER_Z),
+        ));
+    }
+    for x in [-half_width, half_width] {
+        commands.spawn((
+            sheet.sprite(PowerlineFrame::WallStretch, vertical_size, border_color),
+            Transform::from_xyz(x, 0.0, BORDER_Z)
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+        ));
+    }
+}
+
 fn draw_arena(mut gizmos: Gizmos, config: Res<GameConfig>) {
+    if config.render.use_assets {
+        return;
+    }
+
     let half_width = config.arena.width * 0.5;
     let half_height = config.arena.height * 0.5;
     let min = Vec2::new(-half_width, -half_height);
