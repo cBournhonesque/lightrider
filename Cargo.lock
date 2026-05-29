@@ -10211,9 +10211,11 @@ dependencies = [
  "bevy",
  "client",
  "console_error_panic_hook",
+ "js-sys",
  "leptos",
  "leptos-bevy-canvas",
  "shared",
+ "wasm-bindgen",
  "web-sys",
 ]
 

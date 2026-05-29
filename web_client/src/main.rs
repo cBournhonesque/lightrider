@@ -29,7 +29,23 @@ mod wasm {
         let initial_room_code = room_input_value(settings.room);
         let initial_room_badge = room_badge_text(settings.room);
         let show_modal = settings.player_name.trim().is_empty();
-        let bevy_options = settings.bevy_options();
+        let startup_error = browser_startup_error(&settings);
+        if let Some(message) = startup_error.as_deref() {
+            set_status_element(Some(message));
+        }
+        let can_start_bevy = startup_error.is_none();
+        let game_stage = if can_start_bevy {
+            let bevy_options = settings.bevy_options();
+            view! {
+                <BevyCanvas
+                    canvas_id=CANVAS_ID
+                    init=move || client::web_app(bevy_options.clone())
+                />
+            }
+            .into_any()
+        } else {
+            view! { <div class="game-stage-blocked"></div> }.into_any()
+        };
 
         let (name, set_name) = signal(settings.player_name.clone());
         let (room_code, set_room_code) = signal(initial_room_code);
@@ -61,10 +77,7 @@ mod wasm {
         view! {
             <main class="lightrider-web-shell">
                 <div class="game-stage">
-                    <BevyCanvas
-                        canvas_id=CANVAS_ID
-                        init=move || client::web_app(bevy_options.clone())
-                    />
+                    {game_stage}
                 </div>
                 <div class=move || if modal_open.get() { "menu-backdrop" } else { "menu-backdrop hidden" }>
                     <section class="join-modal" aria-label="Lightrider menu">
@@ -124,6 +137,61 @@ mod wasm {
         }
     }
 
+    fn browser_startup_error(settings: &BrowserSettings) -> Option<String> {
+        let window = web_sys::window()?;
+        if !window.is_secure_context() {
+            return Some(
+                "WebTransport requires a secure browser context. Use https://, or open through http://localhost while testing."
+                    .to_string(),
+            );
+        }
+
+        if !global_exists("WebTransport") {
+            return Some(
+                "This browser does not expose WebTransport. Use a current Chromium-based browser."
+                    .to_string(),
+            );
+        }
+
+        if window_location().protocol().ok().as_deref() == Some("https:")
+            && settings.matchmaker_url.starts_with("ws://")
+        {
+            return Some("HTTPS pages must use a wss:// matchmaker URL.".to_string());
+        }
+
+        None
+    }
+
+    fn global_exists(name: &str) -> bool {
+        let Some(window) = web_sys::window() else {
+            return false;
+        };
+        js_sys::Reflect::has(window.as_ref(), &wasm_bindgen::JsValue::from_str(name))
+            .unwrap_or(false)
+    }
+
+    fn set_status_element(status: Option<&str>) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let Some(element) = document.get_element_by_id("lightrider-status") else {
+            return;
+        };
+        match status {
+            Some(status) => {
+                element.set_inner_html(status);
+                element.set_class_name("loading-status");
+            }
+            None => {
+                element.set_inner_html("");
+                element.set_class_name("loading-status hidden");
+            }
+        }
+    }
+
     fn room_badge_text(room: RoomJoinMode) -> Option<String> {
         match room {
             RoomJoinMode::Private(code) => Some(format!("ROOM {code}")),
@@ -140,18 +208,22 @@ mod wasm {
             let params = web_sys::UrlSearchParams::new_with_str(&search)
                 .expect("failed to parse query parameters");
             let room = parse_room_param(params.get("room"));
+            let bootstrap = BrowserBootstrap::from_window();
             Self {
                 matchmaker_url: params
                     .get("matchmaker_url")
                     .filter(|value| !value.trim().is_empty())
+                    .or_else(|| bootstrap.matchmaker_url.clone())
                     .unwrap_or_else(default_matchmaker_url),
                 matchmaker_game: params
                     .get("matchmaker_game")
                     .filter(|value| !value.trim().is_empty())
+                    .or_else(|| bootstrap.matchmaker_game.clone())
                     .unwrap_or_else(|| DEFAULT_GAME.to_string()),
                 matchmaker_version: params
                     .get("matchmaker_version")
                     .filter(|value| !value.trim().is_empty())
+                    .or_else(|| bootstrap.matchmaker_version.clone())
                     .unwrap_or_else(|| DEFAULT_VERSION.to_string()),
                 player_name: params
                     .get("name")
@@ -171,6 +243,40 @@ mod wasm {
                 canvas_selector: format!("#{CANVAS_ID}"),
             }
         }
+    }
+
+    #[derive(Default)]
+    struct BrowserBootstrap {
+        matchmaker_url: Option<String>,
+        matchmaker_game: Option<String>,
+        matchmaker_version: Option<String>,
+    }
+
+    impl BrowserBootstrap {
+        fn from_window() -> Self {
+            Self {
+                matchmaker_url: bootstrap_string("matchmaker_url"),
+                matchmaker_game: bootstrap_string("matchmaker_game"),
+                matchmaker_version: bootstrap_string("matchmaker_version"),
+            }
+        }
+    }
+
+    fn bootstrap_string(key: &str) -> Option<String> {
+        let window = web_sys::window()?;
+        let bootstrap = js_sys::Reflect::get(
+            window.as_ref(),
+            &wasm_bindgen::JsValue::from_str("LIGHTRIDER_BOOTSTRAP"),
+        )
+        .ok()?;
+        if bootstrap.is_null() || bootstrap.is_undefined() {
+            return None;
+        }
+        js_sys::Reflect::get(&bootstrap, &wasm_bindgen::JsValue::from_str(key))
+            .ok()
+            .and_then(|value| value.as_string())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
     }
 
     fn window_location() -> web_sys::Location {

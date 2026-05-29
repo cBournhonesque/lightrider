@@ -36,6 +36,14 @@ truthy() {
   esac
 }
 
+js_string() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  printf '"%s"' "$value"
+}
+
 nats_port="${NATS_PORT:-4222}"
 nats_monitor_port="${NATS_MONITOR_PORT:-8222}"
 nats_user="${NATS_USER:-lightrider}"
@@ -166,6 +174,14 @@ pids+=("$!")
 pids+=("$!")
 
 rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
+cat > /usr/share/nginx/html/bootstrap.js <<BOOTSTRAP
+window.LIGHTRIDER_BOOTSTRAP = {
+  matchmaker_url: $(js_string "${LIGHTRIDER_MATCHMAKER_URL:-}"),
+  matchmaker_game: $(js_string "${EDGEGAP_APP_NAME:-lightrider}"),
+  matchmaker_version: $(js_string "${EDGEGAP_APP_VERSION:-dev}")
+};
+BOOTSTRAP
+
 cat > /etc/nginx/conf.d/default.conf <<NGINX
 server {
     listen ${web_port};

@@ -78,12 +78,14 @@
         font-weight: 800;
         justify-content: center;
         left: 50%;
+        max-width: min(640px, calc(100vw - 32px));
         min-height: 36px;
         padding: 0 14px;
         position: fixed;
+        text-align: center;
         top: 18px;
         transform: translateX(-50%);
-        white-space: nowrap;
+        white-space: normal;
         z-index: 5;
       }
 
@@ -253,6 +255,10 @@
   </head>
   <body>
     <div id="lightrider-status" class="loading-status">Loading assets...</div>
+    <script>
+      window.LIGHTRIDER_BOOTSTRAP = window.LIGHTRIDER_BOOTSTRAP || {};
+    </script>
+    <script src="./bootstrap.js"></script>
     <script type="module">
       import init from "./pkg/lightrider-web.js";
 

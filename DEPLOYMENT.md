@@ -703,7 +703,7 @@ The image exposes:
 - `4222/tcp`: NATS for Edgegap game servers.
 - `8222/tcp`: NATS monitoring. Keep this private if possible.
 
-Production should serve the web client over HTTPS. The image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context.
+Production should serve the web client over HTTPS. The image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context. A public `http://<vps-ip>` page can load the UI and call the matchmaker, but it cannot complete the browser WebTransport game connection.
 
 #### Automated VPS Setup
 
@@ -1051,4 +1051,5 @@ If WebTransport connection fails:
 - Confirm the Edgegap app version exposes internal port `7777` with UDP protocol.
 - Confirm Edgegap reports an external UDP port for the deployment/session.
 - Confirm the server published a certificate digest and the client received it in `SessionReady`.
-- Confirm the browser page is running in a secure context.
+- Confirm the browser page is running in a secure context. `https://...` is required for public hosts; `http://localhost` and `http://127.0.0.1` are acceptable for local tests.
+- If the matchmaker builds a token and the game server logs `Bevygap client id ... is now admissible`, but there is no `BevygapConnectionRequestHandler(...)` or Lightyear connect log, the browser likely never opened WebTransport. Check the browser console and the page origin before chasing NATS or netcode identity.

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bevy::app::{App, PluginGroup, ScheduleRunnerPlugin};
+use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::diagnostic::DiagnosticsPlugin;
 use bevy::input::InputPlugin;
 use bevy::prelude::default;
@@ -189,7 +190,12 @@ pub fn app(cli: Cli) -> App {
             log_plugin,
         ));
     } else {
-        let mut plugins = DefaultPlugins.set(log_plugin);
+        let mut plugins = DefaultPlugins.set(log_plugin).set(AssetPlugin {
+            // Browser asset hosts can return HTML/error bodies for missing `.meta`
+            // sidecars, which Bevy then tries to parse as RON.
+            meta_check: AssetMetaCheck::Never,
+            ..default()
+        });
         if let Some(canvas_selector) = cli.canvas_selector.clone() {
             plugins = plugins.set(WindowPlugin {
                 primary_window: Some(Window {
