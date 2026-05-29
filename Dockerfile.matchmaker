@@ -28,17 +28,19 @@ COPY bevygap /src/bevygap
 COPY lightrider /src/lightrider
 
 ARG MATCHMAKER_CARGO_JOBS=2
+ARG MATCHMAKER_CARGO_INCREMENTAL=0
 ARG MATCHMAKER_RELEASE_OPT_LEVEL=2
 ARG MATCHMAKER_RELEASE_LTO=thin
 ARG MATCHMAKER_RELEASE_CODEGEN_UNITS=8
 ARG WEB_CARGO_JOBS=2
+ARG WEB_CARGO_INCREMENTAL=0
 ARG WEB_RELEASE_OPT_LEVEL=s
 ARG WEB_RELEASE_LTO=false
 ARG WEB_RELEASE_CODEGEN_UNITS=16
 
 RUN rustup show && rustup target add wasm32-unknown-unknown
 
-RUN CARGO_INCREMENTAL=0 \
+RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \
     CARGO_PROFILE_RELEASE_LTO="${MATCHMAKER_RELEASE_LTO}" \
@@ -51,7 +53,7 @@ RUN CARGO_INCREMENTAL=0 \
     cp /src/bevygap/target/release/bevygap_matchmaker /tmp/bevygap_matchmaker && \
     cp /src/bevygap/target/release/bevygap_matchmaker_httpd /tmp/bevygap_matchmaker_httpd
 
-RUN CARGO_INCREMENTAL=0 \
+RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
     CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
@@ -65,7 +67,7 @@ RUN CARGO_INCREMENTAL=0 \
     wasm-bindgen \
         --target web \
         --out-dir /tmp/lightrider-web/pkg \
-        /src/lightrider/target/wasm32-unknown-unknown/release/lightrider_web.wasm && \
+        /src/lightrider/target/wasm32-unknown-unknown/release/lightrider-web.wasm && \
     cp /src/lightrider/web/index.html /tmp/lightrider-web/index.html && \
     rm -rf /src/lightrider/target /src/bevygap/target /usr/local/cargo/git /usr/local/cargo/registry
 

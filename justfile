@@ -87,8 +87,8 @@ trace-summary dir="logs/debug/latest":
 #    Bevygap server plugin always fetches ARBITRIUM_CONTEXT_URL, even for local smoke tests.
 # 3. `just bevygap-server-local` starts Lightrider with `--features bevygap -- --bevygap`
 #    and should publish context plus WebTransport cert digest into NATS.
-# 4. `just bevygap-matchmaker-mock-local` and `just bevygap-httpd-local` test the token path
-#    without creating real Edgegap sessions.
+# 4. `just bevygap-matchmaker-mock-stack-local` starts the matchmaker worker plus
+#    WebSocket HTTPD gateway without creating real Edgegap sessions.
 # 5. `just bevygap-client-bot` requests a matchmaker token over WebSocket and connects with it.
 # 6. `just bevygap-matchmaker-local` switches from mock sessions to real Edgegap sessions and
 #    requires `EDGEGAP_API_KEY` in the environment or secrets.
@@ -105,9 +105,8 @@ bevygap-help:
     That validates the server-side NATS/context/cert-digest path.
 
     Mock token flow:
-      4. just bevygap-matchmaker-mock-local
-      5. just bevygap-httpd-local
-      6. just bevygap-client-bot
+      4. just bevygap-matchmaker-mock-stack-local
+      5. just bevygap-client-bot
 
     One-command mock smoke:
       just bevygap-local-smoke
@@ -268,7 +267,7 @@ bevygap-matchmaker-mock-local app_name="lightrider" app_version="dev" public_ip=
       --mock-external-port {{port}} \
       --mock-deployment-request-id "${ARBITRIUM_REQUEST_ID:-local-lightrider}"
 
-bevygap-httpd-local bind="127.0.0.1:3000" cors="http://localhost:8000" fake_ip="81.128.157.100":
+bevygap-matchmaker-httpd-local bind="127.0.0.1:3000" cors="http://localhost:8000" fake_ip="81.128.157.100":
     #!/usr/bin/env bash
     set -euo pipefail
     export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
@@ -276,6 +275,40 @@ bevygap-httpd-local bind="127.0.0.1:3000" cors="http://localhost:8000" fake_ip="
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
     export NATS_INSECURE="${NATS_INSECURE:-1}"
     export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
+    cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker_httpd -- \
+      --bind {{bind}} \
+      --cors {{cors}} \
+      --fake-ip {{fake_ip}}
+
+bevygap-matchmaker-mock-stack-local app_name="lightrider" app_version="dev" public_ip="127.0.0.1" game_port="7777" bind="127.0.0.1:3000" cors="http://localhost:8000" fake_ip="81.128.157.100":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pids=()
+    cleanup() {
+      for pid in "${pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+      wait 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+    export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
+    export NATS_USER="${NATS_USER:-lightrider}"
+    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
+    export NATS_INSECURE="${NATS_INSECURE:-1}"
+    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
+    cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker -- \
+      --app-name {{app_name}} \
+      --app-version {{app_version}} \
+      --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}" \
+      --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
+      --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
+      --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
+      ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"} \
+      --mock-edgegap \
+      --mock-public-ip {{public_ip}} \
+      --mock-external-port {{game_port}} \
+      --mock-deployment-request-id "${ARBITRIUM_REQUEST_ID:-local-lightrider}" &
+    pids+=("$!")
     cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker_httpd -- \
       --bind {{bind}} \
       --cors {{cors}} \
@@ -416,6 +449,47 @@ bevygap-local-smoke seconds="8" config="config/test.ron" port="7777" httpd_port=
 
     echo "bevygap local smoke passed: $run_dir"
 
+web-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rustup target add wasm32-unknown-unknown
+    tool_root=".edgegap-build/tools"
+    wasm_bindgen="$tool_root/bin/wasm-bindgen"
+    need_wasm_bindgen=1
+    if [[ -x "$wasm_bindgen" ]]; then
+      version="$("$wasm_bindgen" --version | awk '{print $2}')"
+      if [[ "$version" == "0.2.122" ]]; then
+        need_wasm_bindgen=0
+      fi
+    fi
+    if [[ "$need_wasm_bindgen" == "1" ]]; then
+      rustup run nightly cargo install \
+        wasm-bindgen-cli \
+        --version 0.2.122 \
+        --locked \
+        --force \
+        --root "$tool_root"
+    fi
+    rustup run nightly cargo build -j 2 \
+      -p web_client \
+      --features bevygap \
+      --bin lightrider-web \
+      --target wasm32-unknown-unknown
+    rm -rf web/pkg
+    "$wasm_bindgen" \
+      --target web \
+      --out-dir web/pkg \
+      target/wasm32-unknown-unknown/debug/lightrider-web.wasm
+    echo "Built web/pkg/lightrider-web.js"
+
+web-serve bind="127.0.0.1" port="8000": web-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Serving http://localhost:{{port}}/"
+    echo "For the local Bevygap stack, open:"
+    echo "http://localhost:{{port}}/?matchmaker_url=ws://127.0.0.1:3000/matchmaker/ws&matchmaker_game=lightrider&matchmaker_version=dev"
+    python3 -m http.server "{{port}}" --bind "{{bind}}" --directory web
+
 clean-build:
     cargo clean
 
@@ -493,24 +567,78 @@ edgegap-app-sync tag=edgegap-default-tag version="dev" app="lightrider":
 edgegap-app-verify tag=edgegap-default-tag version="dev" app="lightrider":
     tools/edgegap_app_version.sh verify --app "{{app}}" --version "{{version}}" --tag "{{tag}}"
 
-matchmaker-build tag=edgegap-default-tag: edgegap-context
+matchmaker-build *args: edgegap-context
     #!/usr/bin/env bash
     set -euo pipefail
     source secrets/edgegap.env
-    image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:{{tag}}"
+    tag="{{edgegap-default-tag}}"
+    build_memory=""
+    build_cpus=""
+    build_cpu_quota=""
+    build_cpuset_cpus=""
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        tag=*) tag="${arg#tag=}" ;;
+        memory=*) build_memory="${arg#memory=}" ;;
+        build_memory=*) build_memory="${arg#build_memory=}" ;;
+        cpus=*) build_cpus="${arg#cpus=}" ;;
+        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
+        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
+        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
+        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
+        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
+        *)
+          case "$positional" in
+            0) tag="$arg" ;;
+            1) build_memory="$arg" ;;
+            2) build_cpus="$arg" ;;
+            3) build_cpu_quota="$arg" ;;
+            4) build_cpuset_cpus="$arg" ;;
+            *)
+              echo "unexpected extra argument: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:$tag"
     # Defaults are balanced for a 32G+ build machine. Drop the env values to
     # 1/false/16 if rustc is OOM-killed on a smaller host.
-    cache_args=()
+    build_cmd=(podman build)
     if [[ "${NO_CACHE:-0}" == "1" ]]; then
-      cache_args+=(--no-cache)
+      build_cmd+=(--no-cache)
     fi
-    podman build \
-      "${cache_args[@]}" \
+    build_memory="${PODMAN_BUILD_MEMORY:-$build_memory}"
+    build_cpus="${PODMAN_BUILD_CPUS:-$build_cpus}"
+    build_cpu_quota="${PODMAN_BUILD_CPU_QUOTA:-$build_cpu_quota}"
+    build_cpuset_cpus="${PODMAN_BUILD_CPUSET_CPUS:-$build_cpuset_cpus}"
+    if [[ -n "$build_memory" ]]; then
+      build_cmd+=(--memory "$build_memory")
+    fi
+    if [[ -n "$build_cpus" ]]; then
+      if [[ ! "$build_cpus" =~ ^[0-9]+$ ]]; then
+        echo "matchmaker-build cpus must be an integer because podman build has no --cpus flag; got '$build_cpus'" >&2
+        exit 2
+      fi
+      build_cmd+=(--cpu-period 100000 --cpu-quota "$((build_cpus * 100000))")
+    fi
+    if [[ -n "$build_cpu_quota" ]]; then
+      build_cmd+=(--cpu-quota "$build_cpu_quota")
+    fi
+    if [[ -n "$build_cpuset_cpus" ]]; then
+      build_cmd+=(--cpuset-cpus "$build_cpuset_cpus")
+    fi
+    "${build_cmd[@]}" \
       --build-arg "MATCHMAKER_CARGO_JOBS=${MATCHMAKER_CARGO_JOBS:-2}" \
+      --build-arg "MATCHMAKER_CARGO_INCREMENTAL=${MATCHMAKER_CARGO_INCREMENTAL:-0}" \
       --build-arg "MATCHMAKER_RELEASE_OPT_LEVEL=${MATCHMAKER_RELEASE_OPT_LEVEL:-2}" \
       --build-arg "MATCHMAKER_RELEASE_LTO=${MATCHMAKER_RELEASE_LTO:-thin}" \
       --build-arg "MATCHMAKER_RELEASE_CODEGEN_UNITS=${MATCHMAKER_RELEASE_CODEGEN_UNITS:-8}" \
       --build-arg "WEB_CARGO_JOBS=${WEB_CARGO_JOBS:-2}" \
+      --build-arg "WEB_CARGO_INCREMENTAL=${WEB_CARGO_INCREMENTAL:-0}" \
       --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-s}" \
       --build-arg "WEB_RELEASE_LTO=${WEB_RELEASE_LTO:-false}" \
       --build-arg "WEB_RELEASE_CODEGEN_UNITS=${WEB_RELEASE_CODEGEN_UNITS:-16}" \
@@ -528,9 +656,44 @@ matchmaker-push tag=edgegap-default-tag: edgegap-login
     podman push "$image"
     echo "Pushed $image"
 
-matchmaker-build-push tag=edgegap-default-tag:
-    just matchmaker-build {{tag}}
-    just matchmaker-push {{tag}}
+matchmaker-build-push *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{edgegap-default-tag}}"
+    build_memory=""
+    build_cpus=""
+    build_cpu_quota=""
+    build_cpuset_cpus=""
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        tag=*) tag="${arg#tag=}" ;;
+        memory=*) build_memory="${arg#memory=}" ;;
+        build_memory=*) build_memory="${arg#build_memory=}" ;;
+        cpus=*) build_cpus="${arg#cpus=}" ;;
+        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
+        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
+        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
+        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
+        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
+        *)
+          case "$positional" in
+            0) tag="$arg" ;;
+            1) build_memory="$arg" ;;
+            2) build_cpus="$arg" ;;
+            3) build_cpu_quota="$arg" ;;
+            4) build_cpuset_cpus="$arg" ;;
+            *)
+              echo "unexpected extra argument: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    just matchmaker-build tag="$tag" memory="$build_memory" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
+    just matchmaker-push "$tag"
 
 prod-images-build tag=edgegap-default-tag:
     just edgegap-build {{tag}}
@@ -557,7 +720,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       source secrets/prod-netcode.env
     fi
     if [[ -z "${LIGHTRIDER_PROTOCOL_ID:-}" ]]; then
-      LIGHTRIDER_PROTOCOL_ID="$(od -An -N8 -tu8 /dev/urandom | tr -d ' ')"
+      LIGHTRIDER_PROTOCOL_ID="1"
     fi
     if [[ -z "${LIGHTRIDER_PRIVATE_KEY:-}" ]]; then
       LIGHTRIDER_PRIVATE_KEY="$(openssl rand -hex 32)"
@@ -624,6 +787,10 @@ deploy-web-server *args:
     ssh_port="22"
     tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
     env_file="secrets/web-server.env"
+    build_memory=""
+    build_cpus=""
+    build_cpu_quota=""
+    build_cpuset_cpus=""
     positional=0
     for arg in {{args}}; do
       case "$arg" in
@@ -632,6 +799,14 @@ deploy-web-server *args:
         port=*) ssh_port="${arg#port=}" ;;
         tag=*) tag="${arg#tag=}" ;;
         env=*) env_file="${arg#env=}" ;;
+        memory=*) build_memory="${arg#memory=}" ;;
+        build_memory=*) build_memory="${arg#build_memory=}" ;;
+        cpus=*) build_cpus="${arg#cpus=}" ;;
+        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
+        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
+        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
+        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
+        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
         *)
           case "$positional" in
             0) vps_host="$arg" ;;
@@ -655,25 +830,19 @@ deploy-web-server *args:
     if [[ "${SKIP_IMAGE_BUILD:-0}" == "1" ]]; then
       echo "Skipping matchmaker image build/push; assuming tag $tag is already pushed."
     else
-      just matchmaker-build-push "$tag"
+      just matchmaker-build-push "$tag" "$build_memory" "$build_cpus" "$build_cpu_quota" "$build_cpuset_cpus"
     fi
     FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host"
     just web-server-install "$vps_host" "$ssh_port" "$env_file"
     just web-server-health "$vps_host"
 
-linode-control-env-template tag=edgegap-default-tag file="secrets/linode-control-host.env" host="45.79.138.102":
-    just web-server-env-template {{tag}} {{file}} {{host}}
-
-linode-control-install host="45.79.138.102" ssh_port="22" env="secrets/linode-control-host.env":
-    just web-server-install {{host}} {{ssh_port}} {{env}}
-
-linode-control-health host="45.79.138.102":
-    just web-server-health {{host}}
-
-netcode-secret:
+netcode-secret protocol_id="":
     #!/usr/bin/env bash
     set -euo pipefail
-    protocol_id="$(od -An -N8 -tu8 /dev/urandom | tr -d ' ')"
+    protocol_id="{{protocol_id}}"
+    if [[ -z "$protocol_id" ]]; then
+      protocol_id="$(od -An -N8 -tu8 /dev/urandom | tr -d ' ')"
+    fi
     private_key="$(openssl rand -hex 32)"
     printf 'LIGHTRIDER_PROTOCOL_ID=%s\n' "$protocol_id"
     printf 'LIGHTRIDER_PRIVATE_KEY=%s\n' "$private_key"

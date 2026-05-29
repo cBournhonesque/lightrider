@@ -227,8 +227,7 @@ build_desired_payload() {
     --arg session_sockets "${EDGEGAP_SESSION_SOCKETS:-50}" \
     --arg session_empty_ttl "${EDGEGAP_SESSION_EMPTY_TTL:-5}" \
     --arg session_max_duration "${EDGEGAP_SESSION_MAX_DURATION:-60}" \
-    --arg build_type "${EDGEGAP_BUILD_TYPE:-Production}" \
-    --arg verify_image "${EDGEGAP_VERIFY_IMAGE:-true}" \
+    --arg force_cache "${EDGEGAP_FORCE_CACHE:-false}" \
     '
     def bool($v): ($v | ascii_downcase) as $x | ($x == "1" or $x == "true" or $x == "yes" or $x == "on");
     def env_item($key; $value; $secret):
@@ -245,9 +244,7 @@ build_desired_payload() {
       req_cpu: ($req_cpu | tonumber),
       req_memory: ($req_memory | tonumber),
       use_telemetry: true,
-      force_cache: true,
-      verify_image: bool($verify_image),
-      build_type: $build_type,
+      force_cache: bool($force_cache),
       session_config: {
         kind: $session_kind,
         sockets: ($session_sockets | tonumber),
@@ -312,10 +309,21 @@ redacted_filter='
     req_memory,
     use_telemetry,
     force_cache,
-    verify_image,
-    build_type,
-    session_config,
-    ports: ((.ports // []) | sort_by(.name // "", .port, .protocol)),
+    session_config: {
+      kind: .session_config.kind,
+      sockets: .session_config.sockets,
+      autodeploy: .session_config.autodeploy,
+      empty_ttl: .session_config.empty_ttl,
+      session_max_duration: .session_config.session_max_duration
+    },
+    ports: ((.ports // [])
+      | map({
+          name,
+          port,
+          protocol,
+          to_check: (.to_check // false)
+        })
+      | sort_by(.name // "", .port, .protocol)),
     envs: redact_envs
   }
 '
