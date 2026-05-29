@@ -66,6 +66,27 @@
         display: none !important;
       }
 
+      .loading-status {
+        align-items: center;
+        background: rgb(2 10 16 / 78%);
+        border: 1px solid rgb(102 255 232 / 34%);
+        border-radius: 6px;
+        box-shadow: 0 14px 50px rgb(0 0 0 / 38%);
+        color: #d9fffb;
+        display: flex;
+        font-size: 14px;
+        font-weight: 800;
+        justify-content: center;
+        left: 50%;
+        min-height: 36px;
+        padding: 0 14px;
+        position: fixed;
+        top: 18px;
+        transform: translateX(-50%);
+        white-space: nowrap;
+        z-index: 5;
+      }
+
       .join-modal {
         background: rgb(2 10 16 / 84%);
         border: 1px solid rgb(102 255 232 / 38%);
@@ -231,6 +252,7 @@
     </style>
   </head>
   <body>
+    <div id="lightrider-status" class="loading-status">Loading assets...</div>
     <script type="module">
       import init from "./pkg/lightrider-web.js";
 

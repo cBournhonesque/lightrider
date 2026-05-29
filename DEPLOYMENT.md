@@ -714,6 +714,13 @@ Equivalent wrapper:
 just deploy-web-server-pull host=45.79.138.102 tag=<already-pushed-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
 ```
 
+The Docker image tag and Edgegap app-version name can differ. This matters when the Edgegap organization has reached its app-version limit. Reuse an existing Edgegap app version by passing `edgegap_version=...`:
+
+```bash
+just edgegap-release-sync dev 45.79.138.102:4222 lightrider webtest-20260529-110706
+just deploy-web-server-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
 If the service fails to become healthy, the installer prints recent `journalctl` output. The service intentionally keeps the failed container around so these commands are useful:
 
 ```bash
@@ -733,7 +740,7 @@ On a larger machine you can opt into a heavier build:
 MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 just matchmaker-build <tag>
 ```
 
-Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup.
+Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup. The template also rotates an empty or default `NATS_PASSWORD=lightrider` into a random password because production startup refuses default `lightrider`/`lightrider` NATS credentials.
 
 The remote script is [tools/setup_web_server_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/tools/setup_web_server_host.sh). The installed systemd service is `lightrider-matchmaker`.
 

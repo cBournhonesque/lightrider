@@ -878,24 +878,32 @@ github-release tag=edgegap-default-tag title="" notes="":
     fi
     gh release create "{{tag}}" --title "$release_title" --notes "$release_notes"
 
-edgegap-release-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app="lightrider":
+edgegap-release-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app="lightrider" version="":
     #!/usr/bin/env bash
     set -euo pipefail
     source secrets/edgegap.env
     source secrets/prod-netcode.env
+    if [[ -f secrets/web-server.env ]]; then
+      source secrets/web-server.env
+    fi
+    edgegap_version="{{version}}"
+    if [[ -z "$edgegap_version" ]]; then
+      edgegap_version="{{tag}}"
+    fi
     export NATS_HOST="{{nats_host}}"
     export NATS_USER="${NATS_USER:-lightrider}"
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
     export EDGEGAP_NATS_INSECURE="${EDGEGAP_NATS_INSECURE:-1}"
-    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-{{app}}_{{tag}}}"
-    just edgegap-app-sync "{{tag}}" "{{tag}}" "{{app}}"
-    just edgegap-app-verify "{{tag}}" "{{tag}}" "{{app}}"
+    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE_OVERRIDE:-{{app}}_${edgegap_version}}"
+    just edgegap-app-sync "{{tag}}" "$edgegap_version" "{{app}}"
+    just edgegap-app-verify "{{tag}}" "$edgegap_version" "{{app}}"
 
 deploy-web-server-pull *args:
     #!/usr/bin/env bash
     set -euo pipefail
     host=""
     tag=""
+    edgegap_version=""
     ssh_port="22"
     ssh_key=""
     env_file="secrets/web-server.env"
@@ -904,6 +912,8 @@ deploy-web-server-pull *args:
       case "$arg" in
         host=*) host="${arg#host=}" ;;
         tag=*) tag="${arg#tag=}" ;;
+        edgegap_version=*) edgegap_version="${arg#edgegap_version=}" ;;
+        version=*) edgegap_version="${arg#version=}" ;;
         ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
         ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
         env=*) env_file="${arg#env=}" ;;
@@ -914,6 +924,7 @@ deploy-web-server-pull *args:
             2) ssh_port="$arg" ;;
             3) env_file="$arg" ;;
             4) ssh_key="$arg" ;;
+            5) edgegap_version="$arg" ;;
             *)
               echo "unexpected extra argument for deploy-web-server-pull: $arg" >&2
               exit 2
@@ -924,13 +935,13 @@ deploy-web-server-pull *args:
       esac
     done
     if [[ -z "$host" || -z "$tag" ]]; then
-      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env] [ssh_key]" >&2
-      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key]" >&2
+      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env] [ssh_key] [edgegap_version]" >&2
+      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [edgegap_version=<version>] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key]" >&2
       exit 2
     fi
-    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" ssh_key="$ssh_key" tag="$tag" env="$env_file"
+    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" ssh_key="$ssh_key" tag="$tag" edgegap_version="$edgegap_version" env="$env_file"
 
-web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102":
+web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102" edgegap_version="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f "{{file}}" && "${FORCE:-0}" != "1" ]]; then
@@ -952,8 +963,15 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     if [[ -z "${LIGHTRIDER_PRIVATE_KEY:-}" ]]; then
       LIGHTRIDER_PRIVATE_KEY="$(openssl rand -hex 32)"
     fi
-    if [[ -z "${NATS_PASSWORD:-}" ]]; then
+    if [[ -z "${NATS_PASSWORD:-}" || "${NATS_PASSWORD:-}" == "lightrider" ]]; then
       NATS_PASSWORD="$(openssl rand -hex 24)"
+    fi
+    edgegap_app_version="{{edgegap_version}}"
+    if [[ -z "$edgegap_app_version" ]]; then
+      edgegap_app_version="${EDGEGAP_APP_VERSION:-{{tag}}}"
+    fi
+    if [[ -n "{{edgegap_version}}" ]]; then
+      BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE_OVERRIDE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
     fi
     mkdir -p "$(dirname "{{file}}")"
     write_env() {
@@ -967,7 +985,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env LIGHTRIDER_MATCHMAKER_IMAGE "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-matchmaker:{{tag}}"
       write_env LIGHTRIDER_MATCHMAKER_TAG "{{tag}}"
       write_env EDGEGAP_APP_NAME "${EDGEGAP_APP_NAME:-lightrider}"
-      write_env EDGEGAP_APP_VERSION "${EDGEGAP_APP_VERSION:-{{tag}}}"
+      write_env EDGEGAP_APP_VERSION "$edgegap_app_version"
       write_env EDGEGAP_API_KEY "${EDGEGAP_API_KEY:-${EDGEGAP_API_TOKEN:-}}"
       write_env EDGEGAP_REGISTRY_URL "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}"
       write_env EDGEGAP_REGISTRY_PROJECT "${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}"
@@ -980,7 +998,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env NATS_PASSWORD "$NATS_PASSWORD"
       write_env NATS_ALLOW_INSECURE "${NATS_ALLOW_INSECURE:-1}"
       write_env MATCHMAKER_CORS "${MATCHMAKER_CORS:-http://{{host}}}"
-      write_env BEVYGAP_NATS_NAMESPACE "${BEVYGAP_NATS_NAMESPACE:-lightrider_{{tag}}}"
+      write_env BEVYGAP_NATS_NAMESPACE "${BEVYGAP_NATS_NAMESPACE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
       write_env BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}"
       write_env BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}"
       write_env BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}"
@@ -1028,6 +1046,7 @@ deploy-web-server *args:
     ssh_port="22"
     ssh_key=""
     tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
+    edgegap_version=""
     env_file="secrets/web-server.env"
     build_memory=""
     build_cpus=""
@@ -1041,6 +1060,8 @@ deploy-web-server *args:
         port=*) ssh_port="${arg#port=}" ;;
         ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
         tag=*) tag="${arg#tag=}" ;;
+        edgegap_version=*) edgegap_version="${arg#edgegap_version=}" ;;
+        version=*) edgegap_version="${arg#version=}" ;;
         env=*) env_file="${arg#env=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
         build_memory=*) build_memory="${arg#build_memory=}" ;;
@@ -1057,6 +1078,7 @@ deploy-web-server *args:
             2) tag="$arg" ;;
             3) env_file="$arg" ;;
             4) ssh_key="$arg" ;;
+            5) edgegap_version="$arg" ;;
             *)
               echo "unexpected extra argument: $arg" >&2
               exit 2
@@ -1067,7 +1089,7 @@ deploy-web-server *args:
       esac
     done
     if [[ -z "$vps_host" ]]; then
-      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [env=<file>]" >&2
+      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [env=<file>]" >&2
       echo "example: just deploy-web-server host=45.79.138.102" >&2
       exit 2
     fi
@@ -1076,7 +1098,7 @@ deploy-web-server *args:
     else
       just matchmaker-build-push "$tag" "$build_memory" "$build_cpus" "$build_cpu_quota" "$build_cpuset_cpus"
     fi
-    FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host"
+    FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
     just web-server-install "$vps_host" "$ssh_port" "$env_file" "$ssh_key"
     just web-server-health "$vps_host"
 

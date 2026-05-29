@@ -33,6 +33,8 @@ pub(crate) mod network;
 mod render;
 mod rooms;
 mod sound;
+#[cfg(all(target_family = "wasm", feature = "bevygap"))]
+mod web_status;
 
 // Use a port of 0 to automatically select a port
 pub const CLIENT_PORT: u16 = 0;
@@ -264,6 +266,8 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(debug::DebugPlugin);
         app.add_plugins(render::RenderPlugin);
         app.add_plugins(sound::SoundPlugin);
+        #[cfg(all(target_family = "wasm", feature = "bevygap"))]
+        app.add_plugins(web_status::WebStatusPlugin);
     }
     app
 }
