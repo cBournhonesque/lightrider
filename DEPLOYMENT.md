@@ -413,7 +413,7 @@ For the current VPS control host, the repo provides a one-command installer. It 
 On your local machine, run the whole build/push/install flow with one command:
 
 ```bash
-just deploy-web-server
+just deploy-web-server host=45.79.138.102
 ```
 
 This defaults to host `45.79.138.102`, SSH port `22`, tag `git rev-parse --short HEAD`, and env file `secrets/web-server.env`. It builds and pushes the matchmaker image, writes the ignored web-server env file, uploads the installer/env to the VPS, starts the service, deletes the temporary uploaded env file, and checks `http://45.79.138.102/`.
@@ -422,7 +422,19 @@ Equivalent explicit form:
 
 ```bash
 tag="$(git rev-parse --short HEAD)"
-just deploy-web-server 45.79.138.102 22 "$tag" secrets/web-server.env
+just deploy-web-server host=45.79.138.102 ssh_port=22 tag="$tag" env=secrets/web-server.env
+```
+
+The matchmaker/control image build is intentionally memory-conservative by default. It builds with one Cargo job, disables release LTO, and uses more codegen units because Bevygap's upstream release profile is expensive enough to be killed by the OS on smaller machines. If the image is already pushed and you only want to reinstall/update the VPS service, skip the local build:
+
+```bash
+SKIP_IMAGE_BUILD=1 just deploy-web-server host=45.79.138.102 tag=<already-pushed-tag>
+```
+
+On a larger machine you can opt into faster/heavier image builds:
+
+```bash
+MATCHMAKER_CARGO_JOBS=2 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=2 just matchmaker-build <tag>
 ```
 
 Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup.

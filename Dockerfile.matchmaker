@@ -6,6 +6,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         clang \
         curl \
+        lld \
         libasound2-dev \
         libudev-dev \
         libwayland-dev \
@@ -19,21 +20,41 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN rustup target add wasm32-unknown-unknown && \
-    cargo install wasm-bindgen-cli --version 0.2.122 --locked
+    CARGO_BUILD_JOBS=1 cargo install wasm-bindgen-cli --version 0.2.122 --locked
 
 WORKDIR /src/lightrider
 COPY lightyear /src/lightyear
 COPY bevygap /src/bevygap
 COPY lightrider /src/lightrider
 
-RUN CARGO_INCREMENTAL=0 cargo build --release -j 2 \
+ARG MATCHMAKER_CARGO_JOBS=1
+ARG MATCHMAKER_RELEASE_OPT_LEVEL=1
+ARG MATCHMAKER_RELEASE_LTO=false
+ARG MATCHMAKER_RELEASE_CODEGEN_UNITS=16
+ARG WEB_CARGO_JOBS=1
+ARG WEB_RELEASE_OPT_LEVEL=s
+ARG WEB_RELEASE_LTO=false
+ARG WEB_RELEASE_CODEGEN_UNITS=16
+
+RUN CARGO_INCREMENTAL=0 \
+    CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${MATCHMAKER_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${MATCHMAKER_RELEASE_CODEGEN_UNITS}" \
+    RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    cargo build --release -j "${MATCHMAKER_CARGO_JOBS}" \
         --manifest-path /src/bevygap/Cargo.toml \
         -p bevygap_matchmaker \
         -p bevygap_matchmaker_httpd && \
     cp /src/bevygap/target/release/bevygap_matchmaker /tmp/bevygap_matchmaker && \
     cp /src/bevygap/target/release/bevygap_matchmaker_httpd /tmp/bevygap_matchmaker_httpd
 
-RUN CARGO_INCREMENTAL=0 cargo build --release -j 2 \
+RUN CARGO_INCREMENTAL=0 \
+    CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${WEB_RELEASE_CODEGEN_UNITS}" \
+    cargo build --release -j "${WEB_CARGO_JOBS}" \
         -p web_client \
         --features bevygap \
         --bin lightrider-web \

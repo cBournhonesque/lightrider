@@ -498,7 +498,17 @@ matchmaker-build tag=edgegap-default-tag: edgegap-context
     set -euo pipefail
     source secrets/edgegap.env
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:{{tag}}"
+    # Defaults are intentionally conservative because the matchmaker image builds
+    # Bevygap plus the WASM client in one container, and release LTO can OOM.
     podman build \
+      --build-arg "MATCHMAKER_CARGO_JOBS=${MATCHMAKER_CARGO_JOBS:-1}" \
+      --build-arg "MATCHMAKER_RELEASE_OPT_LEVEL=${MATCHMAKER_RELEASE_OPT_LEVEL:-1}" \
+      --build-arg "MATCHMAKER_RELEASE_LTO=${MATCHMAKER_RELEASE_LTO:-false}" \
+      --build-arg "MATCHMAKER_RELEASE_CODEGEN_UNITS=${MATCHMAKER_RELEASE_CODEGEN_UNITS:-16}" \
+      --build-arg "WEB_CARGO_JOBS=${WEB_CARGO_JOBS:-1}" \
+      --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-s}" \
+      --build-arg "WEB_RELEASE_LTO=${WEB_RELEASE_LTO:-false}" \
+      --build-arg "WEB_RELEASE_CODEGEN_UNITS=${WEB_RELEASE_CODEGEN_UNITS:-16}" \
       -f .edgegap-build/context/lightrider/Dockerfile.matchmaker \
       -t "$image" \
       .edgegap-build/context
@@ -602,13 +612,49 @@ web-server-health host="45.79.138.102":
     curl -fsS "http://{{host}}/" >/dev/null
     echo "web ok: http://{{host}}/"
 
-deploy-web-server host="45.79.138.102" ssh_port="22" tag=edgegap-default-tag env="secrets/web-server.env":
+deploy-web-server *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    just matchmaker-build-push {{tag}}
-    FORCE=1 just web-server-env-template {{tag}} {{env}} {{host}}
-    just web-server-install {{host}} {{ssh_port}} {{env}}
-    just web-server-health {{host}}
+    vps_host=""
+    ssh_port="22"
+    tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
+    env_file="secrets/web-server.env"
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        host=*) vps_host="${arg#host=}" ;;
+        ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
+        port=*) ssh_port="${arg#port=}" ;;
+        tag=*) tag="${arg#tag=}" ;;
+        env=*) env_file="${arg#env=}" ;;
+        *)
+          case "$positional" in
+            0) vps_host="$arg" ;;
+            1) ssh_port="$arg" ;;
+            2) tag="$arg" ;;
+            3) env_file="$arg" ;;
+            *)
+              echo "unexpected extra argument: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    if [[ -z "$vps_host" ]]; then
+      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [tag=<tag>] [env=<file>]" >&2
+      echo "example: just deploy-web-server host=45.79.138.102" >&2
+      exit 2
+    fi
+    if [[ "${SKIP_IMAGE_BUILD:-0}" == "1" ]]; then
+      echo "Skipping matchmaker image build/push; assuming tag $tag is already pushed."
+    else
+      just matchmaker-build-push "$tag"
+    fi
+    FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host"
+    just web-server-install "$vps_host" "$ssh_port" "$env_file"
+    just web-server-health "$vps_host"
 
 linode-control-env-template tag=edgegap-default-tag file="secrets/linode-control-host.env" host="45.79.138.102":
     just web-server-env-template {{tag}} {{file}} {{host}}
