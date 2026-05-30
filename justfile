@@ -1090,14 +1090,48 @@ web-server-health host="45.79.138.102" scheme="http":
     curl -fsSL --max-time 30 "$url" >/dev/null
     echo "web ok: $url"
 
-web-server-enable-nats-tls-from-caddy host="45.79.138.102" domain="45.79.138.102.sslip.io" ssh_port="22" ssh_key="":
+web-server-enable-nats-tls-from-caddy *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    ssh_key="{{ssh_key}}"
+    host="45.79.138.102"
+    domain="45.79.138.102.sslip.io"
+    ssh_port="22"
+    ssh_key=""
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        host=*) host="${arg#host=}" ;;
+        domain=*) domain="${arg#domain=}" ;;
+        web_domain=*) domain="${arg#web_domain=}" ;;
+        ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
+        port=*) ssh_port="${arg#port=}" ;;
+        ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
+        *)
+          case "$positional" in
+            0) host="$arg" ;;
+            1) domain="$arg" ;;
+            2) ssh_port="$arg" ;;
+            3) ssh_key="$arg" ;;
+            *)
+              echo "unexpected extra argument for web-server-enable-nats-tls-from-caddy: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    domain="${domain#http://}"
+    domain="${domain#https://}"
+    domain="${domain%%/*}"
+    if [[ -z "$host" || -z "$domain" ]]; then
+      echo "usage: just web-server-enable-nats-tls-from-caddy host=<vps-ip> domain=<domain> [ssh_key=~/.ssh/key] [ssh_port=22]" >&2
+      exit 2
+    fi
     if [[ "$ssh_key" == "~/"* ]]; then
       ssh_key="${HOME}/${ssh_key#~/}"
     fi
-    ssh_opts=(-p "{{ssh_port}}")
+    ssh_opts=(-p "$ssh_port")
     if [[ -n "$ssh_key" ]]; then
       test -f "$ssh_key" || {
         echo "SSH key not found: $ssh_key" >&2
@@ -1105,9 +1139,9 @@ web-server-enable-nats-tls-from-caddy host="45.79.138.102" domain="45.79.138.102
       }
       ssh_opts+=(-i "$ssh_key" -o IdentitiesOnly=yes)
     fi
-    ssh "${ssh_opts[@]}" "root@{{host}}" 'bash -s' <<'REMOTE'
+    ssh "${ssh_opts[@]}" "root@$host" "LIGHTRIDER_WEB_DOMAIN=$(printf '%q' "$domain") bash -s" <<'REMOTE'
     set -euo pipefail
-    domain="{{domain}}"
+    domain="${LIGHTRIDER_WEB_DOMAIN:?LIGHTRIDER_WEB_DOMAIN is required}"
     cert_root="/var/lib/caddy/.local/share/caddy/certificates"
     env_file="/etc/lightrider/lightrider-matchmaker.env"
     static_env_file="/etc/lightrider/lightrider-static-server.env"
