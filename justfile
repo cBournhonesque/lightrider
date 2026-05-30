@@ -904,6 +904,8 @@ deploy-web-server-pull *args:
     host=""
     tag=""
     edgegap_version=""
+    web_domain=""
+    enable_https=""
     ssh_port="22"
     ssh_key=""
     env_file="secrets/web-server.env"
@@ -914,6 +916,10 @@ deploy-web-server-pull *args:
         tag=*) tag="${arg#tag=}" ;;
         edgegap_version=*) edgegap_version="${arg#edgegap_version=}" ;;
         version=*) edgegap_version="${arg#version=}" ;;
+        domain=*) web_domain="${arg#domain=}" ;;
+        web_domain=*) web_domain="${arg#web_domain=}" ;;
+        https=*) enable_https="${arg#https=}" ;;
+        enable_https=*) enable_https="${arg#enable_https=}" ;;
         ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
         ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
         env=*) env_file="${arg#env=}" ;;
@@ -925,6 +931,7 @@ deploy-web-server-pull *args:
             3) env_file="$arg" ;;
             4) ssh_key="$arg" ;;
             5) edgegap_version="$arg" ;;
+            6) web_domain="$arg" ;;
             *)
               echo "unexpected extra argument for deploy-web-server-pull: $arg" >&2
               exit 2
@@ -935,11 +942,11 @@ deploy-web-server-pull *args:
       esac
     done
     if [[ -z "$host" || -z "$tag" ]]; then
-      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env] [ssh_key] [edgegap_version]" >&2
-      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [edgegap_version=<version>] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key]" >&2
+      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env] [ssh_key] [edgegap_version] [domain]" >&2
+      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [edgegap_version=<version>] [domain=play.example.com] [https=1] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key]" >&2
       exit 2
     fi
-    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" ssh_key="$ssh_key" tag="$tag" edgegap_version="$edgegap_version" env="$env_file"
+    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" ssh_key="$ssh_key" tag="$tag" edgegap_version="$edgegap_version" domain="$web_domain" https="$enable_https" env="$env_file"
 
 web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102" edgegap_version="":
     #!/usr/bin/env bash
@@ -973,6 +980,29 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     if [[ -n "{{edgegap_version}}" ]]; then
       BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE_OVERRIDE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
     fi
+    web_domain="${LIGHTRIDER_WEB_DOMAIN:-}"
+    web_domain="${web_domain#http://}"
+    web_domain="${web_domain#https://}"
+    web_domain="${web_domain%%/*}"
+    enable_https="${LIGHTRIDER_ENABLE_HTTPS:-}"
+    if [[ -z "$enable_https" && -n "$web_domain" ]]; then
+      enable_https=1
+    fi
+    enable_https="${enable_https:-0}"
+    if [[ "$enable_https" == "true" || "$enable_https" == "yes" || "$enable_https" == "on" ]]; then
+      enable_https=1
+    fi
+    if [[ "$enable_https" == "1" && -z "$web_domain" ]]; then
+      echo "LIGHTRIDER_WEB_DOMAIN is required when LIGHTRIDER_ENABLE_HTTPS=1" >&2
+      exit 1
+    fi
+    if [[ "$enable_https" == "1" ]]; then
+      default_matchmaker_cors="https://${web_domain}"
+      default_matchmaker_url="wss://${web_domain}/matchmaker/ws"
+    else
+      default_matchmaker_cors="http://{{host}}"
+      default_matchmaker_url=""
+    fi
     mkdir -p "$(dirname "{{file}}")"
     write_env() {
       printf '%s=' "$1"
@@ -997,7 +1027,11 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env NATS_USER "${NATS_USER:-lightrider}"
       write_env NATS_PASSWORD "$NATS_PASSWORD"
       write_env NATS_ALLOW_INSECURE "${NATS_ALLOW_INSECURE:-1}"
-      write_env MATCHMAKER_CORS "${MATCHMAKER_CORS:-http://{{host}}}"
+      write_env LIGHTRIDER_ENABLE_HTTPS "$enable_https"
+      write_env LIGHTRIDER_WEB_DOMAIN "$web_domain"
+      write_env LIGHTRIDER_CADDY_EMAIL "${LIGHTRIDER_CADDY_EMAIL:-}"
+      write_env MATCHMAKER_CORS "${MATCHMAKER_CORS:-$default_matchmaker_cors}"
+      write_env LIGHTRIDER_MATCHMAKER_URL "${LIGHTRIDER_MATCHMAKER_URL:-$default_matchmaker_url}"
       write_env BEVYGAP_NATS_NAMESPACE "${BEVYGAP_NATS_NAMESPACE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
       write_env BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}"
       write_env BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}"
@@ -1013,6 +1047,11 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env LIGHTRIDER_STATIC_REQUEST_ID "${LIGHTRIDER_STATIC_REQUEST_ID:-linode-us-east-1}"
       write_env LIGHTRIDER_STATIC_COUNTRY_CODE "${LIGHTRIDER_STATIC_COUNTRY_CODE:-US}"
       write_env LIGHTRIDER_STATIC_REGION "${LIGHTRIDER_STATIC_REGION:-us-east}"
+      if [[ -n "${NATS_TLS_CERT:-}" ]]; then write_env NATS_TLS_CERT "$NATS_TLS_CERT"; fi
+      if [[ -n "${NATS_TLS_KEY:-}" ]]; then write_env NATS_TLS_KEY "$NATS_TLS_KEY"; fi
+      if [[ -n "${NATS_CA:-}" ]]; then write_env NATS_CA "$NATS_CA"; fi
+      if [[ -n "${MATCHMAKER_NATS_HOST:-}" ]]; then write_env MATCHMAKER_NATS_HOST "$MATCHMAKER_NATS_HOST"; fi
+      if [[ -n "${MATCHMAKER_NATS_INSECURE:-}" ]]; then write_env MATCHMAKER_NATS_INSECURE "$MATCHMAKER_NATS_INSECURE"; fi
     } > "{{file}}"
     chmod 600 "{{file}}"
     echo "Wrote {{file}}"
@@ -1044,11 +1083,94 @@ web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.en
     scp "${scp_opts[@]}" "{{env}}" "root@{{host}}:$remote_dir/web-server.env"
     ssh "${ssh_opts[@]}" "root@{{host}}" "bash '$remote_dir/setup_web_server_host.sh' --env-file '$remote_dir/web-server.env'; rm -f '$remote_dir/web-server.env'"
 
-web-server-health host="45.79.138.102":
+web-server-health host="45.79.138.102" scheme="http":
     #!/usr/bin/env bash
     set -euo pipefail
-    curl -fsS "http://{{host}}/" >/dev/null
-    echo "web ok: http://{{host}}/"
+    url="{{scheme}}://{{host}}/"
+    curl -fsSL --max-time 30 "$url" >/dev/null
+    echo "web ok: $url"
+
+web-server-enable-nats-tls-from-caddy host="45.79.138.102" domain="45.79.138.102.sslip.io" ssh_port="22" ssh_key="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ssh_key="{{ssh_key}}"
+    if [[ "$ssh_key" == "~/"* ]]; then
+      ssh_key="${HOME}/${ssh_key#~/}"
+    fi
+    ssh_opts=(-p "{{ssh_port}}")
+    if [[ -n "$ssh_key" ]]; then
+      test -f "$ssh_key" || {
+        echo "SSH key not found: $ssh_key" >&2
+        exit 1
+      }
+      ssh_opts+=(-i "$ssh_key" -o IdentitiesOnly=yes)
+    fi
+    ssh "${ssh_opts[@]}" "root@{{host}}" 'bash -s' <<'REMOTE'
+    set -euo pipefail
+    domain="{{domain}}"
+    cert_root="/var/lib/caddy/.local/share/caddy/certificates"
+    env_file="/etc/lightrider/lightrider-matchmaker.env"
+    static_env_file="/etc/lightrider/lightrider-static-server.env"
+    cert_dest="/etc/lightrider/nats-cert.pem"
+    key_dest="/etc/lightrider/nats-key.pem"
+
+    curl -fsSL --max-time 30 "https://${domain}/" >/dev/null
+
+    cert="$(find "$cert_root" -type f -name "${domain}.crt" | head -n 1 || true)"
+    key="$(find "$cert_root" -type f -name "${domain}.key" | head -n 1 || true)"
+    if [[ -z "$cert" || -z "$key" ]]; then
+      echo "Could not find Caddy certificate/key for ${domain} under ${cert_root}" >&2
+      echo "Check: journalctl -u caddy -n 120 --no-pager" >&2
+      exit 1
+    fi
+
+    install -m 644 "$cert" "$cert_dest"
+    install -m 600 "$key" "$key_dest"
+
+    tmp="$(mktemp)"
+    grep -v -E '^(NATS_ALLOW_INSECURE|NATS_TLS_CERT|NATS_TLS_KEY|MATCHMAKER_NATS_HOST|BEVYGAP_REQUIRE_SECURE_NATS)=' "$env_file" > "$tmp" || true
+    cat "$tmp" > "$env_file"
+    rm -f "$tmp"
+    {
+      printf 'NATS_ALLOW_INSECURE=0\n'
+      printf 'NATS_TLS_CERT=%s\n' "$cert_dest"
+      printf 'NATS_TLS_KEY=%s\n' "$key_dest"
+      printf 'MATCHMAKER_NATS_HOST=%s:4222\n' "$domain"
+      printf 'BEVYGAP_REQUIRE_SECURE_NATS=1\n'
+    } >> "$env_file"
+    chmod 600 "$env_file"
+
+    if [[ -f "$static_env_file" ]]; then
+      tmp="$(mktemp)"
+      grep -v -E '^(NATS_HOST|NATS_INSECURE|BEVYGAP_REQUIRE_SECURE_NATS)=' "$static_env_file" > "$tmp" || true
+      cat "$tmp" > "$static_env_file"
+      rm -f "$tmp"
+      {
+        printf 'NATS_HOST=%s:4222\n' "$domain"
+        printf 'BEVYGAP_REQUIRE_SECURE_NATS=1\n'
+      } >> "$static_env_file"
+      chmod 600 "$static_env_file"
+    fi
+
+    systemctl restart lightrider-matchmaker
+    if systemctl list-unit-files lightrider-static-server.service >/dev/null 2>&1; then
+      systemctl restart lightrider-static-server || true
+    fi
+    sleep 2
+    systemctl --no-pager --full status lightrider-matchmaker || true
+    if systemctl list-unit-files lightrider-static-server.service >/dev/null 2>&1; then
+      systemctl --no-pager --full status lightrider-static-server || true
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+      timeout 10 openssl s_client -connect "${domain}:4222" -servername "$domain" -verify_return_error </dev/null >/tmp/lightrider-nats-tls-check.txt 2>&1 || {
+        cat /tmp/lightrider-nats-tls-check.txt >&2
+        exit 1
+      }
+      echo "nats tls ok: ${domain}:4222"
+    else
+      echo "openssl not found; skipped external NATS TLS check"
+    fi
+    REMOTE
 
 deploy-web-server *args:
     #!/usr/bin/env bash
@@ -1058,6 +1180,8 @@ deploy-web-server *args:
     ssh_key=""
     tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
     edgegap_version=""
+    web_domain=""
+    enable_https=""
     env_file="secrets/web-server.env"
     build_memory=""
     build_cpus=""
@@ -1073,6 +1197,10 @@ deploy-web-server *args:
         tag=*) tag="${arg#tag=}" ;;
         edgegap_version=*) edgegap_version="${arg#edgegap_version=}" ;;
         version=*) edgegap_version="${arg#version=}" ;;
+        domain=*) web_domain="${arg#domain=}" ;;
+        web_domain=*) web_domain="${arg#web_domain=}" ;;
+        https=*) enable_https="${arg#https=}" ;;
+        enable_https=*) enable_https="${arg#enable_https=}" ;;
         env=*) env_file="${arg#env=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
         build_memory=*) build_memory="${arg#build_memory=}" ;;
@@ -1090,6 +1218,7 @@ deploy-web-server *args:
             3) env_file="$arg" ;;
             4) ssh_key="$arg" ;;
             5) edgegap_version="$arg" ;;
+            6) web_domain="$arg" ;;
             *)
               echo "unexpected extra argument: $arg" >&2
               exit 2
@@ -1100,18 +1229,26 @@ deploy-web-server *args:
       esac
     done
     if [[ -z "$vps_host" ]]; then
-      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [env=<file>]" >&2
-      echo "example: just deploy-web-server host=45.79.138.102" >&2
+      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [domain=<domain>] [https=1] [env=<file>]" >&2
+      echo "example: just deploy-web-server host=45.79.138.102 domain=play.example.com" >&2
       exit 2
     fi
+    if [[ -z "$enable_https" && -n "$web_domain" ]]; then
+      enable_https=1
+    fi
+    enable_https="${enable_https:-0}"
     if [[ "${SKIP_IMAGE_BUILD:-0}" == "1" ]]; then
       echo "Skipping matchmaker image build/push; assuming tag $tag is already pushed."
     else
       just matchmaker-build-push "$tag" "$build_memory" "$build_cpus" "$build_cpu_quota" "$build_cpuset_cpus"
     fi
-    FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
+    LIGHTRIDER_ENABLE_HTTPS="$enable_https" LIGHTRIDER_WEB_DOMAIN="$web_domain" FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
     just web-server-install "$vps_host" "$ssh_port" "$env_file" "$ssh_key"
-    just web-server-health "$vps_host"
+    if [[ "$enable_https" == "1" || "$enable_https" == "true" || "$enable_https" == "yes" ]]; then
+      just web-server-health "$web_domain" https
+    else
+      just web-server-health "$vps_host" http
+    fi
 
 netcode-secret protocol_id="":
     #!/usr/bin/env bash

@@ -5,6 +5,7 @@ use shared::network::protocol::prelude::*;
 mod arena;
 mod assets;
 mod camera;
+mod effects;
 mod food;
 mod hud;
 mod leader;
@@ -19,6 +20,7 @@ impl Plugin for RenderPlugin {
         app.add_plugins(arena::ArenaRenderPlugin);
         app.add_plugins(snake::SnakeRenderPlugin);
         app.add_plugins(camera::CameraPlugin);
+        app.add_plugins(effects::EffectsRenderPlugin);
         app.add_plugins(food::FoodRenderPlugin);
         app.add_plugins(hud::HudRenderPlugin);
         app.add_plugins(leader::LeaderRenderPlugin);

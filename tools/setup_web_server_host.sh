@@ -29,8 +29,15 @@ Required env:
 Useful optional env:
   EDGEGAP_APP_NAME=lightrider
   EDGEGAP_APP_VERSION=<edgegap app version>
+  LIGHTRIDER_ENABLE_HTTPS=1
+  LIGHTRIDER_WEB_DOMAIN=play.example.com
+  LIGHTRIDER_CADDY_EMAIL=admin@example.com
   MATCHMAKER_CORS=http://<public-ip-or-domain>
+  LIGHTRIDER_MATCHMAKER_URL=wss://<public-domain>/matchmaker/ws
   NATS_ALLOW_INSECURE=1
+  NATS_TLS_CERT=/etc/lightrider/nats-cert.pem
+  NATS_TLS_KEY=/etc/lightrider/nats-key.pem
+  NATS_CA=/etc/lightrider/nats-ca.pem
   BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=800
   BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT=16
   BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT=85
@@ -125,14 +132,43 @@ LIGHTRIDER_STATIC_PORT="${LIGHTRIDER_STATIC_PORT:-7777}"
 LIGHTRIDER_STATIC_REQUEST_ID="${LIGHTRIDER_STATIC_REQUEST_ID:-linode-us-east-1}"
 LIGHTRIDER_STATIC_COUNTRY_CODE="${LIGHTRIDER_STATIC_COUNTRY_CODE:-US}"
 LIGHTRIDER_STATIC_REGION="${LIGHTRIDER_STATIC_REGION:-us-east}"
+LIGHTRIDER_WEB_DOMAIN="${LIGHTRIDER_WEB_DOMAIN:-}"
+LIGHTRIDER_WEB_DOMAIN="${LIGHTRIDER_WEB_DOMAIN#http://}"
+LIGHTRIDER_WEB_DOMAIN="${LIGHTRIDER_WEB_DOMAIN#https://}"
+LIGHTRIDER_WEB_DOMAIN="${LIGHTRIDER_WEB_DOMAIN%%/*}"
+LIGHTRIDER_ENABLE_HTTPS="${LIGHTRIDER_ENABLE_HTTPS:-}"
+if [[ -z "$LIGHTRIDER_ENABLE_HTTPS" && -n "$LIGHTRIDER_WEB_DOMAIN" ]]; then
+  LIGHTRIDER_ENABLE_HTTPS=1
+fi
+LIGHTRIDER_ENABLE_HTTPS="${LIGHTRIDER_ENABLE_HTTPS:-0}"
+LIGHTRIDER_WEB_UPSTREAM_PORT="${LIGHTRIDER_WEB_UPSTREAM_PORT:-8080}"
+LIGHTRIDER_WEB_PUBLIC_PORT="${LIGHTRIDER_WEB_PUBLIC_PORT:-80}"
+
+if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" || "$LIGHTRIDER_ENABLE_HTTPS" == "true" || "$LIGHTRIDER_ENABLE_HTTPS" == "yes" ]]; then
+  LIGHTRIDER_ENABLE_HTTPS=1
+else
+  LIGHTRIDER_ENABLE_HTTPS=0
+fi
+
+if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" && -z "$LIGHTRIDER_WEB_DOMAIN" ]]; then
+  echo "LIGHTRIDER_WEB_DOMAIN is required when LIGHTRIDER_ENABLE_HTTPS=1" >&2
+  exit 1
+fi
 
 if [[ -z "${MATCHMAKER_CORS:-}" ]]; then
-  if command -v curl >/dev/null 2>&1; then
-    public_ip="$(curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
+  if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+    MATCHMAKER_CORS="https://${LIGHTRIDER_WEB_DOMAIN}"
   else
-    public_ip="$(hostname -I | awk '{print $1}')"
+    if command -v curl >/dev/null 2>&1; then
+      public_ip="$(curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
+    else
+      public_ip="$(hostname -I | awk '{print $1}')"
+    fi
+    MATCHMAKER_CORS="http://${public_ip}"
   fi
-  MATCHMAKER_CORS="http://${public_ip}"
+fi
+if [[ -z "${LIGHTRIDER_MATCHMAKER_URL:-}" && "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+  LIGHTRIDER_MATCHMAKER_URL="wss://${LIGHTRIDER_WEB_DOMAIN}/matchmaker/ws"
 fi
 LIGHTRIDER_STATIC_PUBLIC_IP="${LIGHTRIDER_STATIC_PUBLIC_IP:-${public_ip:-$(hostname -I | awk '{print $1}')}}"
 
@@ -165,12 +201,17 @@ done
 
 if [[ "$install_packages" == 1 ]]; then
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y --no-install-recommends \
+  packages=(
     ca-certificates \
     curl \
     iproute2 \
     podman
+  )
+  if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+    packages+=(caddy)
+  fi
+  apt-get update
+  apt-get install -y --no-install-recommends "${packages[@]}"
 fi
 
 if [[ -n "${EDGEGAP_REGISTRY_URL:-}" && -n "${EDGEGAP_REGISTRY_USERNAME:-}" && -n "${EDGEGAP_REGISTRY_TOKEN:-}" ]]; then
@@ -202,6 +243,7 @@ NATS_USER=$NATS_USER
 NATS_PASSWORD=$NATS_PASSWORD
 NATS_STORE_DIR=/data/nats
 MATCHMAKER_CORS=$MATCHMAKER_CORS
+LIGHTRIDER_MATCHMAKER_URL=${LIGHTRIDER_MATCHMAKER_URL:-}
 MATCHMAKER_FAKE_IP=${MATCHMAKER_FAKE_IP:-81.128.157.100}
 BEVYGAP_NATS_NAMESPACE=${BEVYGAP_NATS_NAMESPACE:-${EDGEGAP_APP_NAME}_${EDGEGAP_APP_VERSION}}
 BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=$BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT
@@ -212,10 +254,30 @@ EOF
 if [[ -n "${BEVYGAP_GEOIP_DB:-}" ]]; then
   echo "BEVYGAP_GEOIP_DB=$BEVYGAP_GEOIP_DB" >> "$runtime_env"
 fi
+for optional_var in \
+  NATS_TLS_CERT \
+  NATS_TLS_KEY \
+  NATS_CA \
+  NATS_CA_CONTENTS \
+  MATCHMAKER_NATS_HOST \
+  MATCHMAKER_NATS_INSECURE; do
+  if [[ -n "${!optional_var:-}" ]]; then
+    printf '%s=%s\n' "$optional_var" "${!optional_var}" >> "$runtime_env"
+  fi
+done
 chmod 600 "$runtime_env"
 
 static_runtime_env="/etc/lightrider/lightrider-static-server.env"
 if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+  if [[ -n "${NATS_TLS_CERT:-}" && -n "${NATS_TLS_KEY:-}" ]]; then
+    static_nats_host="${MATCHMAKER_NATS_HOST:-${LIGHTRIDER_WEB_DOMAIN}:4222}"
+    static_nats_insecure=""
+    static_require_secure_nats="1"
+  else
+    static_nats_host="127.0.0.1:4222"
+    static_nats_insecure="1"
+    static_require_secure_nats="0"
+  fi
   cat > "$static_runtime_env" <<EOF
 PORT=$LIGHTRIDER_STATIC_PORT
 LIGHTRIDER_CONFIG=${LIGHTRIDER_CONFIG:-/app/config/default.ron}
@@ -223,11 +285,11 @@ LIGHTRIDER_BEVYGAP=1
 LIGHTRIDER_PROTOCOL_ID=$LIGHTRIDER_PROTOCOL_ID
 LIGHTRIDER_PRIVATE_KEY=$LIGHTRIDER_PRIVATE_KEY
 LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=${LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE:-1}
-NATS_HOST=127.0.0.1:4222
+NATS_HOST=$static_nats_host
 NATS_USER=$NATS_USER
 NATS_PASSWORD=$NATS_PASSWORD
-NATS_INSECURE=1
 BEVYGAP_NATS_NAMESPACE=${BEVYGAP_NATS_NAMESPACE:-${EDGEGAP_APP_NAME}_${EDGEGAP_APP_VERSION}}
+BEVYGAP_REQUIRE_SECURE_NATS=$static_require_secure_nats
 BEVYGAP_CONTEXT_MODE=local
 BEVYGAP_DEPLOYMENT_PROVIDER=static
 BEVYGAP_DEPLOYMENT_COUNTRY_CODE=$LIGHTRIDER_STATIC_COUNTRY_CODE
@@ -242,10 +304,17 @@ ARBITRIUM_DEPLOYMENT_LOCATION={"city":"Linode","country":"US"}
 ARBITRIUM_PORTS_MAPPING={"game":{"name":"game","internal":$LIGHTRIDER_STATIC_PORT,"external":$LIGHTRIDER_STATIC_PORT,"protocol":"UDP"}}
 SELF_SIGNED_SANS=$LIGHTRIDER_STATIC_PUBLIC_IP,localhost,127.0.0.1
 EOF
+  if [[ -n "$static_nats_insecure" ]]; then
+    echo "NATS_INSECURE=$static_nats_insecure" >> "$static_runtime_env"
+  fi
   chmod 600 "$static_runtime_env"
 fi
 
 service_file="/etc/systemd/system/${service_name}.service"
+web_publish="-p ${LIGHTRIDER_WEB_PUBLIC_PORT}:8080"
+if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+  web_publish="-p 127.0.0.1:${LIGHTRIDER_WEB_UPSTREAM_PORT}:8080"
+fi
 cat > "$service_file" <<EOF
 [Unit]
 Description=Lightrider matchmaker/control host
@@ -261,7 +330,7 @@ TimeoutStopSec=30
 ExecStartPre=-/usr/bin/podman rm -f $service_name
 ExecStart=/usr/bin/podman run --name $service_name \\
   --env-file $runtime_env \\
-  -p 80:8080 \\
+  $web_publish \\
   -p 4222:4222 \\
   -p 127.0.0.1:8222:8222 \\
   -v /var/lib/lightrider/nats:/data/nats \\
@@ -303,6 +372,24 @@ else
   rm -f "$static_service_file"
 fi
 
+if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+  caddy_global=""
+  if [[ -n "${LIGHTRIDER_CADDY_EMAIL:-}" ]]; then
+    caddy_global="{
+    email ${LIGHTRIDER_CADDY_EMAIL}
+}
+
+"
+  fi
+  cat > /etc/caddy/Caddyfile <<EOF
+${caddy_global}${LIGHTRIDER_WEB_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:${LIGHTRIDER_WEB_UPSTREAM_PORT}
+}
+EOF
+  systemctl enable caddy
+fi
+
 systemctl daemon-reload
 systemctl enable "$service_name"
 if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
@@ -314,6 +401,9 @@ if [[ "$start_service" == 1 ]]; then
   if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
     systemctl restart "$static_service_name"
   fi
+  if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+    systemctl restart caddy
+  fi
   sleep 2
   systemctl --no-pager --full status "$service_name" || true
   if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
@@ -322,15 +412,27 @@ if [[ "$start_service" == 1 ]]; then
   echo
   echo "Local health checks:"
   web_ready=0
+  https_ready=1
   nats_ready=0
-  curl -fsS http://127.0.0.1/ >/dev/null && web_ready=1
+  if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+    curl -fsS "http://127.0.0.1:${LIGHTRIDER_WEB_UPSTREAM_PORT}/" >/dev/null && web_ready=1
+    curl -fsS --max-time 20 "https://${LIGHTRIDER_WEB_DOMAIN}/" >/dev/null || https_ready=0
+  else
+    curl -fsS "http://127.0.0.1:${LIGHTRIDER_WEB_PUBLIC_PORT}/" >/dev/null && web_ready=1
+  fi
   curl -fsS http://127.0.0.1:8222/healthz >/dev/null && nats_ready=1
-  [[ "$web_ready" == 1 ]] && echo "  web: ok" || echo "  web: not ready"
+  [[ "$web_ready" == 1 ]] && echo "  web upstream: ok" || echo "  web upstream: not ready"
+  if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+    [[ "$https_ready" == 1 ]] && echo "  https: ok" || echo "  https: not ready"
+  fi
   [[ "$nats_ready" == 1 ]] && echo "  nats: ok" || echo "  nats: not ready"
-  if [[ "$web_ready" != 1 || "$nats_ready" != 1 ]]; then
+  if [[ "$web_ready" != 1 || "$https_ready" != 1 || "$nats_ready" != 1 ]]; then
     echo
     echo "Recent service logs:"
     journalctl -u "$service_name" -n 120 --no-pager || true
+    if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+      journalctl -u caddy -n 120 --no-pager || true
+    fi
   fi
 fi
 
@@ -349,10 +451,13 @@ Container logs:
   podman exec $service_name tail -n 200 /var/log/bevygap_matchmaker_httpd.log
 
 Published host ports:
-  80/tcp    web client + /matchmaker/ws
+  $([[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]] && echo "80/tcp, 443/tcp  Caddy HTTPS web client + /matchmaker/ws" || echo "${LIGHTRIDER_WEB_PUBLIC_PORT}/tcp    web client + /matchmaker/ws")
   4222/tcp  NATS for Edgegap game servers
   8222/tcp  NATS monitoring bound to localhost only
   $LIGHTRIDER_STATIC_PORT/udp  optional static Lightrider game server
+
+Public web URL:
+  $([[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]] && echo "https://${LIGHTRIDER_WEB_DOMAIN}/" || echo "http://${LIGHTRIDER_STATIC_PUBLIC_IP}:${LIGHTRIDER_WEB_PUBLIC_PORT}/")
 
 Matchmaker image:
   $LIGHTRIDER_MATCHMAKER_IMAGE

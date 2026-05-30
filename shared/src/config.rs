@@ -150,7 +150,7 @@ impl Default for RenderConfig {
         Self {
             use_assets: true,
             tail_width: 2.0,
-            head_size: 10.0,
+            head_size: 6.0,
             map_outline_width: 3.0,
             background_tile_size: 128.0,
             normal_camera_scale: 0.35,
@@ -224,8 +224,8 @@ pub struct FoodConfig {
 impl Default for FoodConfig {
     fn default() -> Self {
         Self {
-            target_count: 100,
-            spawn_interval_seconds: 1.0,
+            target_count: 400,
+            spawn_interval_seconds: 0.05,
             visual_radius: 3.0,
             radius: 8.0,
             magnet_radius: 75.0,

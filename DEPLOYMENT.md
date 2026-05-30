@@ -705,6 +705,16 @@ The image exposes:
 
 Production should serve the web client over HTTPS. The image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context. A public `http://<vps-ip>` page can load the UI and call the matchmaker, but it cannot complete the browser WebTransport game connection.
 
+With a real domain, create an `A` record pointing at the VPS public IP, for example:
+
+```text
+play.example.com A 45.79.138.102
+```
+
+Then deploy with `domain=play.example.com`. The installer installs Caddy, serves the Lightrider control container only on `127.0.0.1:8080`, obtains/renews a Let's Encrypt certificate, exposes public `80/tcp` and `443/tcp`, and configures the browser bootstrap/matchmaker CORS for `https://play.example.com` and `wss://play.example.com/matchmaker/ws`.
+
+If you do not have a domain yet, a temporary wildcard DNS name such as `45.79.138.102.sslip.io` can be used the same way.
+
 #### Automated VPS Setup
 
 For the current VPS control host, the repo provides a one-command installer. It installs Podman on the host, logs into the Edgegap registry, pulls the `lightrider-matchmaker` image, creates a systemd service, maps public web traffic to the bundled nginx server, exposes NATS for Edgegap game servers, and persists NATS data under `/var/lib/lightrider/nats`.
@@ -728,6 +738,45 @@ If the VPS key is not loaded in your SSH agent or default identities, pass it ex
 
 ```bash
 just deploy-web-server host=45.79.138.102 ssh_port=22 ssh_key=~/.ssh/lightrider_linode_ed25519 tag="$tag" env=secrets/web-server.env
+```
+
+For HTTPS, pass a domain:
+
+```bash
+just deploy-web-server \
+  host=45.79.138.102 \
+  domain=play.example.com \
+  tag="$tag" \
+  edgegap_version=webtest-20260529-110706 \
+  ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
+To reuse an already pushed image:
+
+```bash
+just deploy-web-server-pull \
+  host=45.79.138.102 \
+  tag=dev \
+  edgegap_version=webtest-20260529-110706 \
+  domain=play.example.com \
+  ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
+Temporary no-domain HTTPS using `sslip.io`:
+
+```bash
+just deploy-web-server-pull \
+  host=45.79.138.102 \
+  tag=dev \
+  edgegap_version=dev \
+  domain=45.79.138.102.sslip.io \
+  ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
+Open:
+
+```text
+https://45.79.138.102.sslip.io/
 ```
 
 The matchmaker/control image build defaults to a balanced 32G+ RAM profile: two Cargo jobs, thin LTO for native control binaries, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1`.
@@ -791,9 +840,17 @@ journalctl -u lightrider-matchmaker -f
 podman logs lightrider-matchmaker
 ```
 
-The installer publishes:
+The installer publishes without HTTPS:
 
 - `80/tcp`: web client and `/matchmaker/ws`.
+- `4222/tcp`: NATS for Edgegap game servers.
+- `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
+- `7777/udp`: optional static Lightrider game server when `LIGHTRIDER_RUN_STATIC_SERVER=1`.
+
+With `domain=...`, the installer publishes:
+
+- `80/tcp` and `443/tcp`: Caddy HTTPS reverse proxy for the web client and `/matchmaker/ws`.
+- `127.0.0.1:8080/tcp`: private container upstream, not public.
 - `4222/tcp`: NATS for Edgegap game servers.
 - `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
 - `7777/udp`: optional static Lightrider game server when `LIGHTRIDER_RUN_STATIC_SERVER=1`.
@@ -842,13 +899,45 @@ For a real public deployment, prefer:
 - `8222` not exposed publicly.
 - Matchmaker packing limits sized for the server image: `BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT`, `BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT`, and `BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT`.
 
-If using NATS TLS inside the matchmaker image, mount the cert/key into the container and provide:
+NATS TLS is supported by the bundled NATS server and by Bevygap clients. It is separate from website HTTPS: Caddy handles browser HTTPS/WebSocket traffic on `443`, while NATS listens directly on `4222`. It is not strictly necessary for a private smoke test with strong credentials and restricted firewall rules, but it is the right production posture because Edgegap game servers must reach NATS over the public internet.
+
+For the `sslip.io` setup, the simplest NATS TLS certificate source is the Let's Encrypt certificate that Caddy already obtains for `45.79.138.102.sslip.io`. Because it is publicly trusted, there is no custom CA file to send to Edgegap; the game-server container should trust it through the normal system root store.
+
+After the HTTPS deploy is healthy, enable NATS TLS from the Caddy certificate:
 
 ```bash
-NATS_TLS_CERT=/path/in/container/cert.pem
-NATS_TLS_KEY=/path/in/container/key.pem
+just web-server-enable-nats-tls-from-caddy \
+  host=45.79.138.102 \
+  domain=45.79.138.102.sslip.io \
+  ssh_key=~/.ssh/lightrider_linode_ed25519
+```
+
+Then update the Edgegap app version to use TLS NATS. Note the `EDGEGAP_NATS_INSECURE=0` override; the default release-sync path keeps insecure NATS enabled for early smoke tests.
+
+```bash
+EDGEGAP_NATS_INSECURE=0 \
+  just edgegap-release-sync dev 45.79.138.102.sslip.io:4222 lightrider dev
+```
+
+This helper copies the current Caddy certificate/key into `/etc/lightrider` for NATS. Caddy will renew its own certificate automatically, but NATS will keep using the copied files until the helper is rerun or a renewal hook/timer is added. Let's Encrypt certificates are short-lived, so production should automate this copy-and-restart step.
+
+If the optional VPS static game server is enabled, the same helper updates it to use `NATS_HOST=<domain>:4222` with secure NATS as well.
+
+If using NATS TLS inside the matchmaker image, put the certificate files under `/etc/lightrider` on the VPS because that directory is mounted read-only into the container. Then set these values in `secrets/web-server.env` or export them before running `just deploy-web-server...` so the template writes them:
+
+```bash
+NATS_TLS_CERT=/etc/lightrider/nats-cert.pem
+NATS_TLS_KEY=/etc/lightrider/nats-key.pem
 BEVYGAP_REQUIRE_SECURE_NATS=1
 ```
+
+The matchmaker container's own NATS clients normally connect to `127.0.0.1:4222`. If the NATS certificate only contains the public DNS name, also set:
+
+```bash
+MATCHMAKER_NATS_HOST=<nats-domain>:4222
+```
+
+For Edgegap game-server app versions, sync the app without `EDGEGAP_NATS_INSECURE=1` and provide a public DNS `NATS_HOST`. If the cert is publicly trusted, no CA override is needed. If it is self-signed, provide trust with `NATS_CA` or `NATS_CA_CONTENTS` through `tools/edgegap_app_version.sh`.
 
 With `BEVYGAP_REQUIRE_SECURE_NATS=1`, the matchmaker/control container refuses `NATS_INSECURE` and refuses default `lightrider/lightrider` NATS credentials. `NATS_INSECURE` is parsed as a truthy flag, so `NATS_INSECURE=0` and `NATS_INSECURE=false` do not disable TLS.
 

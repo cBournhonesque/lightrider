@@ -10,8 +10,36 @@ use shared::network::protocol::prelude::*;
 
 pub(crate) struct SnakeRenderPlugin;
 
-const SNAKE_TAIL_Z: f32 = 10.0;
 const SNAKE_HEAD_Z: f32 = 11.0;
+const SNAKE_GLOW_Z: f32 = 8.0;
+const SNAKE_GLOW_LAYERS: [GlowLayer; 3] = [
+    GlowLayer {
+        id: 0,
+        width_multiplier: 6.0,
+        alpha: 0.08,
+        z_offset: 0.0,
+    },
+    GlowLayer {
+        id: 1,
+        width_multiplier: 3.0,
+        alpha: 0.2,
+        z_offset: 0.5,
+    },
+    GlowLayer {
+        id: 2,
+        width_multiplier: 1.0,
+        alpha: 0.95,
+        z_offset: 1.0,
+    },
+];
+
+#[derive(Clone, Copy)]
+struct GlowLayer {
+    id: u8,
+    width_multiplier: f32,
+    alpha: f32,
+    z_offset: f32,
+}
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SnakeVisual {
@@ -26,8 +54,9 @@ struct SnakeVisualKey {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SnakeVisualPart {
-    Head,
-    Segment(usize),
+    Head(u8),
+    Segment { index: usize, layer: u8 },
+    Joint { index: usize, layer: u8 },
 }
 
 struct DesiredSnakeVisual {
@@ -125,21 +154,38 @@ fn desired_snake_visuals(
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) -> Vec<DesiredSnakeVisual> {
-    let tail_color = Color::srgba(0.1, 0.75, 1.0, 0.95);
-    let head_color = Color::srgb(0.82, 0.98, 1.0);
+    let tail_rgb = Vec3::new(0.08, 0.78, 1.0);
+    let head_rgb = Vec3::new(0.82, 0.98, 1.0);
     let tail_width = config.render.tail_width.max(1.0);
-    let head_size = config.render.head_size.max(1.0) * 1.8;
+    let head_size = config.render.head_size.max(tail_width * 1.8);
     let mut desired = Vec::new();
 
     for (owner, points) in tails.iter() {
-        desired.push(DesiredSnakeVisual {
-            key: SnakeVisualKey {
-                owner,
-                part: SnakeVisualPart::Head,
-            },
-            transform: Transform::from_translation(points.front().0.extend(SNAKE_HEAD_Z)),
-            sprite: sheet.sprite(PowerlineFrame::HeadDot, Vec2::splat(head_size), head_color),
-        });
+        let head = points.front().0;
+        for layer in SNAKE_GLOW_LAYERS {
+            let is_core = layer.id == 2;
+            let size = if is_core {
+                head_size
+            } else {
+                (head_size * layer.width_multiplier * 0.85).max(tail_width * 4.0)
+            };
+            desired.push(DesiredSnakeVisual {
+                key: SnakeVisualKey {
+                    owner,
+                    part: SnakeVisualPart::Head(layer.id),
+                },
+                transform: Transform::from_translation(head.extend(if is_core {
+                    SNAKE_HEAD_Z
+                } else {
+                    SNAKE_GLOW_Z + 2.0
+                })),
+                sprite: sheet.sprite(
+                    PowerlineFrame::HeadDot,
+                    Vec2::splat(size),
+                    rgba(if is_core { head_rgb } else { tail_rgb }, layer.alpha),
+                ),
+            });
+        }
 
         for (index, (start, end)) in points.pairs_front_to_back().enumerate() {
             let delta = end.0 - start.0;
@@ -148,23 +194,58 @@ fn desired_snake_visuals(
                 continue;
             }
             let center = (start.0 + end.0) * 0.5;
-            desired.push(DesiredSnakeVisual {
-                key: SnakeVisualKey {
-                    owner,
-                    part: SnakeVisualPart::Segment(index),
-                },
-                transform: Transform::from_translation(center.extend(SNAKE_TAIL_Z))
+            for layer in SNAKE_GLOW_LAYERS {
+                let width = tail_width * layer.width_multiplier;
+                desired.push(DesiredSnakeVisual {
+                    key: SnakeVisualKey {
+                        owner,
+                        part: SnakeVisualPart::Segment {
+                            index,
+                            layer: layer.id,
+                        },
+                    },
+                    transform: Transform::from_translation(
+                        center.extend(SNAKE_GLOW_Z + layer.z_offset),
+                    )
                     .with_rotation(Quat::from_rotation_z(delta.y.atan2(delta.x))),
-                sprite: sheet.sprite(
-                    PowerlineFrame::WallStretch,
-                    Vec2::new(length + tail_width, tail_width),
-                    tail_color,
-                ),
-            });
+                    sprite: sheet.sprite(
+                        PowerlineFrame::WallStretch,
+                        Vec2::new(length + width * 1.5, width),
+                        rgba(tail_rgb, layer.alpha),
+                    ),
+                });
+            }
+        }
+
+        for (index, point) in points.0.iter().enumerate() {
+            for layer in SNAKE_GLOW_LAYERS {
+                let width = tail_width * layer.width_multiplier;
+                desired.push(DesiredSnakeVisual {
+                    key: SnakeVisualKey {
+                        owner,
+                        part: SnakeVisualPart::Joint {
+                            index,
+                            layer: layer.id,
+                        },
+                    },
+                    transform: Transform::from_translation(
+                        point.0.extend(SNAKE_GLOW_Z + layer.z_offset),
+                    ),
+                    sprite: sheet.sprite(
+                        PowerlineFrame::HeadDot,
+                        Vec2::splat(width),
+                        rgba(tail_rgb, layer.alpha),
+                    ),
+                });
+            }
         }
     }
 
     desired
+}
+
+fn rgba(rgb: Vec3, alpha: f32) -> Color {
+    Color::srgba(rgb.x, rgb.y, rgb.z, alpha)
 }
 
 fn draw_tail_segment(gizmos: &mut Gizmos, start: Vec2, end: Vec2, width: f32, color: Color) {

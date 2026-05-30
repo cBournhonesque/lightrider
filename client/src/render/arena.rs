@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::sprite::SpriteImageMode;
 
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
 use shared::config::GameConfig;
@@ -28,28 +29,18 @@ fn spawn_asset_arena(
     let half_width = config.arena.width * 0.5;
     let half_height = config.arena.height * 0.5;
     let tile_size = config.render.background_tile_size.max(16.0);
-    let columns = (config.arena.width / tile_size).ceil() as i32 + 2;
-    let rows = (config.arena.height / tile_size).ceil() as i32 + 2;
-    let start_x = -columns as f32 * tile_size * 0.5 + tile_size * 0.5;
-    let start_y = -rows as f32 * tile_size * 0.5 + tile_size * 0.5;
-
-    for column in 0..columns {
-        for row in 0..rows {
-            let position = Vec3::new(
-                start_x + column as f32 * tile_size,
-                start_y + row as f32 * tile_size,
-                BACKGROUND_Z,
-            );
-            commands.spawn((
-                sheet.sprite(
-                    PowerlineFrame::Grid,
-                    Vec2::splat(tile_size),
-                    Color::srgba(0.72, 0.9, 1.0, 0.72),
-                ),
-                Transform::from_translation(position),
-            ));
-        }
-    }
+    let grid_rect = PowerlineFrame::Grid.rect();
+    let mut background = sheet.sprite(
+        PowerlineFrame::Grid,
+        Vec2::new(config.arena.width, config.arena.height),
+        Color::srgba(0.72, 0.9, 1.0, 0.72),
+    );
+    background.image_mode = SpriteImageMode::Tiled {
+        tile_x: true,
+        tile_y: true,
+        stretch_value: tile_size / grid_rect.width().max(1.0),
+    };
+    commands.spawn((background, Transform::from_xyz(0.0, 0.0, BACKGROUND_Z)));
 
     let outline_width = config.render.map_outline_width.max(1.0);
     let border_color = Color::srgba(0.68, 1.0, 1.0, 0.92);
