@@ -1,5 +1,6 @@
 use bevy::ecs::query::Or;
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Controlled, Interpolated, Predicted, Replicated};
 use shared::config::GameConfig;
@@ -36,7 +37,6 @@ struct SpeedParticleVisual {
 struct BoostContact {
     head: Vec2,
     core: Vec2,
-    marker: Vec2,
     distance: f32,
     other: Entity,
     lightning_active: bool,
@@ -47,6 +47,13 @@ struct DesiredParticle {
     key: SpeedParticleVisual,
     transform: Transform,
     sprite: Sprite,
+}
+
+struct DesiredBoostVisual {
+    part: BoostVisualPart,
+    transform: Transform,
+    sprite: Sprite,
+    anchor: Anchor,
 }
 
 impl Plugin for EffectsRenderPlugin {
@@ -75,10 +82,16 @@ fn sync_boost_marker(
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
-    mut visuals: Query<(Entity, &BoostVisual, &mut Transform, &mut Sprite)>,
+    mut visuals: Query<(
+        Entity,
+        &BoostVisual,
+        &mut Transform,
+        &mut Sprite,
+        &mut Anchor,
+    )>,
 ) {
     if !config.render.use_assets {
-        for (entity, _, _, _) in &mut visuals {
+        for (entity, _, _, _, _) in &mut visuals {
             commands.entity(entity).despawn();
         }
         return;
@@ -95,50 +108,61 @@ fn sync_boost_marker(
         let other_color = snake_entity_color(contact.other, &snakes, &players);
         let mut desired = Vec::with_capacity(2);
         if contact.lightning_active {
-            desired.push((
-                BoostVisualPart::Lightning,
-                Transform::from_translation(
+            desired.push(DesiredBoostVisual {
+                part: BoostVisualPart::Lightning,
+                transform: Transform::from_translation(
                     ((contact.head + contact.core) * 0.5).extend(BOOST_LIGHTNING_Z),
                 )
                 .with_rotation(Quat::from_rotation_z(angle)),
-                sheet.sprite(
+                sprite: sheet.sprite(
                     lightning_frame(time.elapsed_secs()),
                     Vec2::new(marker_size * 0.55, contact.distance.max(marker_size)),
                     other_color.lightning(),
                 ),
-            ));
+                anchor: Anchor::CENTER,
+            });
         }
         if contact.spark_active {
-            desired.push((
-                BoostVisualPart::Spark,
-                Transform::from_translation(contact.marker.extend(BOOST_MARKER_Z))
+            desired.push(DesiredBoostVisual {
+                part: BoostVisualPart::Spark,
+                transform: Transform::from_translation(contact.core.extend(BOOST_MARKER_Z))
                     .with_rotation(Quat::from_rotation_z(angle)),
-                sheet.sprite(
+                sprite: sheet.sprite(
                     spark_frame,
-                    Vec2::new(marker_size, marker_size * 0.72),
+                    Vec2::new(marker_size * 0.9, marker_size * 0.72),
                     other_color.spark(),
                 ),
-            ));
+                // The bottom of the sprite is the same core-line hit used as the lightning anchor.
+                anchor: Anchor::BOTTOM_CENTER,
+            });
         }
 
-        for (part, transform, sprite) in desired {
-            seen.insert(part);
+        for desired in desired {
+            seen.insert(desired.part);
             let mut updated = false;
-            for (_, visual, mut visual_transform, mut visual_sprite) in &mut visuals {
-                if visual.0 == part {
-                    *visual_transform = transform;
-                    *visual_sprite = sprite.clone();
+            for (_, visual, mut visual_transform, mut visual_sprite, mut visual_anchor) in
+                &mut visuals
+            {
+                if visual.0 == desired.part {
+                    *visual_transform = desired.transform;
+                    *visual_sprite = desired.sprite.clone();
+                    *visual_anchor = desired.anchor;
                     updated = true;
                     break;
                 }
             }
             if !updated {
-                commands.spawn((BoostVisual(part), sprite, transform));
+                commands.spawn((
+                    BoostVisual(desired.part),
+                    desired.sprite,
+                    desired.anchor,
+                    desired.transform,
+                ));
             }
         }
     }
 
-    for (entity, visual, _, _) in &mut visuals {
+    for (entity, visual, _, _, _) in &mut visuals {
         if !seen.contains(&visual.0) {
             commands.entity(entity).despawn();
         }
@@ -366,7 +390,6 @@ fn nearest_tail_ray_hit(
                 nearest = Some(BoostContact {
                     head: origin,
                     core: hit,
-                    marker: hit,
                     distance,
                     other: other_entity,
                     lightning_active,

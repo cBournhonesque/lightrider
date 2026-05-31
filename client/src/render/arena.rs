@@ -38,21 +38,22 @@ fn spawn_asset_arena(
     spawn_background_grid(&mut commands, &config);
 
     let outline_width = config.render.map_outline_width.max(1.0);
-    let glow_width = (outline_width * 8.0).max(18.0);
+    let core_width = outline_width.clamp(1.0, 1.6);
+    let glow_width = (outline_width * 14.0).max(34.0);
     let glow_material = materials.add(ColorMaterial {
-        color: Color::linear_rgba(0.04, 0.45, 1.45, 0.10),
+        color: Color::linear_rgba(0.02, 0.32, 1.35, 0.07),
         alpha_mode: AlphaMode2d::Blend,
         ..default()
     });
     let border_material = materials.add(ColorMaterial {
-        color: Color::linear_rgb(0.08, 0.9, 2.45),
+        color: Color::linear_rgb(0.04, 0.64, 2.35),
         alpha_mode: AlphaMode2d::Opaque,
         ..default()
     });
     let horizontal_glow_mesh = meshes.add(Capsule2d::new(glow_width * 0.5, config.arena.width));
     let vertical_glow_mesh = meshes.add(Capsule2d::new(glow_width * 0.5, config.arena.height));
-    let horizontal_mesh = meshes.add(Capsule2d::new(outline_width * 0.5, config.arena.width));
-    let vertical_mesh = meshes.add(Capsule2d::new(outline_width * 0.5, config.arena.height));
+    let horizontal_mesh = meshes.add(Capsule2d::new(core_width * 0.5, config.arena.width));
+    let vertical_mesh = meshes.add(Capsule2d::new(core_width * 0.5, config.arena.height));
     for y in [-half_height, half_height] {
         commands.spawn((
             Mesh2d(horizontal_glow_mesh.clone()),

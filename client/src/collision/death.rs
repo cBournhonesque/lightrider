@@ -111,10 +111,16 @@ fn handle_death_message(
 }
 
 fn cache_local_snake_tail(
+    local_snakes: Query<&TailPoints, (With<Controlled>, With<Predicted>)>,
     player: Query<&Player, With<Controlled>>,
     tails: Query<&TailPoints>,
     mut cache: ResMut<LastLocalSnakeTail>,
 ) {
+    if let Ok(tail) = local_snakes.single() {
+        cache.0 = Some(tail.clone());
+        return;
+    }
+
     let Some(tail) = player
         .single()
         .ok()

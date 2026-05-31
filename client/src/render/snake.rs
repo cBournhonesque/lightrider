@@ -19,7 +19,7 @@ const SNAKE_HEAD_Z: f32 = 11.0;
 const SNAKE_HEAD_GLOW_Z: f32 = 10.8;
 const SNAKE_TAIL_Z: f32 = 10.0;
 const SNAKE_DEATH_Z: f32 = 16.0;
-const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.42;
+const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.58;
 const MESH_CURVE_SEGMENTS: u32 = 14;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -231,24 +231,25 @@ fn desired_snake_visuals(
 ) -> (Vec<DesiredSnakeSpriteVisual>, Vec<DesiredSnakeMeshVisual>) {
     let tail_width = config.render.tail_width.max(1.0);
     let head_size = config.render.head_size.max(tail_width * 1.8);
-    let head_diameter = (head_size * 0.9).max(tail_width * 3.2);
-    let head_glow_radius = head_diameter * 1.25;
+    let head_diameter = (head_size * 0.62).max(tail_width * 2.5);
+    let head_glow_diameter = head_diameter * 3.0;
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
     for (owner, points, player) in tails.iter() {
         let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
-        mesh_desired.push(DesiredSnakeMeshVisual {
+        sprite_desired.push(DesiredSnakeSpriteVisual {
             key: SnakeVisualKey {
                 owner,
                 part: SnakeVisualPart::HeadGlow,
             },
             transform: Transform::from_translation(head.extend(SNAKE_HEAD_GLOW_Z)),
-            shape: TailMeshShape::Circle {
-                radius: head_glow_radius,
-            },
-            color: color.head_glow(),
+            sprite: sheet.sprite(
+                PowerlineFrame::HeadDot,
+                Vec2::splat(head_glow_diameter),
+                color.head_glow(),
+            ),
         });
         sprite_desired.push(DesiredSnakeSpriteVisual {
             key: SnakeVisualKey {
@@ -403,8 +404,15 @@ fn spawn_snake_death_animations(
 
     let tail_width = config.render.tail_width.max(1.0);
     for death in deaths.read() {
-        let live_tail = tails.get(death.message.killed_snake).ok();
-        let tail = live_tail.map(|(_, tail, _)| tail).or(death.tail.as_ref());
+        let live_tail = tails
+            .get(death.message.killed_snake)
+            .ok()
+            .map(|(_, tail, _)| tail);
+        let tail = if death.local_player {
+            death.tail.as_ref().or(live_tail)
+        } else {
+            live_tail.or(death.tail.as_ref())
+        };
         let Some(tail) = tail else {
             if let Some(position) = death.position {
                 spawn_death_circle(
@@ -412,7 +420,7 @@ fn spawn_snake_death_animations(
                     &mut mesh_assets,
                     &mut materials,
                     position,
-                    config.render.head_size.max(3.0) * 0.5,
+                    config.render.head_size.max(3.0) * 0.7,
                     SNAKE_DEATH_Z + 0.2,
                 );
             }
@@ -428,10 +436,11 @@ fn spawn_snake_death_animations(
             let rotation = Quat::from_rotation_z(delta.y.atan2(delta.x));
             for layer in TailLayer::ALL {
                 let layer_width = layer.width(tail_width);
+                let death_width = death_flash_width(layer_width);
                 let center = (start.0 + end.0) * 0.5;
                 let shape = TailMeshShape::Capsule {
-                    length: length.max(layer_width),
-                    width: layer_width,
+                    length: length.max(death_width),
+                    width: death_width,
                 };
                 commands.spawn((
                     SnakeDeathVisual { elapsed: 0.0 },
@@ -448,14 +457,14 @@ fn spawn_snake_death_animations(
             &mut mesh_assets,
             &mut materials,
             tail.front().0,
-            config.render.head_size.max(3.0) * 0.5,
+            config.render.head_size.max(3.0) * 0.7,
             SNAKE_DEATH_Z + 0.2,
         );
 
         let joint_count = tail.0.len().saturating_sub(1);
         for (point, _) in tail.0.iter().skip(1).take(joint_count.saturating_sub(1)) {
             for layer in TailLayer::ALL {
-                let radius = layer.width(tail_width) * 0.5;
+                let radius = death_flash_width(layer.width(tail_width)) * 0.5;
                 let shape = TailMeshShape::Circle { radius };
                 commands.spawn((
                     SnakeDeathVisual { elapsed: 0.0 },
@@ -466,6 +475,10 @@ fn spawn_snake_death_animations(
             }
         }
     }
+}
+
+fn death_flash_width(layer_width: f32) -> f32 {
+    (layer_width * 2.4).max(layer_width + 2.0).min(7.0)
 }
 
 fn update_snake_death_animations(
