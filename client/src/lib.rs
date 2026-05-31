@@ -192,6 +192,7 @@ pub fn app(cli: Cli) -> App {
         ));
     } else {
         let mut plugins = DefaultPlugins.set(log_plugin).set(AssetPlugin {
+            file_path: asset_file_path(),
             // Browser asset hosts can return HTML/error bodies for missing `.meta`
             // sidecars, which Bevy then tries to parse as RON.
             meta_check: AssetMetaCheck::Never,
@@ -278,6 +279,14 @@ pub fn app(cli: Cli) -> App {
     app
 }
 
+fn asset_file_path() -> String {
+    if cfg!(target_family = "wasm") {
+        "assets".to_string()
+    } else {
+        "../assets".to_string()
+    }
+}
+
 #[cfg(feature = "bevygap")]
 fn request_bevygap_session(mut commands: bevy::prelude::Commands) {
     commands.bevygap_connect_client();
@@ -317,5 +326,15 @@ fn load_config(path: Option<&std::path::Path>) -> GameConfig {
     {
         let _ = path;
         GameConfig::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_clients_load_assets_from_workspace_root() {
+        assert_eq!(asset_file_path(), "../assets");
     }
 }
