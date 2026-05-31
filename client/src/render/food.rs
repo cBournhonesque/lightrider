@@ -10,7 +10,7 @@ pub(crate) struct FoodRenderPlugin;
 
 const FOOD_Z: f32 = 2.0;
 const FOOD_PICKUP_ANIMATION_Z: f32 = 6.0;
-const FOOD_PICKUP_ANIMATION_SECONDS: f32 = 0.18;
+const FOOD_PICKUP_ANIMATION_SECONDS: f32 = 0.34;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct FoodVisual {
@@ -20,8 +20,9 @@ struct FoodVisual {
 #[derive(Component, Clone, Copy, Debug)]
 struct FoodPickupAnimation {
     elapsed: f32,
+    snake: Entity,
     start: Vec2,
-    end: Vec2,
+    fallback_end: Vec2,
 }
 
 impl FoodRenderPlugin {
@@ -135,8 +136,9 @@ fn spawn_confirmed_food_pickup_animations(
         commands.spawn((
             FoodPickupAnimation {
                 elapsed: 0.0,
+                snake: pickup.collision.snake,
                 start,
-                end,
+                fallback_end: end,
             },
             sheet.sprite(
                 PowerlineFrame::Food,
@@ -151,9 +153,15 @@ fn spawn_confirmed_food_pickup_animations(
 fn update_food_pickup_animations(
     mut commands: Commands,
     time: Res<Time>,
-    mut animations: Query<(Entity, &mut FoodPickupAnimation, &mut Transform)>,
+    tails: Query<&TailPoints>,
+    mut animations: Query<(
+        Entity,
+        &mut FoodPickupAnimation,
+        &mut Transform,
+        &mut Sprite,
+    )>,
 ) {
-    for (entity, mut animation, mut transform) in &mut animations {
+    for (entity, mut animation, mut transform, mut sprite) in &mut animations {
         animation.elapsed += time.delta_secs();
         let t = (animation.elapsed / FOOD_PICKUP_ANIMATION_SECONDS).clamp(0.0, 1.0);
         if t >= 1.0 {
@@ -161,11 +169,17 @@ fn update_food_pickup_animations(
             continue;
         }
 
-        let eased = 1.0 - (1.0 - t) * (1.0 - t);
+        let end = tails
+            .get(animation.snake)
+            .map(|tail| tail.front().0)
+            .unwrap_or(animation.fallback_end);
+        let eased = t * t;
         transform.translation = animation
             .start
-            .lerp(animation.end, eased)
+            .lerp(end, eased)
             .extend(FOOD_PICKUP_ANIMATION_Z);
-        transform.scale = Vec3::splat(1.0 - 0.5 * t);
+        transform.rotation = Quat::from_rotation_z(t * std::f32::consts::TAU * 1.5);
+        transform.scale = Vec3::splat((1.0 - 0.65 * t).max(0.25));
+        sprite.color.set_alpha(1.0 - 0.35 * t);
     }
 }

@@ -5,6 +5,7 @@ use lightyear::prelude::{Interpolated, Predicted, Replicated};
 use std::collections::HashSet;
 
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
+use crate::render::colors::{snake_color_for_fallback, snake_color_for_player, SnakePaletteColor};
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::*;
 
@@ -81,8 +82,9 @@ fn sync_asset_snake_visuals(
     mut commands: Commands,
     config: Res<GameConfig>,
     sheet: Res<PowerlineSpriteSheet>,
+    players: Query<&Player>,
     tails: Query<
-        (Entity, &TailPoints),
+        (Entity, &TailPoints, Option<&HasPlayer>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
     mut visuals: Query<(Entity, &SnakeVisual, &mut Transform, &mut Sprite)>,
@@ -94,7 +96,7 @@ fn sync_asset_snake_visuals(
         return;
     }
 
-    let desired = desired_snake_visuals(&config, &sheet, &tails);
+    let desired = desired_snake_visuals(&config, &sheet, &players, &tails);
     let mut seen = HashSet::with_capacity(desired.len());
 
     for desired in desired {
@@ -127,19 +129,20 @@ fn sync_asset_snake_visuals(
 fn desired_snake_visuals(
     config: &GameConfig,
     sheet: &PowerlineSpriteSheet,
+    players: &Query<&Player>,
     tails: &Query<
-        (Entity, &TailPoints),
+        (Entity, &TailPoints, Option<&HasPlayer>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) -> Vec<DesiredSnakeVisual> {
-    let head_color = Color::linear_rgba(0.75, 2.3, 3.2, 1.0);
     let tail_width = config.render.tail_width.max(1.0);
     let head_size = config.render.head_size.max(tail_width * 1.8);
     let head_length = (head_size * 2.4).max(tail_width * 8.0);
     let head_width = (head_size * 0.55).max(tail_width * 3.0);
     let mut desired = Vec::new();
 
-    for (owner, points) in tails.iter() {
+    for (owner, points, player) in tails.iter() {
+        let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
         desired.push(DesiredSnakeVisual {
             key: SnakeVisualKey {
@@ -151,7 +154,7 @@ fn desired_snake_visuals(
             sprite: sheet.sprite(
                 PowerlineFrame::HeadDot,
                 Vec2::new(head_length, head_width),
-                head_color,
+                color.head(),
             ),
         });
 
@@ -173,7 +176,7 @@ fn desired_snake_visuals(
                     transform: Transform::from_translation(center.extend(layer.z()))
                         .with_rotation(rotation),
                     sprite: Sprite::from_color(
-                        layer.color(),
+                        layer.color(color),
                         Vec2::new(length + layer_width, layer_width),
                     ),
                 });
@@ -184,22 +187,33 @@ fn desired_snake_visuals(
     desired
 }
 
+fn snake_visual_color(
+    owner: Entity,
+    has_player: Option<&HasPlayer>,
+    players: &Query<&Player>,
+) -> SnakePaletteColor {
+    has_player
+        .and_then(|has_player| players.get(has_player.0).ok())
+        .map(snake_color_for_player)
+        .unwrap_or_else(|| snake_color_for_fallback(owner.to_bits()))
+}
+
 impl TailLayer {
     const ALL: [Self; 3] = [Self::OuterGlow, Self::InnerGlow, Self::Core];
 
     fn width(self, tail_width: f32) -> f32 {
         match self {
-            Self::OuterGlow => (tail_width * 8.0).max(7.0),
-            Self::InnerGlow => (tail_width * 4.0).max(4.0),
+            Self::OuterGlow => (tail_width * 14.0).max(13.0),
+            Self::InnerGlow => (tail_width * 7.0).max(6.0),
             Self::Core => tail_width.max(1.0),
         }
     }
 
-    fn color(self) -> Color {
+    fn color(self, color: SnakePaletteColor) -> Color {
         match self {
-            Self::OuterGlow => Color::linear_rgba(0.02, 0.35, 0.85, 0.16),
-            Self::InnerGlow => Color::linear_rgba(0.05, 0.95, 1.8, 0.28),
-            Self::Core => Color::linear_rgba(0.18, 2.8, 4.5, 1.0),
+            Self::OuterGlow => color.outer_glow(),
+            Self::InnerGlow => color.inner_glow(),
+            Self::Core => color.tail_core(),
         }
     }
 

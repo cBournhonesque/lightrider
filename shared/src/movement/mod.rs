@@ -300,15 +300,15 @@ mod tests {
 
     #[test]
     fn food_boost_decays_smoothly() {
-        assert!((decayed_food_boost(0.08, 0.85) - 0.068).abs() < f32::EPSILON);
-        assert_eq!(decayed_food_boost(0.0001, 0.85), 0.0);
-        assert_eq!(decayed_food_boost(0.08, -1.0), 0.0);
+        assert!((decayed_food_boost(0.03, 0.94) - 0.0282).abs() < f32::EPSILON);
+        assert_eq!(decayed_food_boost(0.0001, 0.94), 0.0);
+        assert_eq!(decayed_food_boost(0.03, -1.0), 0.0);
     }
 
     #[test]
     fn food_boost_layers_over_base_or_proximity_acceleration() {
-        assert!((combined_acceleration(-0.01, None, 0.08) - 0.07).abs() < f32::EPSILON);
-        assert!((combined_acceleration(-0.01, Some(0.02), 0.08) - 0.10).abs() < f32::EPSILON);
+        assert!((combined_acceleration(-0.01, None, 0.03) - 0.02).abs() < f32::EPSILON);
+        assert!((combined_acceleration(-0.01, Some(0.02), 0.03) - 0.05).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use shared::utils::geometry::ray_segment_intersection;
 use std::collections::HashSet;
 
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
+use crate::render::colors::{snake_color_for_fallback, snake_color_for_player, SnakePaletteColor};
 
 pub(crate) struct EffectsRenderPlugin;
 
@@ -34,8 +35,10 @@ struct SpeedParticleVisual {
 #[derive(Clone, Copy, Debug)]
 struct BoostContact {
     head: Vec2,
-    hit: Vec2,
+    edge: Vec2,
     distance: f32,
+    other: Entity,
+    lightning_active: bool,
 }
 
 struct DesiredParticle {
@@ -58,8 +61,16 @@ fn sync_boost_marker(
     config: Res<GameConfig>,
     time: Res<Time>,
     sheet: Res<PowerlineSpriteSheet>,
+    players: Query<&Player>,
     snakes: Query<
-        (Entity, &TailPoints, &RoomId, Has<Controlled>),
+        (
+            Entity,
+            &TailPoints,
+            &RoomId,
+            Option<&Speed>,
+            Option<&HasPlayer>,
+            Has<Controlled>,
+        ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
     mut visuals: Query<(Entity, &BoostVisual, &mut Transform, &mut Sprite)>,
@@ -76,33 +87,35 @@ fn sync_boost_marker(
     let mut seen = HashSet::new();
 
     if let Some(contact) = contact {
-        let delta = contact.head - contact.hit;
+        let delta = contact.head - contact.edge;
         let angle = delta.y.atan2(delta.x) - std::f32::consts::FRAC_PI_2;
         let marker_size = config.render.head_size.max(4.0) * 2.5;
-        let desired = [
-            (
+        let other_color = snake_entity_color(contact.other, &snakes, &players);
+        let mut desired = Vec::with_capacity(2);
+        if contact.lightning_active {
+            desired.push((
                 BoostVisualPart::Lightning,
                 Transform::from_translation(
-                    ((contact.head + contact.hit) * 0.5).extend(BOOST_LIGHTNING_Z),
+                    ((contact.head + contact.edge) * 0.5).extend(BOOST_LIGHTNING_Z),
                 )
                 .with_rotation(Quat::from_rotation_z(angle)),
                 sheet.sprite(
                     lightning_frame(time.elapsed_secs()),
-                    Vec2::new(marker_size * 0.65, contact.distance.max(marker_size)),
-                    Color::srgba(0.62, 0.95, 1.0, 0.74),
+                    Vec2::new(marker_size * 0.55, contact.distance.max(marker_size)),
+                    other_color.lightning(),
                 ),
+            ));
+        }
+        desired.push((
+            BoostVisualPart::Spark,
+            Transform::from_translation(contact.edge.extend(BOOST_MARKER_Z))
+                .with_rotation(Quat::from_rotation_z(angle)),
+            sheet.sprite(
+                spark_frame,
+                Vec2::new(marker_size * 1.75, marker_size * 1.05),
+                other_color.spark(),
             ),
-            (
-                BoostVisualPart::Spark,
-                Transform::from_translation(contact.hit.extend(BOOST_MARKER_Z))
-                    .with_rotation(Quat::from_rotation_z(angle)),
-                sheet.sprite(
-                    spark_frame,
-                    Vec2::new(marker_size * 2.1, marker_size * 1.25),
-                    Color::srgba(0.86, 1.0, 1.0, 0.95),
-                ),
-            ),
-        ];
+        ));
 
         for (part, transform, sprite) in desired {
             seen.insert(part);
@@ -225,7 +238,14 @@ fn desired_speed_particles(
 fn nearest_controlled_boost_contact(
     config: &GameConfig,
     snakes: &Query<
-        (Entity, &TailPoints, &RoomId, Has<Controlled>),
+        (
+            Entity,
+            &TailPoints,
+            &RoomId,
+            Option<&Speed>,
+            Option<&HasPlayer>,
+            Has<Controlled>,
+        ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) -> Option<BoostContact> {
@@ -235,15 +255,36 @@ fn nearest_controlled_boost_contact(
     }
 
     let mut nearest = None;
-    for (entity, tail, room, controlled) in snakes {
+    for (entity, tail, room, speed, _, controlled) in snakes {
         if !controlled {
             continue;
         }
+        let speed = speed
+            .map(|speed| speed.0)
+            .unwrap_or(config.movement.min_speed);
+        let lightning_active = speed >= top_speed_marker_threshold(config);
         let head = tail.front().0;
         let direction = tail.front().1.delta();
-        let left = nearest_tail_ray_hit(head, direction.perp(), max_distance, entity, room, snakes);
-        let right =
-            nearest_tail_ray_hit(head, -direction.perp(), max_distance, entity, room, snakes);
+        let left = nearest_tail_ray_hit(
+            head,
+            direction.perp(),
+            max_distance,
+            entity,
+            room,
+            snakes,
+            config.render.tail_width,
+            lightning_active,
+        );
+        let right = nearest_tail_ray_hit(
+            head,
+            -direction.perp(),
+            max_distance,
+            entity,
+            room,
+            snakes,
+            config.render.tail_width,
+            lightning_active,
+        );
         let contact = match (left, right) {
             (Some(left), Some(right)) => Some(if left.distance <= right.distance {
                 left
@@ -271,12 +312,21 @@ fn nearest_tail_ray_hit(
     excluded: Entity,
     room: &RoomId,
     snakes: &Query<
-        (Entity, &TailPoints, &RoomId, Has<Controlled>),
+        (
+            Entity,
+            &TailPoints,
+            &RoomId,
+            Option<&Speed>,
+            Option<&HasPlayer>,
+            Has<Controlled>,
+        ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
+    tail_width: f32,
+    lightning_active: bool,
 ) -> Option<BoostContact> {
     let mut nearest = None;
-    for (other_entity, other_tail, other_room, _) in snakes {
+    for (other_entity, other_tail, other_room, _, _, _) in snakes {
         if other_entity == excluded || other_room != room {
             continue;
         }
@@ -291,15 +341,53 @@ fn nearest_tail_ray_hit(
                 continue;
             };
             if nearest.map_or(true, |nearest: BoostContact| distance < nearest.distance) {
+                let hit = origin + direction * distance;
+                let edge_direction = (origin - hit).normalize_or_zero();
                 nearest = Some(BoostContact {
                     head: origin,
-                    hit: origin + direction * distance,
+                    edge: hit + edge_direction * (tail_width.max(1.0) * 0.5 + 0.2),
                     distance,
+                    other: other_entity,
+                    lightning_active,
                 });
             }
         }
     }
     nearest
+}
+
+fn top_speed_marker_threshold(config: &GameConfig) -> f32 {
+    let min_speed = config.movement.min_speed;
+    let max_speed = config.movement.max_speed.max(min_speed);
+    min_speed + (max_speed - min_speed) * 0.92
+}
+
+fn snake_entity_color(
+    snake_entity: Entity,
+    snakes: &Query<
+        (
+            Entity,
+            &TailPoints,
+            &RoomId,
+            Option<&Speed>,
+            Option<&HasPlayer>,
+            Has<Controlled>,
+        ),
+        Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+    >,
+    players: &Query<&Player>,
+) -> SnakePaletteColor {
+    snakes
+        .iter()
+        .find_map(|(entity, _, _, _, has_player, _)| {
+            (entity == snake_entity).then(|| {
+                has_player
+                    .and_then(|has_player| players.get(has_player.0).ok())
+                    .map(snake_color_for_player)
+                    .unwrap_or_else(|| snake_color_for_fallback(entity.to_bits()))
+            })
+        })
+        .unwrap_or_else(|| snake_color_for_fallback(snake_entity.to_bits()))
 }
 
 fn spark_frame(elapsed_seconds: f32) -> PowerlineFrame {
@@ -327,5 +415,13 @@ mod tests {
         assert_eq!(spark_frame(0.0), PowerlineFrame::Spark0);
         assert_eq!(spark_frame(1.0 / 18.0), PowerlineFrame::Spark1);
         assert_eq!(spark_frame(2.0 / 18.0), PowerlineFrame::Spark2);
+    }
+
+    #[test]
+    fn top_speed_marker_threshold_is_near_max_speed() {
+        let config = GameConfig::default();
+
+        assert!(top_speed_marker_threshold(&config) > 3.7);
+        assert!(top_speed_marker_threshold(&config) < config.movement.max_speed);
     }
 }

@@ -5,6 +5,7 @@ use shared::network::protocol::prelude::*;
 mod arena;
 mod assets;
 mod camera;
+mod colors;
 mod effects;
 mod food;
 mod hud;

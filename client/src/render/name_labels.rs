@@ -6,6 +6,8 @@ use bevy::transform::TransformSystems;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use shared::network::protocol::prelude::{Player, TailPoints};
 
+use crate::render::colors::snake_color_for_player;
+
 const LABEL_OFFSET: Vec2 = Vec2::new(22.0, 20.0);
 const LABEL_Z: f32 = 20.0;
 const LABEL_FONT_SIZE: f32 = 13.0;
@@ -36,6 +38,7 @@ fn update_name_labels(
         Entity,
         &NameLabel,
         &mut Text2d,
+        &mut TextColor,
         &mut Transform,
         &mut Visibility,
     )>,
@@ -44,20 +47,28 @@ fn update_name_labels(
         .iter()
         .filter_map(|(player_entity, player)| {
             let tail = player.snake.and_then(|snake| tails.get(snake).ok())?;
-            Some((player_entity, player.name.clone(), tail.front().0))
+            Some((
+                player_entity,
+                player.name.clone(),
+                tail.front().0,
+                snake_color_for_player(player).label(),
+            ))
         })
         .collect::<Vec<_>>();
 
     let mut existing_players = HashSet::new();
-    for (label_entity, label, mut text, mut transform, mut visibility) in &mut labels {
-        if let Some((_, name, head)) = wanted
+    for (label_entity, label, mut text, mut text_color, mut transform, mut visibility) in
+        &mut labels
+    {
+        if let Some((_, name, head, color)) = wanted
             .iter()
-            .find(|(player_entity, _, _)| *player_entity == label.player)
+            .find(|(player_entity, _, _, _)| *player_entity == label.player)
         {
             existing_players.insert(label.player);
             if text.0 != *name {
                 text.0 = name.clone();
             }
+            *text_color = TextColor(*color);
             transform.translation = label_translation(*head);
             *visibility = Visibility::Inherited;
         } else {
@@ -65,7 +76,7 @@ fn update_name_labels(
         }
     }
 
-    for (player_entity, name, head) in wanted {
+    for (player_entity, name, head, color) in wanted {
         if existing_players.contains(&player_entity) {
             continue;
         }
@@ -75,7 +86,7 @@ fn update_name_labels(
             },
             Text2d::new(name),
             TextFont::from_font_size(LABEL_FONT_SIZE),
-            TextColor(Color::srgb(0.86, 0.93, 1.0)),
+            TextColor(color),
             TextLayout::new_with_justify(Justify::Left),
             Transform::from_translation(label_translation(head)),
         ));

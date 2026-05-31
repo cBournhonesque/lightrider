@@ -1,14 +1,18 @@
-use crate::rooms::{add_replicated_entity_to_room, RoomDirectory};
+use crate::rooms::{add_replicated_entity_to_room, ClientRoom, RoomDirectory};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy_turborand::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{InterpolationTarget, NetworkTarget, Replicate, ReplicationSender};
+use lightyear::prelude::{
+    InterpolationTarget, NetworkTarget, RemoteId, Replicate, ReplicationSender, Server,
+    ServerMultiMessageSender,
+};
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::map::{MapMarker, MapSize};
 use shared::network::bundle::food::FoodBundle;
 use shared::network::protocol::prelude::*;
+use tracing::error;
 
 pub struct FoodPlugin;
 
@@ -126,6 +130,43 @@ fn grow_tail(
     }
 }
 
+fn send_food_collision_messages(
+    servers: Query<&Server>,
+    sender: Option<ServerMultiMessageSender>,
+    clients: Query<(&RemoteId, &ClientRoom), With<ClientOf>>,
+    tails: Query<&RoomId, With<TailPoints>>,
+    mut events: MessageReader<FoodCollision>,
+) {
+    let Some(mut sender) = sender else {
+        for _ in events.read() {}
+        return;
+    };
+    let Some(server) = servers.iter().next() else {
+        for _ in events.read() {}
+        return;
+    };
+    for event in events.read() {
+        let Ok(room) = tails.get(event.snake) else {
+            continue;
+        };
+        for (remote_id, client_room) in &clients {
+            if client_room.room != *room {
+                continue;
+            }
+            if let Err(error) =
+                sender.send::<_, GameChannel>(event, server, &NetworkTarget::Single(remote_id.0))
+            {
+                error!(
+                    ?error,
+                    peer_id = ?remote_id.0,
+                    ?event,
+                    "failed to send confirmed food collision"
+                );
+            }
+        }
+    }
+}
+
 fn despawn_food(mut commands: Commands, mut events: MessageReader<FoodCollision>) {
     for event in events.read() {
         commands.entity(event.food).try_despawn();
@@ -146,7 +187,9 @@ impl Plugin for FoodPlugin {
             FixedUpdate,
             (
                 food_collision.in_set(ColliderSet::ComputeCollision),
-                (grow_tail, despawn_food).after(food_collision),
+                (grow_tail, send_food_collision_messages, despawn_food)
+                    .chain()
+                    .after(food_collision),
             ),
         );
     }
