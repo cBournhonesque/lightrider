@@ -23,7 +23,7 @@
         normal_camera_scale: 0.35,
         normal_camera_growth_per_tail_length: 0.00025,
         normal_camera_scale_smoothing: 6.0,
-        normal_camera_max_scale: 1.0,
+        normal_camera_max_scale: 0.85,
         debug_camera_scale: 1.0,
     ),
     sound: (
@@ -52,8 +52,8 @@
         visual_radius: 3.0,
         radius: 45.0,
         tail_growth: 20.0,
-        death_food_spacing: 28.0,
-        death_food_max: 40,
+        death_food_spacing: 18.0,
+        death_food_max: 120,
     ),
     rooms: (
         max_rooms: 16,

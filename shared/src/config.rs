@@ -157,7 +157,7 @@ impl Default for RenderConfig {
             normal_camera_scale: 0.35,
             normal_camera_growth_per_tail_length: 0.00025,
             normal_camera_scale_smoothing: 6.0,
-            normal_camera_max_scale: 1.0,
+            normal_camera_max_scale: 0.85,
             debug_camera_scale: 1.0,
         }
     }
@@ -231,8 +231,8 @@ impl Default for FoodConfig {
             visual_radius: 3.0,
             radius: 45.0,
             tail_growth: 20.0,
-            death_food_spacing: 28.0,
-            death_food_max: 40,
+            death_food_spacing: 18.0,
+            death_food_max: 120,
         }
     }
 }
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(config.render.normal_camera_scale, 0.35);
         assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00025);
         assert_eq!(config.render.normal_camera_scale_smoothing, 6.0);
-        assert_eq!(config.render.normal_camera_max_scale, 1.0);
+        assert_eq!(config.render.normal_camera_max_scale, 0.85);
         assert_eq!(config.render.debug_camera_scale, 1.0);
         assert!(config.sound.enabled);
         assert_eq!(config.sound.death_volume, 0.2);
@@ -420,7 +420,7 @@ mod tests {
         assert_eq!(config.food.visual_radius, 3.0);
         assert_eq!(config.food.radius, 45.0);
         assert_eq!(config.food.max_count, 600);
-        assert_eq!(config.food.death_food_max, 40);
+        assert_eq!(config.food.death_food_max, 120);
         assert_eq!(config.movement.food_boost_acceleration, 0.03);
         assert_eq!(config.movement.food_boost_decay, 0.94);
         assert_eq!(config.rooms.max_players_per_room, 50);

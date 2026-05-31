@@ -75,7 +75,8 @@ fn sync_asset_food_visuals(
     let mut seen = HashSet::with_capacity(food.iter().len());
     for (target, position) in &food {
         seen.insert(target);
-        let transform = Transform::from_translation(position.0.extend(FOOD_Z));
+        let transform = Transform::from_translation(position.0.extend(FOOD_Z))
+            .with_rotation(food_rotation(target));
         let sprite = sheet.sprite(
             PowerlineFrame::Food,
             Vec2::splat(visual_size),
@@ -106,6 +107,12 @@ fn sync_asset_food_visuals(
 fn food_color(entity: Entity) -> Color {
     let hue = (entity.to_bits() % 360) as f32;
     Color::hsl(hue, 1.0, 0.55)
+}
+
+fn food_rotation(entity: Entity) -> Quat {
+    let bits = entity.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let angle = ((bits >> 40) as f32 / ((1_u64 << 24) as f32)) * std::f32::consts::TAU;
+    Quat::from_rotation_z(angle)
 }
 
 fn spawn_confirmed_food_pickup_animations(
@@ -145,7 +152,8 @@ fn spawn_confirmed_food_pickup_animations(
                 Vec2::splat(visual_size),
                 food_color(pickup.collision.food),
             ),
-            Transform::from_translation(start.extend(FOOD_PICKUP_ANIMATION_Z)),
+            Transform::from_translation(start.extend(FOOD_PICKUP_ANIMATION_Z))
+                .with_rotation(food_rotation(pickup.collision.food)),
         ));
     }
 }

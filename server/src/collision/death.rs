@@ -1,9 +1,11 @@
 use crate::food::spawn_food_entity;
 use crate::respawn::{respawn_delay_seconds, RespawnReadyAt};
-use crate::rooms::{remove_replicated_entity_from_room, RoomDirectory};
+use crate::rooms::{remove_replicated_entity_from_room, ClientRoom, RoomDirectory};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use lightyear::prelude::{ControlledBy, NetworkTarget, Server, ServerMultiMessageSender};
+use lightyear::prelude::{
+    server::ClientOf, NetworkTarget, RemoteId, Server, ServerMultiMessageSender,
+};
 use shared::bot::BotMarker;
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
@@ -34,7 +36,7 @@ pub fn handle_collision(
         Query<&mut PlayerStats>,
         Query<(&mut Player, &mut PlayerStatus, Has<BotMarker>)>,
     )>,
-    human_players: Query<(), With<ControlledBy>>,
+    clients: Query<(&RemoteId, &ClientRoom), With<ClientOf>>,
     snakes: Query<(&HasPlayer, &RoomId, &TailPoints)>,
     food: Query<&RoomId, With<FoodMarker>>,
     mut commands: Commands,
@@ -90,29 +92,24 @@ pub fn handle_collision(
         };
         info!(?collision_event, "Collision event!");
 
-        let involves_human =
-            human_players.contains(killed_player.0) || human_players.contains(killer_player.0);
-        if involves_human {
-            // We only notify clients for human-involved deaths for now. Room-scoped
-            // replicated despawns are enough for bot-only churn, and this avoids sending
-            // mapped entity messages before a late-joining client has seen those bot entities.
+        let death_message = PlayerDeath {
+            killer_player: killer_player.0,
+            killed_player: killed_player.0,
+            killer_snake: collision_event.killer,
+            killed_snake: collision_event.killed,
+            killer_name,
+            killed_name,
+            room: *killed_room,
+            reason: collision_event.reason,
+            stats: killed_stats,
+        };
+        for (remote_id, client_room) in &clients {
+            if client_room.room != *killed_room {
+                continue;
+            }
             let _ = sender
-                .send::<_, GameChannel>(
-                    &PlayerDeath {
-                        killer_player: killer_player.0,
-                        killed_player: killed_player.0,
-                        killer_snake: collision_event.killer,
-                        killed_snake: collision_event.killed,
-                        killer_name,
-                        killed_name,
-                        room: *killed_room,
-                        reason: collision_event.reason,
-                        stats: killed_stats,
-                    },
-                    server,
-                    &NetworkTarget::All,
-                )
-                .map_err(|e| error!(?e, "Failed to send message"));
+                .send::<_, GameChannel>(&death_message, server, &NetworkTarget::Single(remote_id.0))
+                .map_err(|e| error!(?e, "Failed to send death message"));
         }
 
         // despawn dead snake and remove snake from player
@@ -197,24 +194,67 @@ pub fn death_food_positions(tail: &TailPoints, spacing: f32, max_food: usize) ->
     if spacing <= 0.0 || max_food == 0 {
         return Vec::new();
     }
-    let mut positions = Vec::new();
+    let total_length = tail.total_length();
+    if total_length <= f32::EPSILON {
+        return Vec::new();
+    }
+
+    let food_count = ((total_length / spacing).floor() as usize)
+        .max(1)
+        .min(max_food);
+    let sample_step = total_length / food_count as f32;
+    let jitter_radius = (spacing * 0.18).min(5.0);
+    let mut positions = Vec::with_capacity(food_count);
+    for index in 0..food_count {
+        let distance = sample_step * (index as f32 + 0.5);
+        if let Some(position) = tail_position_at_distance(tail, distance) {
+            positions
+                .push(position + deterministic_death_food_jitter(position, index, jitter_radius));
+        }
+    }
+    positions
+}
+
+fn tail_position_at_distance(tail: &TailPoints, distance: f32) -> Option<Vec2> {
+    let mut remaining = distance.max(0.0);
     for (start, end) in tail.pairs_front_to_back() {
         let segment = end.0 - start.0;
         let length = segment.length();
         if length <= f32::EPSILON {
             continue;
         }
-        let direction = segment / length;
-        let mut distance = spacing * 0.5;
-        while distance < length && positions.len() < max_food {
-            positions.push(start.0 + direction * distance);
-            distance += spacing;
+        if remaining <= length {
+            return Some(start.0 + segment / length * remaining);
         }
-        if positions.len() >= max_food {
-            break;
-        }
+        remaining -= length;
     }
-    positions
+    tail.0.back().map(|(point, _)| *point)
+}
+
+fn deterministic_death_food_jitter(position: Vec2, index: usize, radius: f32) -> Vec2 {
+    if radius <= 0.0 {
+        return Vec2::ZERO;
+    }
+    let hash = mix_death_food_hash(
+        position.x.to_bits() as u64
+            ^ (position.y.to_bits() as u64).rotate_left(21)
+            ^ (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+    );
+    let angle = unit_float(hash) * std::f32::consts::TAU;
+    let distance = radius * (0.25 + 0.75 * unit_float(hash.rotate_left(17)));
+    Vec2::from_angle(angle) * distance
+}
+
+fn mix_death_food_hash(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn unit_float(value: u64) -> f32 {
+    ((value >> 40) as f32) / ((1_u64 << 24) as f32)
 }
 
 #[cfg(test)]
@@ -232,14 +272,25 @@ mod tests {
 
         let positions = death_food_positions(&tail, 25.0, 3);
 
-        assert_eq!(
-            positions,
-            vec![
-                Vec2::new(12.5, 0.0),
-                Vec2::new(37.5, 0.0),
-                Vec2::new(62.5, 0.0),
-            ]
-        );
+        assert_eq!(positions.len(), 3);
+        assert!((positions[0].x - 16.7).abs() < 6.0);
+        assert!((positions[1].x - 50.0).abs() < 6.0);
+        assert!((positions[2].x - 83.3).abs() < 6.0);
+        assert!(positions.iter().all(|position| position.y.abs() <= 5.0));
+    }
+
+    #[test]
+    fn death_food_limit_is_distributed_across_full_tail() {
+        let tail = TailPoints(VecDeque::from([
+            (Vec2::new(300.0, 0.0), Direction::Right),
+            (Vec2::ZERO, Direction::Right),
+        ]));
+
+        let positions = death_food_positions(&tail, 25.0, 3);
+
+        assert_eq!(positions.len(), 3);
+        assert!(positions[0].x < 70.0);
+        assert!(positions[2].x > 230.0);
     }
 
     #[test]
