@@ -31,11 +31,15 @@ impl SnakePaletteColor {
     }
 
     pub(crate) fn inner_glow(self) -> Color {
-        self.linear_color(1.4, 0.15)
+        self.glow(1.2, 0.09)
     }
 
     pub(crate) fn outer_glow(self) -> Color {
-        self.linear_color(0.75, 0.06)
+        self.glow(0.55, 0.025)
+    }
+
+    pub(crate) fn glow(self, intensity: f32, alpha: f32) -> Color {
+        self.linear_color(intensity, alpha)
     }
 
     pub(crate) fn head(self) -> Color {

@@ -35,7 +35,7 @@ struct SpeedParticleVisual {
 #[derive(Clone, Copy, Debug)]
 struct BoostContact {
     head: Vec2,
-    edge: Vec2,
+    hit: Vec2,
     distance: f32,
     other: Entity,
     lightning_active: bool,
@@ -87,7 +87,7 @@ fn sync_boost_marker(
     let mut seen = HashSet::new();
 
     if let Some(contact) = contact {
-        let delta = contact.head - contact.edge;
+        let delta = contact.head - contact.hit;
         let angle = delta.y.atan2(delta.x) - std::f32::consts::FRAC_PI_2;
         let marker_size = config.render.head_size.max(4.0) * 2.5;
         let other_color = snake_entity_color(contact.other, &snakes, &players);
@@ -96,7 +96,7 @@ fn sync_boost_marker(
             desired.push((
                 BoostVisualPart::Lightning,
                 Transform::from_translation(
-                    ((contact.head + contact.edge) * 0.5).extend(BOOST_LIGHTNING_Z),
+                    ((contact.head + contact.hit) * 0.5).extend(BOOST_LIGHTNING_Z),
                 )
                 .with_rotation(Quat::from_rotation_z(angle)),
                 sheet.sprite(
@@ -108,7 +108,7 @@ fn sync_boost_marker(
         }
         desired.push((
             BoostVisualPart::Spark,
-            Transform::from_translation(contact.edge.extend(BOOST_MARKER_Z))
+            Transform::from_translation(contact.hit.extend(BOOST_MARKER_Z))
                 .with_rotation(Quat::from_rotation_z(angle)),
             sheet.sprite(
                 spark_frame,
@@ -272,7 +272,6 @@ fn nearest_controlled_boost_contact(
             entity,
             room,
             snakes,
-            config.render.tail_width,
             lightning_active,
         );
         let right = nearest_tail_ray_hit(
@@ -282,7 +281,6 @@ fn nearest_controlled_boost_contact(
             entity,
             room,
             snakes,
-            config.render.tail_width,
             lightning_active,
         );
         let contact = match (left, right) {
@@ -322,7 +320,6 @@ fn nearest_tail_ray_hit(
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
-    tail_width: f32,
     lightning_active: bool,
 ) -> Option<BoostContact> {
     let mut nearest = None;
@@ -342,10 +339,9 @@ fn nearest_tail_ray_hit(
             };
             if nearest.map_or(true, |nearest: BoostContact| distance < nearest.distance) {
                 let hit = origin + direction * distance;
-                let edge_direction = (origin - hit).normalize_or_zero();
                 nearest = Some(BoostContact {
                     head: origin,
-                    edge: hit + edge_direction * (tail_width.max(1.0) * 0.5 + 0.2),
+                    hit,
                     distance,
                     other: other_entity,
                     lightning_active,

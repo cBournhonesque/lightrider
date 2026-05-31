@@ -33,8 +33,10 @@ enum SnakeVisualPart {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum TailLayer {
-    OuterGlow,
-    InnerGlow,
+    GlowFar,
+    GlowMid,
+    GlowNear,
+    GlowTight,
     Core,
 }
 
@@ -164,9 +166,13 @@ fn desired_snake_visuals(
             if length <= f32::EPSILON {
                 continue;
             }
-            let center = (start.0 + end.0) * 0.5;
             let rotation = Quat::from_rotation_z(delta.y.atan2(delta.x));
             for layer in TailLayer::ALL {
+                let Some((center, length)) =
+                    layer.segment_center_and_length(start.0, end.0, index, head_length)
+                else {
+                    continue;
+                };
                 let layer_width = layer.width(tail_width);
                 desired.push(DesiredSnakeVisual {
                     key: SnakeVisualKey {
@@ -177,7 +183,7 @@ fn desired_snake_visuals(
                         .with_rotation(rotation),
                     sprite: Sprite::from_color(
                         layer.color(color),
-                        Vec2::new(length + layer_width, layer_width),
+                        Vec2::new(length + layer.length_overlap(layer_width), layer_width),
                     ),
                 });
             }
@@ -199,30 +205,77 @@ fn snake_visual_color(
 }
 
 impl TailLayer {
-    const ALL: [Self; 3] = [Self::OuterGlow, Self::InnerGlow, Self::Core];
+    const ALL: [Self; 5] = [
+        Self::GlowFar,
+        Self::GlowMid,
+        Self::GlowNear,
+        Self::GlowTight,
+        Self::Core,
+    ];
 
     fn width(self, tail_width: f32) -> f32 {
         match self {
-            Self::OuterGlow => (tail_width * 14.0).max(13.0),
-            Self::InnerGlow => (tail_width * 7.0).max(6.0),
+            Self::GlowFar => (tail_width * 18.0).max(16.0),
+            Self::GlowMid => (tail_width * 12.0).max(11.0),
+            Self::GlowNear => (tail_width * 7.0).max(7.0),
+            Self::GlowTight => (tail_width * 4.0).max(4.0),
             Self::Core => tail_width.max(1.0),
         }
     }
 
     fn color(self, color: SnakePaletteColor) -> Color {
         match self {
-            Self::OuterGlow => color.outer_glow(),
-            Self::InnerGlow => color.inner_glow(),
+            Self::GlowFar => color.outer_glow(),
+            Self::GlowMid => color.glow(0.75, 0.035),
+            Self::GlowNear => color.glow(0.95, 0.055),
+            Self::GlowTight => color.inner_glow(),
             Self::Core => color.tail_core(),
         }
     }
 
     fn z(self) -> f32 {
         match self {
-            Self::OuterGlow => SNAKE_TAIL_Z - 0.02,
-            Self::InnerGlow => SNAKE_TAIL_Z - 0.01,
+            Self::GlowFar => SNAKE_TAIL_Z - 0.04,
+            Self::GlowMid => SNAKE_TAIL_Z - 0.03,
+            Self::GlowNear => SNAKE_TAIL_Z - 0.02,
+            Self::GlowTight => SNAKE_TAIL_Z - 0.01,
             Self::Core => SNAKE_TAIL_Z,
         }
+    }
+
+    fn is_glow(self) -> bool {
+        !matches!(self, Self::Core)
+    }
+
+    fn length_overlap(self, width: f32) -> f32 {
+        if self.is_glow() {
+            width * 0.28
+        } else {
+            width
+        }
+    }
+
+    fn segment_center_and_length(
+        self,
+        start: Vec2,
+        end: Vec2,
+        index: usize,
+        head_length: f32,
+    ) -> Option<(Vec2, f32)> {
+        let delta = end - start;
+        let length = delta.length();
+        if length <= f32::EPSILON {
+            return None;
+        }
+        if !self.is_glow() || index != 0 {
+            return Some(((start + end) * 0.5, length));
+        }
+
+        let direction = delta / length;
+        let clear_from_head = (head_length * 0.58).min(length);
+        let trimmed_end = end - direction * clear_from_head;
+        let trimmed_length = trimmed_end.distance(start);
+        (trimmed_length > f32::EPSILON).then_some(((start + trimmed_end) * 0.5, trimmed_length))
     }
 }
 

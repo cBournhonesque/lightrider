@@ -266,6 +266,41 @@ mod tests {
     }
 
     #[test]
+    fn near_miss_inside_visual_glow_does_not_collide() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(shared::collision::CollisionPlugin);
+        app.add_plugins(ColliderPlugin);
+
+        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
+        app.world_mut().entity_mut(snake1).insert((
+            Speed(4.0),
+            TailPoints(VecDeque::from([
+                (Vec2::new(0.0, 4.0), Direction::Up),
+                (Vec2::new(0.0, -100.0), Direction::Up),
+            ])),
+        ));
+        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
+        app.world_mut()
+            .entity_mut(snake2)
+            .insert(TailPoints(VecDeque::from([
+                (Vec2::new(100.0, 2.0), Direction::Right),
+                (Vec2::new(6.0, 2.0), Direction::Right),
+            ])));
+
+        run_fixed_update(&mut app);
+
+        assert_eq!(
+            app.world_mut()
+                .get_resource_mut::<Messages<SnakeCollision>>()
+                .unwrap()
+                .drain()
+                .collect::<Vec<_>>(),
+            vec![]
+        );
+    }
+
+    #[test]
     fn test_self_collision() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
