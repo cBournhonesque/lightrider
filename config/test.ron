@@ -16,7 +16,7 @@
     ),
     render: (
         use_assets: true,
-        tail_width: 2.0,
+        tail_width: 1.0,
         head_size: 6.0,
         map_outline_width: 3.0,
         background_tile_size: 128.0,

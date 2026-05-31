@@ -2208,19 +2208,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_web_keepalive"
-version = "0.5.0"
-source = "git+https://github.com/Nul-led/bevy_web_keepalive.git?rev=ac1e853d378c1b6f4df22fdbbf29bb954146f4de#ac1e853d378c1b6f4df22fdbbf29bb954146f4de"
-dependencies = [
- "bevy_app",
- "bevy_ecs",
- "bevy_time",
- "bevy_winit",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "bevy_window"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2733,7 +2720,6 @@ dependencies = [
  "bevy",
  "bevy-inspector-egui",
  "bevy_enhanced_input",
- "bevy_web_keepalive",
  "bevygap_client_plugin",
  "cfg-if",
  "clap",

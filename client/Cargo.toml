@@ -50,4 +50,3 @@ tokio = { version = "1.34", features = [
 getrandom = { version = "0.4", features = ["wasm_js"] }
 tokio = { version = "1.34", features = ["macros", "rt"] }
 web-sys = { version = "0.3", features = ["Document", "Element", "Location", "UrlSearchParams", "Window"] }
-bevy_web_keepalive = { git = "https://github.com/Nul-led/bevy_web_keepalive.git", rev = "ac1e853d378c1b6f4df22fdbbf29bb954146f4de" }

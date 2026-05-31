@@ -24,6 +24,7 @@ use bevygap_client_plugin::prelude::{
     RoomSelection as BevygapRoomSelection,
 };
 
+mod admin;
 mod bot;
 mod camera;
 mod collision;
@@ -208,8 +209,6 @@ pub fn app(cli: Cli) -> App {
             });
         }
         app.add_plugins(plugins);
-        #[cfg(target_family = "wasm")]
-        app.add_plugins(bevy_web_keepalive::WebKeepalivePlugin::default());
     }
 
     #[cfg(feature = "bevygap")]
@@ -270,6 +269,7 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(inputs::LocalInputsPlugin { debug_enabled });
         app.add_plugins(camera::CameraPlugin { debug_enabled });
         app.add_plugins(debug::DebugPlugin);
+        app.add_plugins(admin::ClientAdminPlugin);
         app.add_plugins(render::RenderPlugin);
         app.add_plugins(sound::SoundPlugin);
         #[cfg(all(target_family = "wasm", feature = "bevygap"))]

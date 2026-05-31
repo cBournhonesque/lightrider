@@ -23,6 +23,7 @@ pub mod prelude {
     pub use super::components::player::*;
     pub use super::components::snake::*;
     // messages
+    pub use super::messages::admin::*;
     pub use super::messages::food::*;
     pub use super::messages::room::*;
     pub use super::messages::snake::*;
@@ -69,6 +70,12 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<messages::room::PlayerNameUpdate>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<messages::admin::AdminLoginRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<messages::admin::AdminCommand>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<messages::admin::AdminResponse>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         app.add_channel::<channels::GameChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),

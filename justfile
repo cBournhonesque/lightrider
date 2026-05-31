@@ -6,6 +6,11 @@ export CARGO_BUILD_JOBS := "2"
 export CARGO_INCREMENTAL := "1"
 
 server config="config/test.ron" port="5000":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      source secrets/admin.env
+    fi
     cargo run -j 2 -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}}
 
 client id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
@@ -30,6 +35,9 @@ bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" 
 local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="1001" room="auto":
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      source secrets/admin.env
+    fi
     trap 'jobs -pr | xargs -r kill' EXIT
     cargo run -j 2 -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}} &
     sleep 2
@@ -42,6 +50,9 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
 trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_client_id="2001" room="auto":
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      source secrets/admin.env
+    fi
     run_dir="logs/debug/$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$run_dir"
     ln -sfn "$(basename "$run_dir")" logs/debug/latest
@@ -202,6 +213,9 @@ bevygap-fake-context bind="127.0.0.1" port="9876" public_ip="127.0.0.1" game_por
 bevygap-server-local config="config/test.ron" port="7777" context_url="http://127.0.0.1:9876/context/local-lightrider/1":
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      source secrets/admin.env
+    fi
     export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
     export NATS_USER="${NATS_USER:-lightrider}"
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"

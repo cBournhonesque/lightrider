@@ -149,7 +149,7 @@ impl Default for RenderConfig {
     fn default() -> Self {
         Self {
             use_assets: true,
-            tail_width: 2.0,
+            tail_width: 1.0,
             head_size: 6.0,
             map_outline_width: 3.0,
             background_tile_size: 128.0,
@@ -387,7 +387,7 @@ mod tests {
 
         assert_eq!(config.arena.width, 5000.0);
         assert_eq!(config.arena.height, 1600.0);
-        assert_eq!(config.render.tail_width, 2.0);
+        assert_eq!(config.render.tail_width, 1.0);
         assert_eq!(config.render.map_outline_width, 3.0);
         assert_eq!(config.render.normal_camera_scale, 0.35);
         assert_eq!(config.render.normal_camera_max_scale, 1.0);
