@@ -1169,15 +1169,15 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     caller_has_matchmaker_game=0
     caller_has_matchmaker_version=0
     caller_has_nats_namespace=0
-    if [[ -v LIGHTRIDER_MATCHMAKER_GAME ]]; then
+    if [[ "${LIGHTRIDER_MATCHMAKER_GAME+x}" == "x" ]]; then
       caller_has_matchmaker_game=1
       caller_matchmaker_game="$LIGHTRIDER_MATCHMAKER_GAME"
     fi
-    if [[ -v LIGHTRIDER_MATCHMAKER_VERSION ]]; then
+    if [[ "${LIGHTRIDER_MATCHMAKER_VERSION+x}" == "x" ]]; then
       caller_has_matchmaker_version=1
       caller_matchmaker_version="$LIGHTRIDER_MATCHMAKER_VERSION"
     fi
-    if [[ -v LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE ]]; then
+    if [[ "${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE+x}" == "x" ]]; then
       caller_has_nats_namespace=1
       caller_nats_namespace="$LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE"
     fi
