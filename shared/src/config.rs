@@ -355,6 +355,16 @@ pub struct InputDelayConfig {
 
 impl Default for InputDelayConfig {
     fn default() -> Self {
+        Self::balanced()
+    }
+}
+
+impl InputDelayConfig {
+    /// Lightyear's balanced input-delay preset.
+    ///
+    /// Low latency is covered with a small amount of input delay before falling back to
+    /// prediction. Higher latency still predicts, but bounded by `maximum_predicted_ticks`.
+    pub const fn balanced() -> Self {
         Self {
             minimum_input_delay_ticks: 0,
             maximum_input_delay_before_prediction_ticks: 3,
@@ -413,14 +423,7 @@ mod tests {
         assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.fake_clients.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.network.server_port, 5000);
-        assert_eq!(
-            config.network.input_delay,
-            InputDelayConfig {
-                minimum_input_delay_ticks: 0,
-                maximum_input_delay_before_prediction_ticks: 3,
-                maximum_predicted_ticks: 7,
-            }
-        );
+        assert_eq!(config.network.input_delay, InputDelayConfig::balanced());
         assert_eq!(config.network.input_packet_redundancy_ticks, 3);
     }
 

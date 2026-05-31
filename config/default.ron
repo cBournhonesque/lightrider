@@ -76,6 +76,8 @@
     ),
     network: (
         server_port: 5000,
+        // Lightyear balanced input delay: cover low latency with input delay first,
+        // then bound prediction for the remaining latency.
         input_delay: (
             minimum_input_delay_ticks: 0,
             maximum_input_delay_before_prediction_ticks: 3,

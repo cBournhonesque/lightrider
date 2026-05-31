@@ -1,4 +1,6 @@
+use bevy::ecs::query::{Or, QueryFilter};
 use bevy::prelude::*;
+use lightyear::prelude::Interpolated;
 
 use crate::config::GameConfig;
 use crate::movement::SimulationSet;
@@ -49,16 +51,18 @@ pub const MAX_FRICTION_DISTANCE: f32 = 20.0;
 
 /// Friction is computed both on the client and the server because it influences movement.
 pub(crate) fn snake_friction(
-    // we will only compute the friction of predicted/interpolated snakes
+    // Only predicted/client-local or server-authoritative snakes receive boost events, but
+    // interpolated remote tails are still valid obstacles for client-side prediction.
     config: Res<GameConfig>,
-    tails: Query<(Entity, &TailPoints, &RoomId), Simulated>,
+    boosted: Query<(Entity, &TailPoints, &RoomId), Simulated>,
+    tails: Query<(Entity, &TailPoints, &RoomId), Or<(Simulated, With<Interpolated>)>>,
     mut writer: MessageWriter<SnakeFrictionEvent>,
 ) {
     let max_distance = config.movement.boost_distance;
     if max_distance <= 0.0 {
         return;
     }
-    for (entity, tail, room) in tails.iter() {
+    for (entity, tail, room) in boosted.iter() {
         let origin = tail.front().0;
         let direction = tail.front().1.delta();
         let left_hit =
@@ -96,7 +100,7 @@ fn nearest_tail_ray_hit(
     max_distance: f32,
     excluded: Entity,
     room: &RoomId,
-    tails: &Query<(Entity, &TailPoints, &RoomId), Simulated>,
+    tails: &Query<(Entity, &TailPoints, &RoomId), impl QueryFilter>,
 ) -> Option<(f32, Entity)> {
     let mut nearest: Option<(f32, Entity)> = None;
     for (other_entity, other_tail, other_room) in tails.iter() {
@@ -127,6 +131,7 @@ mod tests {
     use std::collections::VecDeque;
 
     use bevy::prelude::*;
+    use lightyear::prelude::{Interpolated, Predicted, Replicated};
 
     use crate::network::bundle::snake::SnakeBundle;
     use crate::network::protocol::prelude::Direction;
@@ -236,6 +241,56 @@ mod tests {
                 .drain()
                 .collect::<Vec<_>>(),
             vec![]
+        );
+    }
+
+    #[test]
+    fn predicted_snake_boosts_from_interpolated_remote_tail() {
+        let mut app = App::new();
+
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(ColliderPlugin);
+
+        let predicted = app
+            .world_mut()
+            .spawn((SnakeBundle::default(), Predicted))
+            .id();
+        app.world_mut()
+            .entity_mut(predicted)
+            .insert(TailPoints(VecDeque::from([
+                (Vec2::ZERO, Direction::Up),
+                (Vec2::new(0.0, -100.0), Direction::Up),
+            ])));
+        let remote = app
+            .world_mut()
+            .spawn((SnakeBundle::default(), Replicated, Interpolated))
+            .id();
+        app.world_mut()
+            .entity_mut(remote)
+            .insert(TailPoints(VecDeque::from([
+                (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 100.0), Direction::Up),
+                (
+                    Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),
+                    Direction::Up,
+                ),
+            ])));
+
+        run_fixed_update(&mut app);
+
+        let result = app
+            .world_mut()
+            .get_resource_mut::<Messages<SnakeFrictionEvent>>()
+            .unwrap()
+            .drain()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            result,
+            vec![SnakeFrictionEvent {
+                main: predicted,
+                other: remote,
+                distance: MAX_FRICTION_DISTANCE / 2.0,
+            }]
         );
     }
 }
