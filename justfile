@@ -1163,6 +1163,24 @@ deploy-web-server-pull *args:
 web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102" edgegap_version="":
     #!/usr/bin/env bash
     set -euo pipefail
+    # Keep caller-provided deployment overrides distinct from values sourced out
+    # of an older generated env file. The old file is useful for secrets, but it
+    # must not pin a redeploy to an obsolete image tag such as "dev".
+    caller_has_matchmaker_game=0
+    caller_has_matchmaker_version=0
+    caller_has_nats_namespace=0
+    if [[ -v LIGHTRIDER_MATCHMAKER_GAME ]]; then
+      caller_has_matchmaker_game=1
+      caller_matchmaker_game="$LIGHTRIDER_MATCHMAKER_GAME"
+    fi
+    if [[ -v LIGHTRIDER_MATCHMAKER_VERSION ]]; then
+      caller_has_matchmaker_version=1
+      caller_matchmaker_version="$LIGHTRIDER_MATCHMAKER_VERSION"
+    fi
+    if [[ -v LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE ]]; then
+      caller_has_nats_namespace=1
+      caller_nats_namespace="$LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE"
+    fi
     if [[ -f "{{file}}" && "${FORCE:-0}" != "1" ]]; then
       echo "{{file}} already exists; set FORCE=1 to overwrite" >&2
       exit 1
@@ -1175,6 +1193,27 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     fi
     if [[ -f secrets/prod-netcode.env ]]; then
       source secrets/prod-netcode.env
+    fi
+    if [[ "${FORCE:-0}" == "1" ]]; then
+      unset LIGHTRIDER_MATCHMAKER_IMAGE
+      unset LIGHTRIDER_STATIC_SERVER_IMAGE
+      unset LIGHTRIDER_MATCHMAKER_TAG
+      unset EDGEGAP_APP_VERSION
+      if [[ "$caller_has_matchmaker_game" == "1" ]]; then
+        LIGHTRIDER_MATCHMAKER_GAME="$caller_matchmaker_game"
+      else
+        unset LIGHTRIDER_MATCHMAKER_GAME
+      fi
+      if [[ "$caller_has_matchmaker_version" == "1" ]]; then
+        LIGHTRIDER_MATCHMAKER_VERSION="$caller_matchmaker_version"
+      else
+        unset LIGHTRIDER_MATCHMAKER_VERSION
+      fi
+      if [[ "$caller_has_nats_namespace" == "1" ]]; then
+        LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="$caller_nats_namespace"
+      else
+        unset LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE
+      fi
     fi
     if [[ -z "${LIGHTRIDER_PROTOCOL_ID:-}" ]]; then
       LIGHTRIDER_PROTOCOL_ID="1"

@@ -10,7 +10,7 @@ use shared::bot::BotMarker;
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::*;
-use tracing::error;
+use tracing::{debug, error};
 
 pub struct DeathPlugin;
 
@@ -90,7 +90,7 @@ pub fn handle_collision(
                 killer_stats.kills = killer_stats.kills.saturating_add(1);
             }
         };
-        info!(?collision_event, "Collision event!");
+        debug!(?collision_event, "Collision event!");
 
         let death_message = PlayerDeath {
             killer_player: killer_player.0,
