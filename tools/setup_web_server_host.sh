@@ -255,6 +255,29 @@ if [[ "$pull_image" == 1 ]]; then
   fi
 fi
 
+verify_static_server_image() {
+  local image="$1"
+  local help
+  help="$(podman run --rm --entrypoint /app/lightrider-server "$image" --help 2>&1 || true)"
+  if [[ "$help" != *"--matchmaker"* ]]; then
+    cat >&2 <<EOF
+Static server image does not look like the lightyear-matchmaker build:
+  $image
+
+Expected '/app/lightrider-server --help' to contain '--matchmaker'.
+This usually means the VPS pulled an old Bevygap-era image/tag.
+
+Observed help output:
+$help
+EOF
+    exit 1
+  fi
+}
+
+if [[ "$LIGHTRIDER_RUN_STATIC_SERVER" == "1" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "true" || "$LIGHTRIDER_RUN_STATIC_SERVER" == "yes" ]]; then
+  verify_static_server_image "$LIGHTRIDER_STATIC_SERVER_IMAGE"
+fi
+
 install -d -m 700 /etc/lightrider
 install -d -m 755 /var/lib/lightrider/nats
 

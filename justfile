@@ -1057,12 +1057,38 @@ _remote-pull-service service image_env image_name *args:
     registry_user="${EDGEGAP_REGISTRY_USERNAME:-}"
     registry_token="${EDGEGAP_REGISTRY_TOKEN:-}"
     ssh "${ssh_opts[@]}" "root@$host" \
-      "REGISTRY_URL=$(printf '%q' "$registry_url") REGISTRY_USER=$(printf '%q' "$registry_user") REGISTRY_TOKEN=$(printf '%q' "$registry_token") IMAGE=$(printf '%q' "$image") SERVICE=$(printf '%q' "{{service}}") RESTART=$(printf '%q' "$restart") bash -s" <<'REMOTE'
+      "REGISTRY_URL=$(printf '%q' "$registry_url") REGISTRY_USER=$(printf '%q' "$registry_user") REGISTRY_TOKEN=$(printf '%q' "$registry_token") IMAGE=$(printf '%q' "$image") IMAGE_ENV=$(printf '%q' "{{image_env}}") SERVICE=$(printf '%q' "{{service}}") RESTART=$(printf '%q' "$restart") bash -s" <<'REMOTE'
     set -euo pipefail
     if [[ -n "${REGISTRY_URL:-}" && -n "${REGISTRY_USER:-}" && -n "${REGISTRY_TOKEN:-}" ]]; then
       printf '%s' "$REGISTRY_TOKEN" | podman login "$REGISTRY_URL" --username "$REGISTRY_USER" --password-stdin
     fi
     podman pull "$IMAGE"
+    service_file="/etc/systemd/system/${SERVICE}.service"
+    if [[ -f "$service_file" ]]; then
+      if grep -Fq "Environment=${IMAGE_ENV}=" "$service_file"; then
+        sed -i "s#^Environment=${IMAGE_ENV}=.*#Environment=${IMAGE_ENV}=${IMAGE}#" "$service_file"
+      else
+        echo "service file $service_file does not define Environment=${IMAGE_ENV}=..." >&2
+        exit 1
+      fi
+      systemctl daemon-reload
+    fi
+    if [[ "$SERVICE" == "lightrider-static-server" ]]; then
+      help="$(podman run --rm --entrypoint /app/lightrider-server "$IMAGE" --help 2>&1 || true)"
+      if [[ "$help" != *"--matchmaker"* ]]; then
+        cat >&2 <<EOF
+    Static server image does not look like the lightyear-matchmaker build:
+      $IMAGE
+
+    Expected '/app/lightrider-server --help' to contain '--matchmaker'.
+    This usually means the VPS pulled an old Bevygap-era image/tag.
+
+    Observed help output:
+    $help
+    EOF
+        exit 1
+      fi
+    fi
     if [[ "$RESTART" == "1" || "$RESTART" == "true" || "$RESTART" == "yes" ]]; then
       systemctl restart "$SERVICE"
       systemctl --no-pager --full status "$SERVICE" || true
