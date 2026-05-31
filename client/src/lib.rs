@@ -18,12 +18,6 @@ use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
 use shared::network::protocol::prelude::RoomJoinMode;
 use shared::SharedPlugin;
 
-#[cfg(feature = "bevygap")]
-use bevygap_client_plugin::prelude::{
-    BevygapClientConfig, BevygapClientPlugin, BevygapConnectExt,
-    RoomSelection as BevygapRoomSelection,
-};
-
 mod admin;
 mod bot;
 mod camera;
@@ -31,12 +25,14 @@ mod collision;
 mod debug;
 mod food;
 mod inputs;
+#[cfg(feature = "lightyear-matchmaker")]
+mod matchmaker;
 mod menu;
 pub(crate) mod network;
 mod render;
 mod rooms;
 mod sound;
-#[cfg(all(target_family = "wasm", feature = "bevygap"))]
+#[cfg(all(target_family = "wasm", feature = "lightyear-matchmaker"))]
 mod web_status;
 
 // Use a port of 0 to automatically select a port
@@ -80,25 +76,20 @@ pub struct Cli {
     #[arg(long, alias = "certificate-digest", default_value = "")]
     cert_digest: String,
 
-    /// Use Bevygap matchmaking instead of direct server address connection.
-    #[cfg(feature = "bevygap")]
+    /// Use Lightyear Matchmaker instead of direct server address connection.
+    #[cfg(feature = "lightyear-matchmaker")]
     #[arg(long)]
     matchmaker_url: Option<String>,
 
-    /// Bevygap game name sent to the matchmaker.
-    #[cfg(feature = "bevygap")]
+    /// Game name sent to the matchmaker.
+    #[cfg(feature = "lightyear-matchmaker")]
     #[arg(long, default_value = "lightrider")]
     matchmaker_game: String,
 
-    /// Bevygap game version sent to the matchmaker.
-    #[cfg(feature = "bevygap")]
+    /// Game version sent to the matchmaker.
+    #[cfg(feature = "lightyear-matchmaker")]
     #[arg(long, default_value = "dev")]
     matchmaker_version: String,
-
-    /// Override client IP sent to Bevygap matchmaker, useful for local testing.
-    #[cfg(feature = "bevygap")]
-    #[arg(long)]
-    matchmaker_fake_client_ip: Option<String>,
 
     #[arg(long, default_value_t = Ipv4Addr::LOCALHOST)]
     server_addr: Ipv4Addr,
@@ -119,7 +110,7 @@ pub struct Cli {
     canvas_selector: Option<String>,
 }
 
-#[cfg(feature = "bevygap")]
+#[cfg(feature = "lightyear-matchmaker")]
 #[derive(Clone, Debug)]
 pub struct WebClientOptions {
     pub matchmaker_url: String,
@@ -130,7 +121,7 @@ pub struct WebClientOptions {
     pub canvas_selector: String,
 }
 
-#[cfg(feature = "bevygap")]
+#[cfg(feature = "lightyear-matchmaker")]
 impl Cli {
     pub fn web_defaults(matchmaker_url: String) -> Self {
         Self {
@@ -144,7 +135,6 @@ impl Cli {
             matchmaker_url: Some(matchmaker_url),
             matchmaker_game: "lightrider".to_string(),
             matchmaker_version: "dev".to_string(),
-            matchmaker_fake_client_ip: None,
             server_addr: Ipv4Addr::LOCALHOST,
             server_port: SERVER_PORT,
             room: RoomJoinMode::Auto,
@@ -155,7 +145,7 @@ impl Cli {
     }
 }
 
-#[cfg(feature = "bevygap")]
+#[cfg(feature = "lightyear-matchmaker")]
 pub fn web_app(options: WebClientOptions) -> App {
     let mut cli = Cli::web_defaults(options.matchmaker_url);
     cli.matchmaker_game = options.matchmaker_game;
@@ -213,21 +203,20 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(plugins);
     }
 
-    #[cfg(feature = "bevygap")]
-    let bevygap_config = cli
-        .matchmaker_url
-        .as_ref()
-        .map(|matchmaker_url| BevygapClientConfig {
-            matchmaker_url: matchmaker_url.clone(),
-            fake_client_ip: cli.matchmaker_fake_client_ip.clone(),
-            game_name: cli.matchmaker_game.clone(),
-            game_version: cli.matchmaker_version.clone(),
-            room: bevygap_room_selection(cli.room),
-        });
+    #[cfg(feature = "lightyear-matchmaker")]
+    let matchmaker_config =
+        cli.matchmaker_url
+            .as_ref()
+            .map(|matchmaker_url| matchmaker::LightriderMatchmakerConfig {
+                matchmaker_url: matchmaker_url.clone(),
+                game_name: cli.matchmaker_game.clone(),
+                game_version: cli.matchmaker_version.clone(),
+                room: cli.room,
+            });
 
-    #[cfg(feature = "bevygap")]
-    let network_connection = if bevygap_config.is_some() {
-        network::config::ClientConnectionConfig::bevygap(cli.client_port)
+    #[cfg(feature = "lightyear-matchmaker")]
+    let network_connection = if matchmaker_config.is_some() {
+        network::config::ClientConnectionConfig::matchmaker(cli.client_port)
     } else {
         network::config::ClientConnectionConfig::direct(
             cli.client_id,
@@ -237,7 +226,7 @@ pub fn app(cli: Cli) -> App {
         )
     };
 
-    #[cfg(not(feature = "bevygap"))]
+    #[cfg(not(feature = "lightyear-matchmaker"))]
     let network_connection = network::config::ClientConnectionConfig::direct(
         cli.client_id,
         cli.client_port,
@@ -248,11 +237,9 @@ pub fn app(cli: Cli) -> App {
     app.add_plugins(network::NetworkPlugin {
         connection: network_connection,
     });
-    #[cfg(feature = "bevygap")]
-    if let Some(bevygap_config) = bevygap_config {
-        app.insert_resource(bevygap_config);
-        app.add_plugins(BevygapClientPlugin);
-        app.add_systems(bevy::prelude::Startup, request_bevygap_session);
+    #[cfg(feature = "lightyear-matchmaker")]
+    if let Some(config) = matchmaker_config {
+        app.add_plugins(matchmaker::LightriderMatchmakerPlugin { config });
     }
     app.add_plugins(SharedPlugin);
     app.add_plugins(RuntimeDebugPlugin::client());
@@ -275,7 +262,7 @@ pub fn app(cli: Cli) -> App {
         app.add_plugins(admin::ClientAdminPlugin);
         app.add_plugins(render::RenderPlugin);
         app.add_plugins(sound::SoundPlugin);
-        #[cfg(all(target_family = "wasm", feature = "bevygap"))]
+        #[cfg(all(target_family = "wasm", feature = "lightyear-matchmaker"))]
         app.add_plugins(web_status::WebStatusPlugin);
     }
     app
@@ -286,21 +273,6 @@ fn asset_file_path() -> String {
         "assets".to_string()
     } else {
         "../assets".to_string()
-    }
-}
-
-#[cfg(feature = "bevygap")]
-fn request_bevygap_session(mut commands: bevy::prelude::Commands) {
-    commands.bevygap_connect_client();
-}
-
-#[cfg(feature = "bevygap")]
-fn bevygap_room_selection(room: RoomJoinMode) -> BevygapRoomSelection {
-    match room {
-        RoomJoinMode::Auto => BevygapRoomSelection::Auto,
-        RoomJoinMode::New => BevygapRoomSelection::New,
-        RoomJoinMode::Specific(room_id) => BevygapRoomSelection::Id(room_id.0.to_string()),
-        RoomJoinMode::Private(code) => BevygapRoomSelection::Code(code.to_string()),
     }
 }
 

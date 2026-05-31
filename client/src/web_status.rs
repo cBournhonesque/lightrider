@@ -1,7 +1,8 @@
 use bevy::prelude::*;
-use bevygap_client_plugin::prelude::BevygapClientState;
 use lightyear::connection::client::Connected;
 use lightyear::prelude::Client;
+
+use crate::matchmaker::LightriderMatchmakerState;
 
 pub(crate) struct WebStatusPlugin;
 
@@ -25,13 +26,13 @@ impl Plugin for WebStatusPlugin {
 }
 
 fn sync_web_status(
-    state: Option<Res<State<BevygapClientState>>>,
+    state: Option<Res<LightriderMatchmakerState>>,
     connected_clients: Query<(), (With<Client>, With<Connected>)>,
     mut wait_mode: Local<DeploymentWaitMode>,
     mut last_status: Local<Option<String>>,
 ) {
     let status = web_status_text(
-        state.as_deref().map(State::get),
+        state.as_deref(),
         connected_clients.iter().next().is_some(),
         &mut wait_mode,
     );
@@ -44,7 +45,7 @@ fn sync_web_status(
 }
 
 fn web_status_text(
-    state: Option<&BevygapClientState>,
+    state: Option<&LightriderMatchmakerState>,
     connected: bool,
     wait_mode: &mut DeploymentWaitMode,
 ) -> Option<String> {
@@ -57,10 +58,8 @@ fn web_status_text(
     };
 
     match state {
-        BevygapClientState::Dormant | BevygapClientState::Request => {
-            Some(WAITING_EXISTING_SERVER.to_string())
-        }
-        BevygapClientState::AwaitingResponse(message) => {
+        LightriderMatchmakerState::Dormant => Some(WAITING_EXISTING_SERVER.to_string()),
+        LightriderMatchmakerState::Waiting(message) => {
             update_wait_mode(message, wait_mode);
             match *wait_mode {
                 DeploymentWaitMode::Creating => Some(WAITING_NEW_SERVER.to_string()),
@@ -69,12 +68,10 @@ fn web_status_text(
                 }
             }
         }
-        BevygapClientState::ReadyToConnect | BevygapClientState::Finished => {
+        LightriderMatchmakerState::Connecting | LightriderMatchmakerState::Finished => {
             Some(WAITING_EXISTING_SERVER.to_string())
         }
-        BevygapClientState::Error(code, message) => {
-            Some(format!("Connection error {code}: {message}"))
-        }
+        LightriderMatchmakerState::Error(message) => Some(format!("Connection error: {message}")),
     }
 }
 
@@ -123,7 +120,7 @@ mod tests {
 
         assert_eq!(
             web_status_text(
-                Some(&BevygapClientState::AwaitingResponse(
+                Some(&LightriderMatchmakerState::Waiting(
                     "routing to existing deployment abc".to_string()
                 )),
                 false,
@@ -136,7 +133,7 @@ mod tests {
         let mut mode = DeploymentWaitMode::Unknown;
         assert_eq!(
             web_status_text(
-                Some(&BevygapClientState::AwaitingResponse(
+                Some(&LightriderMatchmakerState::Waiting(
                     "creating new deployment".to_string()
                 )),
                 false,
@@ -153,7 +150,7 @@ mod tests {
 
         assert_eq!(
             web_status_text(
-                Some(&BevygapClientState::AwaitingResponse(
+                Some(&LightriderMatchmakerState::Waiting(
                     "creating new deployment".to_string()
                 )),
                 true,

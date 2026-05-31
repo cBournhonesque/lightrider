@@ -24,8 +24,8 @@ pub(crate) enum ClientConnectionMode {
         server_addr: SocketAddr,
         cert_digest: String,
     },
-    #[cfg(feature = "bevygap")]
-    Bevygap,
+    #[cfg(feature = "lightyear-matchmaker")]
+    Matchmaker,
 }
 
 impl ClientConnectionConfig {
@@ -45,11 +45,11 @@ impl ClientConnectionConfig {
         }
     }
 
-    #[cfg(feature = "bevygap")]
-    pub(crate) fn bevygap(client_port: u16) -> Self {
+    #[cfg(feature = "lightyear-matchmaker")]
+    pub(crate) fn matchmaker(client_port: u16) -> Self {
         Self {
             client_port,
-            mode: ClientConnectionMode::Bevygap,
+            mode: ClientConnectionMode::Matchmaker,
         }
     }
 }
@@ -125,15 +125,15 @@ fn spawn_client(
                 entity: client_entity,
             });
         }
-        #[cfg(feature = "bevygap")]
-        ClientConnectionMode::Bevygap => {
-            info!("Spawned unconnected Lightyear client; waiting for Bevygap matchmaker token");
+        #[cfg(feature = "lightyear-matchmaker")]
+        ClientConnectionMode::Matchmaker => {
+            info!("Spawned unconnected Lightyear client; waiting for matchmaker token");
         }
     }
     Ok(())
 }
 
-fn normalize_certificate_digest(digest: &str) -> String {
+pub(crate) fn normalize_certificate_digest(digest: &str) -> String {
     digest
         .chars()
         .filter(|character| !character.is_ascii_whitespace() && *character != ':')

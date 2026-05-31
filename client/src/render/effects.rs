@@ -15,7 +15,7 @@ pub(crate) struct EffectsRenderPlugin;
 const BOOST_MARKER_Z: f32 = 14.0;
 const BOOST_LIGHTNING_Z: f32 = 13.0;
 const SPEED_PARTICLE_Z: f32 = 12.5;
-const SPEED_PARTICLE_COUNT: usize = 16;
+const SPEED_PARTICLE_COUNT: usize = 8;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct BoostVisual(BoostVisualPart);
@@ -35,10 +35,11 @@ struct SpeedParticleVisual {
 #[derive(Clone, Copy, Debug)]
 struct BoostContact {
     head: Vec2,
-    hit: Vec2,
+    marker: Vec2,
     distance: f32,
     other: Entity,
     lightning_active: bool,
+    spark_active: bool,
 }
 
 struct DesiredParticle {
@@ -87,7 +88,7 @@ fn sync_boost_marker(
     let mut seen = HashSet::new();
 
     if let Some(contact) = contact {
-        let delta = contact.head - contact.hit;
+        let delta = contact.head - contact.marker;
         let angle = delta.y.atan2(delta.x) - std::f32::consts::FRAC_PI_2;
         let marker_size = config.render.head_size.max(4.0) * 1.45;
         let other_color = snake_entity_color(contact.other, &snakes, &players);
@@ -96,7 +97,7 @@ fn sync_boost_marker(
             desired.push((
                 BoostVisualPart::Lightning,
                 Transform::from_translation(
-                    ((contact.head + contact.hit) * 0.5).extend(BOOST_LIGHTNING_Z),
+                    ((contact.head + contact.marker) * 0.5).extend(BOOST_LIGHTNING_Z),
                 )
                 .with_rotation(Quat::from_rotation_z(angle)),
                 sheet.sprite(
@@ -106,16 +107,18 @@ fn sync_boost_marker(
                 ),
             ));
         }
-        desired.push((
-            BoostVisualPart::Spark,
-            Transform::from_translation(contact.hit.extend(BOOST_MARKER_Z))
-                .with_rotation(Quat::from_rotation_z(angle)),
-            sheet.sprite(
-                spark_frame,
-                Vec2::new(marker_size, marker_size * 0.72),
-                other_color.spark(),
-            ),
-        ));
+        if contact.spark_active {
+            desired.push((
+                BoostVisualPart::Spark,
+                Transform::from_translation(contact.marker.extend(BOOST_MARKER_Z))
+                    .with_rotation(Quat::from_rotation_z(angle)),
+                sheet.sprite(
+                    spark_frame,
+                    Vec2::new(marker_size, marker_size * 0.72),
+                    other_color.spark(),
+                ),
+            ));
+        }
 
         for (part, transform, sprite) in desired {
             seen.insert(part);
@@ -210,7 +213,7 @@ fn desired_speed_particles(
         let direction = tail.front().1.delta();
         let normal = direction.perp();
         let particle_count =
-            ((SPEED_PARTICLE_COUNT as f32) * (0.45 + speed_t * 0.55)).ceil() as usize;
+            ((SPEED_PARTICLE_COUNT as f32) * (0.35 + speed_t * 0.65)).ceil() as usize;
         for index in 0..particle_count.min(SPEED_PARTICLE_COUNT) {
             let seed = index as f32 * 0.618_034 + snake.to_bits() as f32 * 0.000_013;
             let emission_rate = 7.0 + speed_t * 9.0;
@@ -220,13 +223,13 @@ fn desired_speed_particles(
             let side = spread * (head_size * 0.28 + age * head_size * 0.75);
             let position = head - direction * behind + normal * side;
             let fade = (1.0 - age).powf(1.35);
-            let size = head_size * (0.16 + speed_t * 0.18) * (0.45 + 0.55 * fade);
+            let size = (head_size * (0.62 + speed_t * 0.42) * (0.62 + 0.38 * fade)).max(4.5);
             let color = Color::srgba(0.74, 0.96, 1.0, fade * (0.22 + speed_t * 0.45));
             desired.push(DesiredParticle {
                 key: SpeedParticleVisual { snake, index },
                 transform: Transform::from_translation(position.extend(SPEED_PARTICLE_Z))
                     .with_rotation(direction_rotation(direction)),
-                sprite: sheet.sprite(PowerlineFrame::HeadDot, Vec2::splat(size), color),
+                sprite: sheet.sprite(PowerlineFrame::ParticleDot, Vec2::splat(size), color),
             });
         }
     }
@@ -265,26 +268,34 @@ fn nearest_controlled_boost_contact(
         let speed = speed
             .map(|speed| speed.0)
             .unwrap_or(config.movement.min_speed);
-        let lightning_active = speed >= top_speed_marker_threshold(config);
+        let spark_active = speed >= top_speed_marker_threshold(config);
         let head = tail.front().0;
         let direction = tail.front().1.delta();
+        let lightning_min_distance = config.render.head_size.max(4.0) * 1.6;
+        let core_radius = config.render.tail_width.max(1.25) * 0.5;
         let left = nearest_tail_ray_hit(
             head,
             direction.perp(),
+            direction,
             max_distance,
+            lightning_min_distance,
+            core_radius,
             entity,
             room,
             snakes,
-            lightning_active,
+            spark_active,
         );
         let right = nearest_tail_ray_hit(
             head,
             -direction.perp(),
+            direction,
             max_distance,
+            lightning_min_distance,
+            core_radius,
             entity,
             room,
             snakes,
-            lightning_active,
+            spark_active,
         );
         let contact = match (left, right) {
             (Some(left), Some(right)) => Some(if left.distance <= right.distance {
@@ -309,7 +320,10 @@ fn nearest_controlled_boost_contact(
 fn nearest_tail_ray_hit(
     origin: Vec2,
     direction: Vec2,
+    forward: Vec2,
     max_distance: f32,
+    lightning_min_distance: f32,
+    core_radius: f32,
     excluded: Entity,
     room: &RoomId,
     snakes: &Query<
@@ -323,7 +337,7 @@ fn nearest_tail_ray_hit(
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
-    lightning_active: bool,
+    spark_active: bool,
 ) -> Option<BoostContact> {
     let mut nearest = None;
     for (other_entity, other_tail, other_room, _, _, _) in snakes {
@@ -331,6 +345,15 @@ fn nearest_tail_ray_hit(
             continue;
         }
         for (segment_start, segment_end) in other_tail.pairs_front_to_back() {
+            let segment = segment_end.0 - segment_start.0;
+            let segment_length = segment.length();
+            if segment_length <= f32::EPSILON {
+                continue;
+            }
+            let segment_direction = segment / segment_length;
+            if segment_direction.dot(forward).abs() < 0.97 {
+                continue;
+            }
             let Some(distance) = ray_segment_intersection(
                 origin,
                 direction,
@@ -344,10 +367,11 @@ fn nearest_tail_ray_hit(
                 let hit = origin + direction * distance;
                 nearest = Some(BoostContact {
                     head: origin,
-                    hit,
+                    marker: hit - direction * core_radius,
                     distance,
                     other: other_entity,
-                    lightning_active,
+                    lightning_active: distance >= lightning_min_distance,
+                    spark_active,
                 });
             }
         }

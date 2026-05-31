@@ -218,6 +218,190 @@ bevygap-nats:
 bevygap-nats-health:
     curl -fsS http://127.0.0.1:8222/healthz
 
+matchmaker-nats-pull: bevygap-nats-pull
+
+matchmaker-nats: bevygap-nats
+
+lightyear-matchmaker-server-local config="config/test.ron" port="7777":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      set -a
+      source secrets/admin.env
+      set +a
+    fi
+    export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
+    export NATS_USER="${NATS_USER:-lightrider}"
+    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
+    export LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}"
+    export LIGHTRIDER_SERVER_ID="${LIGHTRIDER_SERVER_ID:-local-lightrider}"
+    export LIGHTRIDER_MATCHMAKER_PROVIDER="${LIGHTRIDER_MATCHMAKER_PROVIDER:-static}"
+    export LIGHTRIDER_PUBLIC_IP="${LIGHTRIDER_PUBLIC_IP:-127.0.0.1}"
+    export LIGHTRIDER_PUBLIC_PORT="${LIGHTRIDER_PUBLIC_PORT:-{{port}}}"
+    export SELF_SIGNED_SANS="${SELF_SIGNED_SANS:-127.0.0.1,localhost}"
+    cargo run -j 2 -p server --features lightyear-matchmaker --bin lightrider-server -- --headless --matchmaker --port {{port}} --config {{config}}
+
+lightyear-matchmaker-service-local bind="127.0.0.1:3000" config_path="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    config="{{config_path}}"
+    if [[ -z "$config" ]]; then
+      config="$(mktemp -t lightrider-matchmaker.XXXXXX.toml)"
+      cleanup_config=1
+    else
+      cleanup_config=0
+    fi
+    if [[ "$cleanup_config" == "1" ]]; then
+      trap 'rm -f "$config"' EXIT
+    fi
+    nats_host="${NATS_HOST:-127.0.0.1:4222}"
+    nats_user="${NATS_USER:-lightrider}"
+    nats_password="${NATS_PASSWORD:-lightrider}"
+    namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}"
+    protocol_id="${LIGHTRIDER_PROTOCOL_ID:-0}"
+    private_key="${LIGHTRIDER_PRIVATE_KEY:-}"
+    cat > "$config" <<EOF
+    [server]
+    bind = "{{bind}}"
+
+    [game]
+    name = "lightrider"
+    version = "dev"
+
+    [lightyear]
+    protocol_id = $protocol_id
+    private_key = "$private_key"
+    client_timeout_secs = 15
+    token_expire_secs = 30
+
+    [nats]
+    url = "nats://$nats_user:$nats_password@$nats_host"
+    namespace = "$namespace"
+
+    [allocation]
+    source = "nats_static"
+    require_assignment_prepare = true
+    assignment_prepare_timeout_ms = 5000
+    assignment_prepare_poll_ms = 25
+    EOF
+    cargo run -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server -- --config "$config"
+
+lightyear-matchmaker-client-bot id="3001" config="config/test.ron" matchmaker_url="ws://127.0.0.1:3000/ws" game="lightrider" version="dev" room="auto":
+    cargo run -j 2 -p client --features lightyear-matchmaker --bin lightrider-client -- --headless --mode bot --client-id {{id}} --config {{config}} --room {{room}} --matchmaker-url {{matchmaker_url}} --matchmaker-game {{game}} --matchmaker-version {{version}}
+
+lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777" matchmaker_port="3000" client_id="3001":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run_dir="logs/lightyear-matchmaker/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$run_dir"
+    ln -sfn "$(basename "$run_dir")" logs/lightyear-matchmaker/latest
+
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-../lightyear-matchmaker/target}"
+    cargo build -j 2 -p server --features lightyear-matchmaker --bin lightrider-server
+    cargo build -j 2 -p client --features lightyear-matchmaker --bin lightrider-client
+    CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
+
+    pids=()
+    cleanup() {
+      for pid in "${pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+      wait 2>/dev/null || true
+      podman rm -f lightrider-nats >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+
+    just matchmaker-nats > "$run_dir/nats.log" 2>&1 &
+    pids+=("$!")
+    for _ in $(seq 1 40); do
+      curl -fsS http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
+      sleep 0.25
+    done
+    curl -fsS http://127.0.0.1:8222/healthz > "$run_dir/nats-health.json"
+
+    env \
+      NATS_HOST="${NATS_HOST:-127.0.0.1:4222}" \
+      NATS_USER="${NATS_USER:-lightrider}" \
+      NATS_PASSWORD="${NATS_PASSWORD:-lightrider}" \
+      LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}" \
+      LIGHTRIDER_SERVER_ID="${LIGHTRIDER_SERVER_ID:-local-lightrider}" \
+      LIGHTRIDER_MATCHMAKER_PROVIDER="${LIGHTRIDER_MATCHMAKER_PROVIDER:-static}" \
+      LIGHTRIDER_PUBLIC_IP="${LIGHTRIDER_PUBLIC_IP:-127.0.0.1}" \
+      LIGHTRIDER_PUBLIC_PORT="${LIGHTRIDER_PUBLIC_PORT:-{{port}}}" \
+      SELF_SIGNED_SANS="${SELF_SIGNED_SANS:-127.0.0.1,localhost}" \
+      "$target_dir/debug/lightrider-server" --headless --matchmaker --port {{port}} --config {{config}} \
+      > "$run_dir/server.log" 2>&1 &
+    pids+=("$!")
+    for _ in $(seq 1 80); do
+      if rg -q "Lightyear Matchmaker readiness published|installed matchmaker connection-request handler" "$run_dir/server.log"; then
+        break
+      fi
+      sleep 0.25
+    done
+
+    matchmaker_config="$run_dir/matchmaker.toml"
+    cat > "$matchmaker_config" <<EOF
+    [server]
+    bind = "127.0.0.1:{{matchmaker_port}}"
+
+    [game]
+    name = "lightrider"
+    version = "dev"
+
+    [lightyear]
+    protocol_id = ${LIGHTRIDER_PROTOCOL_ID:-0}
+    private_key = "${LIGHTRIDER_PRIVATE_KEY:-}"
+    client_timeout_secs = 15
+    token_expire_secs = 30
+
+    [nats]
+    url = "nats://${NATS_USER:-lightrider}:${NATS_PASSWORD:-lightrider}@${NATS_HOST:-127.0.0.1:4222}"
+    namespace = "${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}"
+
+    [allocation]
+    source = "nats_static"
+    require_assignment_prepare = true
+    assignment_prepare_timeout_ms = 5000
+    assignment_prepare_poll_ms = 25
+    EOF
+    "$matchmaker_target_dir/debug/lightyear_matchmaker_server" --config "$matchmaker_config" \
+      > "$run_dir/matchmaker.log" 2>&1 &
+    pids+=("$!")
+    for _ in $(seq 1 80); do
+      if rg -q "lightyear matchmaker listening" "$run_dir/matchmaker.log"; then
+        break
+      fi
+      sleep 0.25
+    done
+
+    timeout "$(({{seconds}} + 8))" \
+      "$target_dir/debug/lightrider-client" \
+        --headless --mode bot --client-id {{client_id}} --config {{config}} --room auto \
+        --matchmaker-url "ws://127.0.0.1:{{matchmaker_port}}/ws" \
+        --matchmaker-game lightrider \
+        --matchmaker-version dev \
+        > "$run_dir/client.log" 2>&1 || true
+
+    required_patterns=(
+      "installed matchmaker connection-request handler"
+      "Lightyear Matchmaker readiness published"
+      "assignment.created"
+      "assignment.prepared"
+      "assignment.ready"
+      "Got matchmaker response; connecting to server"
+      "matchmaker client connected"
+    )
+    for pattern in "${required_patterns[@]}"; do
+      if ! rg -q "$pattern" "$run_dir"; then
+        echo "lightyear-matchmaker local smoke failed: missing '$pattern' in $run_dir" >&2
+        echo "logs: $run_dir" >&2
+        exit 1
+      fi
+    done
+
+    echo "lightyear-matchmaker local smoke passed: $run_dir"
+
 bevygap-fake-context bind="127.0.0.1" port="9876" public_ip="127.0.0.1" game_port="7777":
     #!/usr/bin/env bash
     set -euo pipefail

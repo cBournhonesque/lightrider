@@ -562,7 +562,7 @@ impl TailMeshShape {
 fn blended_material(color: Color) -> ColorMaterial {
     ColorMaterial {
         color,
-        alpha_mode: AlphaMode2d::Blend,
+        alpha_mode: alpha_mode_for_color(color),
         ..default()
     }
 }
@@ -574,7 +574,15 @@ fn set_material_color(
 ) {
     if let Some(material) = materials.get_mut(&handle.0) {
         material.color = color;
-        material.alpha_mode = AlphaMode2d::Blend;
+        material.alpha_mode = alpha_mode_for_color(color);
+    }
+}
+
+fn alpha_mode_for_color(color: Color) -> AlphaMode2d {
+    if color.alpha() >= 0.99 {
+        AlphaMode2d::Opaque
+    } else {
+        AlphaMode2d::Blend
     }
 }
 

@@ -8,16 +8,13 @@ use shared::config::GameConfig;
 use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
 use shared::SharedPlugin;
 
-#[cfg(feature = "bevygap")]
-use bevygap_server_plugin::prelude::BevygapServerPlugin;
-
 mod admin;
-#[cfg(feature = "bevygap")]
-mod bevygap_metrics;
 mod bots;
 pub(crate) mod collision;
 mod debug;
 mod food;
+#[cfg(feature = "lightyear-matchmaker")]
+mod matchmaker;
 mod network;
 mod respawn;
 pub(crate) mod rooms;
@@ -37,10 +34,10 @@ pub struct Cli {
     #[arg(short, long, default_value_t = SERVER_PORT)]
     port: u16,
 
-    /// Enable Edgegap/Bevygap NATS integration. Requires the `bevygap` Cargo feature.
-    #[cfg(feature = "bevygap")]
-    #[arg(long, default_value = "false")]
-    bevygap: bool,
+    /// Enable Lightyear Matchmaker NATS integration.
+    #[cfg(feature = "lightyear-matchmaker")]
+    #[arg(long, alias = "bevygap", default_value = "false")]
+    matchmaker: bool,
 
     #[arg(long)]
     config: Option<PathBuf>,
@@ -54,7 +51,7 @@ pub async fn app(cli: Cli) -> App {
     } else {
         runtime_log_plugin(&config, "wgpu=error,bevy_render=info,bevy_ecs=trace")
     };
-    app.insert_resource(config);
+    app.insert_resource(config.clone());
     if cli.headless {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(StatesPlugin);
@@ -64,14 +61,14 @@ pub async fn app(cli: Cli) -> App {
     }
 
     // networking
-    #[cfg(feature = "bevygap")]
-    let start_server_immediately = !cli.bevygap;
-    #[cfg(not(feature = "bevygap"))]
+    #[cfg(feature = "lightyear-matchmaker")]
+    let start_server_immediately = !cli.matchmaker;
+    #[cfg(not(feature = "lightyear-matchmaker"))]
     let start_server_immediately = true;
     app.add_plugins(network::NetworkPluginGroup::new(cli.port, start_server_immediately).build());
-    #[cfg(feature = "bevygap")]
-    if cli.bevygap {
-        app.add_plugins(BevygapServerPlugin);
+    #[cfg(feature = "lightyear-matchmaker")]
+    if cli.matchmaker {
+        app.add_plugins(matchmaker::matchmaker_server_plugin(cli.port, &config));
     }
 
     // shared
@@ -80,9 +77,9 @@ pub async fn app(cli: Cli) -> App {
 
     // rooms
     app.add_plugins(rooms::ServerRoomsPlugin);
-    #[cfg(feature = "bevygap")]
-    if cli.bevygap {
-        app.add_plugins(bevygap_metrics::ServerBevygapMetricsPlugin);
+    #[cfg(feature = "lightyear-matchmaker")]
+    if cli.matchmaker {
+        app.add_plugins(matchmaker::LightriderMatchmakerMetricsPlugin);
     }
 
     // debug

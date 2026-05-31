@@ -18,7 +18,13 @@ path = "src/bin/main.rs"
 
 [features]
 default = []
-bevygap = ["dep:bevygap_server_plugin"]
+lightyear-matchmaker = [
+    "dep:lightyear_matchmaker_bevy_server",
+    "dep:lightyear_matchmaker_core",
+    "dep:lightyear_matchmaker_nats",
+    "dep:serde_json",
+]
+bevygap = ["lightyear-matchmaker"]
 
 [dependencies]
 shared = { path = "../shared" }
@@ -35,7 +41,10 @@ bevy-inspector-egui.workspace = true
 parry2d = "0.13.6"
 derive_more = { version = "0.99", features = ["add", "mul"] }
 cfg-if = "1.0.0"
-bevygap_server_plugin = { path = "../../bevygap/bevygap_server_plugin", optional = true }
+lightyear_matchmaker_bevy_server = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_bevy_server", features = ["lightyear-netcode"], optional = true }
+lightyear_matchmaker_core = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_core", optional = true }
+lightyear_matchmaker_nats = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_nats", optional = true }
+serde_json = { version = "1", optional = true }
 
 [target."cfg(not(target_family = \"wasm\"))".dependencies]
 tokio = { version = "1.34", features = [

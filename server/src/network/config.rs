@@ -58,7 +58,7 @@ fn start_server(mut commands: Commands, config: Res<ServerConnectionConfig>) {
     if config.start_immediately {
         commands.trigger(Start { entity: server });
     } else {
-        info!("Deferring WebTransport server start until Bevygap admission is ready");
+        info!("Deferring WebTransport server start until matchmaker admission is ready");
     }
 }
 

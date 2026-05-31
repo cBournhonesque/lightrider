@@ -1,7 +1,6 @@
 use bevy::prelude::*;
-use bevy::sprite::SpriteImageMode;
+use bevy::sprite_render::AlphaMode2d;
 
-use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
 use shared::config::GameConfig;
 
 pub(crate) struct ArenaRenderPlugin;
@@ -11,7 +10,7 @@ const BORDER_Z: f32 = -90.0;
 
 impl Plugin for ArenaRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ClearColor(Color::srgb(0.015, 0.018, 0.022)));
+        app.insert_resource(ClearColor(Color::srgb(0.018, 0.042, 0.064)));
         app.add_systems(Startup, spawn_asset_arena);
         app.add_systems(Update, draw_arena);
     }
@@ -20,7 +19,8 @@ impl Plugin for ArenaRenderPlugin {
 fn spawn_asset_arena(
     mut commands: Commands,
     config: Res<GameConfig>,
-    sheet: Res<PowerlineSpriteSheet>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     if !config.render.use_assets {
         return;
@@ -28,35 +28,33 @@ fn spawn_asset_arena(
 
     let half_width = config.arena.width * 0.5;
     let half_height = config.arena.height * 0.5;
-    let tile_size = config.render.background_tile_size.max(16.0);
-    let grid_rect = PowerlineFrame::Grid.rect();
-    let mut background = sheet.sprite(
-        PowerlineFrame::Grid,
+    let background = Sprite::from_color(
+        Color::srgb(0.012, 0.036, 0.055),
         Vec2::new(config.arena.width, config.arena.height),
-        Color::srgba(0.72, 0.9, 1.0, 0.72),
     );
-    background.image_mode = SpriteImageMode::Tiled {
-        tile_x: true,
-        tile_y: true,
-        stretch_value: tile_size / grid_rect.width().max(1.0),
-    };
     commands.spawn((background, Transform::from_xyz(0.0, 0.0, BACKGROUND_Z)));
 
     let outline_width = config.render.map_outline_width.max(1.0);
-    let border_color = Color::srgba(0.68, 1.0, 1.0, 0.92);
-    let horizontal_size = Vec2::new(config.arena.width, outline_width);
-    let vertical_size = Vec2::new(config.arena.height, outline_width);
+    let border_material = materials.add(ColorMaterial {
+        color: Color::srgb(0.1, 0.56, 0.95),
+        alpha_mode: AlphaMode2d::Opaque,
+        ..default()
+    });
+    let horizontal_mesh = meshes.add(Capsule2d::new(outline_width * 0.5, config.arena.width));
+    let vertical_mesh = meshes.add(Capsule2d::new(outline_width * 0.5, config.arena.height));
     for y in [-half_height, half_height] {
         commands.spawn((
-            sheet.sprite(PowerlineFrame::WallStretch, horizontal_size, border_color),
-            Transform::from_xyz(0.0, y, BORDER_Z),
+            Mesh2d(horizontal_mesh.clone()),
+            MeshMaterial2d(border_material.clone()),
+            Transform::from_xyz(0.0, y, BORDER_Z)
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
         ));
     }
     for x in [-half_width, half_width] {
         commands.spawn((
-            sheet.sprite(PowerlineFrame::WallStretch, vertical_size, border_color),
-            Transform::from_xyz(x, 0.0, BORDER_Z)
-                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+            Mesh2d(vertical_mesh.clone()),
+            MeshMaterial2d(border_material.clone()),
+            Transform::from_xyz(x, 0.0, BORDER_Z),
         ));
     }
 }

@@ -1,5 +1,5 @@
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
-use bevy::post_process::bloom::Bloom;
+use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 
 pub struct CameraPlugin;
@@ -15,8 +15,13 @@ fn init_camera(mut commands: Commands) {
         Camera2d,
         Tonemapping::TonyMcMapface,
         Bloom {
-            intensity: 0.34,
-            low_frequency_boost: 1.1,
+            intensity: 0.1,
+            low_frequency_boost: 0.45,
+            prefilter: BloomPrefilter {
+                threshold: 1.0,
+                threshold_softness: 0.25,
+            },
+            composite_mode: BloomCompositeMode::Additive,
             ..Bloom::NATURAL
         },
         DebandDither::Enabled,

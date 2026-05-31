@@ -1,4 +1,4 @@
-#[cfg(all(target_arch = "wasm32", feature = "bevygap"))]
+#[cfg(all(target_arch = "wasm32", feature = "lightyear-matchmaker"))]
 mod wasm {
     use client::WebClientOptions;
     use leptos::prelude::*;
@@ -362,14 +362,14 @@ mod wasm {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "bevygap"))]
+#[cfg(all(target_arch = "wasm32", feature = "lightyear-matchmaker"))]
 fn main() {
     wasm::run();
 }
 
-#[cfg(all(target_arch = "wasm32", not(feature = "bevygap")))]
+#[cfg(all(target_arch = "wasm32", not(feature = "lightyear-matchmaker")))]
 fn main() {
-    panic!("lightrider-web must be built with the `bevygap` feature");
+    panic!("lightrider-web must be built with the `lightyear-matchmaker` feature");
 }
 
 #[cfg(not(target_arch = "wasm32"))]

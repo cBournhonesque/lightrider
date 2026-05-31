@@ -170,7 +170,7 @@ impl RoomDirectory {
         }
 
         // A full server should not route a private-code request into a public room.
-        // Treat max_rooms as a soft guard here; Bevygap/server capacity policy should
+        // Treat max_rooms as a soft guard here; matchmaker capacity policy should
         // prevent this path in production.
         self.create_room(commands, room_allocator, config, Some(room_id))
     }
