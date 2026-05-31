@@ -29,6 +29,7 @@ mod bot;
 mod camera;
 mod collision;
 mod debug;
+mod food;
 mod inputs;
 mod menu;
 pub(crate) mod network;
@@ -256,6 +257,7 @@ pub fn app(cli: Cli) -> App {
     app.add_plugins(SharedPlugin);
     app.add_plugins(RuntimeDebugPlugin::client());
     app.add_plugins(collision::CollisionPlugin);
+    app.add_plugins(food::PredictedFoodPlugin);
     app.add_plugins(rooms::ClientRoomsPlugin {
         mode: cli.room,
         name: player_name,

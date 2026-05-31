@@ -36,10 +36,12 @@ pub fn handle_collision(
     )>,
     human_players: Query<(), With<ControlledBy>>,
     snakes: Query<(&HasPlayer, &RoomId, &TailPoints)>,
+    food: Query<&RoomId, With<FoodMarker>>,
     mut commands: Commands,
 ) {
     let server = server.into_inner();
     let mut killed_snakes = EntityHashSet::default();
+    let mut room_food_counts = room_food_counts(&food);
     for collision_event in reader.read() {
         if !killed_snakes.insert(collision_event.killed) {
             continue;
@@ -122,7 +124,14 @@ pub fn handle_collision(
             );
         }
         commands.entity(collision_event.killed).try_despawn();
-        spawn_death_food(&mut commands, &rooms, &config, *killed_room, killed_tail);
+        spawn_death_food(
+            &mut commands,
+            &rooms,
+            &config,
+            *killed_room,
+            killed_tail,
+            &mut room_food_counts,
+        );
         let killed_is_bot = {
             let mut player_states = players.p2();
             let Ok((mut killed, mut killed_status, killed_is_bot)) =
@@ -144,20 +153,44 @@ pub fn handle_collision(
     }
 }
 
+fn room_food_counts(
+    food: &Query<&RoomId, With<FoodMarker>>,
+) -> std::collections::HashMap<RoomId, usize> {
+    let mut counts = std::collections::HashMap::new();
+    for room in food {
+        *counts.entry(*room).or_insert(0) += 1;
+    }
+    counts
+}
+
 fn spawn_death_food(
     commands: &mut Commands,
     rooms: &RoomDirectory,
     config: &GameConfig,
     room: RoomId,
     tail: &TailPoints,
+    room_food_counts: &mut std::collections::HashMap<RoomId, usize>,
 ) {
+    let current_food_count = room_food_counts.get(&room).copied().unwrap_or_default();
+    let available_slots = death_food_spawn_limit(config, current_food_count);
+    if available_slots == 0 {
+        return;
+    }
     for position in death_food_positions(
         tail,
         config.food.death_food_spacing,
-        config.food.death_food_max,
+        config.food.death_food_max.min(available_slots),
     ) {
         spawn_food_entity(commands, rooms, room, Position(position));
+        *room_food_counts.entry(room).or_insert(0) += 1;
     }
+}
+
+fn death_food_spawn_limit(config: &GameConfig, current_food_count: usize) -> usize {
+    config
+        .food
+        .death_food_max
+        .min(config.food.remaining_capacity(current_food_count))
 }
 
 pub fn death_food_positions(tail: &TailPoints, spacing: f32, max_food: usize) -> Vec<Vec2> {
@@ -207,5 +240,17 @@ mod tests {
                 Vec2::new(62.5, 0.0),
             ]
         );
+    }
+
+    #[test]
+    fn death_food_spawn_limit_respects_room_food_capacity() {
+        let mut config = GameConfig::default();
+        config.food.max_count = 10;
+        config.food.death_food_max = 4;
+
+        assert_eq!(death_food_spawn_limit(&config, 0), 4);
+        assert_eq!(death_food_spawn_limit(&config, 8), 2);
+        assert_eq!(death_food_spawn_limit(&config, 10), 0);
+        assert_eq!(death_food_spawn_limit(&config, 12), 0);
     }
 }

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use lightyear::connection::client::Connected;
-use lightyear::prelude::{Client, MessageSender};
+use lightyear::prelude::{Client, InputTimeline, IsSynced, MessageSender};
 
 use shared::network::protocol::prelude::{
     GameChannel, PlayerNameUpdate, RoomCode, RoomId, RoomJoinMode, RoomJoinRequest,
@@ -48,7 +48,10 @@ pub(crate) fn parse_room_join_mode(value: &str) -> Result<RoomJoinMode, String> 
 fn send_player_name_update(
     settings: Res<RoomJoinSettings>,
     mut sent: Local<bool>,
-    mut clients: Query<&mut MessageSender<PlayerNameUpdate>, (With<Client>, With<Connected>)>,
+    mut clients: Query<
+        &mut MessageSender<PlayerNameUpdate>,
+        (With<Client>, With<Connected>, With<IsSynced<InputTimeline>>),
+    >,
 ) {
     if *sent {
         return;
@@ -65,9 +68,12 @@ fn send_player_name_update(
 fn send_room_join_request(
     settings: Res<RoomJoinSettings>,
     mut sent: Local<bool>,
-    mut clients: Query<&mut MessageSender<RoomJoinRequest>, (With<Client>, With<Connected>)>,
+    mut clients: Query<
+        &mut MessageSender<RoomJoinRequest>,
+        (With<Client>, With<Connected>, With<IsSynced<InputTimeline>>),
+    >,
 ) {
-    if *sent || settings.mode == RoomJoinMode::Auto {
+    if *sent {
         return;
     }
     let Ok(mut sender) = clients.single_mut() else {

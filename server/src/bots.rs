@@ -7,7 +7,7 @@ use crate::rooms::{add_replicated_entity_to_room, RoomAssignment, RoomDirectory}
 use crate::spawning::snake_spawn_pose_avoiding;
 use shared::bot::{BotController, BotMarker};
 use shared::config::GameConfig;
-use shared::movement::{turn_tail, SimulationSet};
+use shared::movement::{is_perpendicular_turn, turn_tail, SimulationSet};
 use shared::network::bundle::player::PlayerBundle;
 use shared::network::bundle::snake::SnakeBundle;
 use shared::network::protocol::prelude::*;
@@ -261,7 +261,9 @@ fn drive_bots(
             .map(|(_, _, tail)| tail)
             .collect::<Vec<_>>();
         let direction = controller.choose_direction_avoiding(&tail, &config.arena, &obstacle_tails);
-        turn_tail(&mut tail, direction);
+        if is_perpendicular_turn(tail.front().1, direction) {
+            turn_tail(&mut tail, direction);
+        }
     }
 }
 

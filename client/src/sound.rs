@@ -3,14 +3,15 @@ use bevy::audio::{
     SpatialListener, SpatialScale, Volume,
 };
 use bevy::prelude::*;
-use lightyear::prelude::{Client, Controlled, MessageReceiver};
+use lightyear::prelude::Controlled;
 use shared::config::{GameConfig, MovementConfig, SoundConfig};
 use shared::network::protocol::prelude::{
-    DeathReason, FoodCollision, Player, PlayerStatus, RoomId, Speed, TailPoints,
+    DeathReason, Player, PlayerStatus, RoomId, Speed, TailPoints,
 };
 use std::collections::{HashMap, HashSet};
 
 use crate::collision::death::ConfirmedDeath;
+use crate::food::ConfirmedFoodPickup;
 
 const CRASH_SOUND: &str = "powerline/sounds/crash.ogg";
 const FOOD_GRAB_SOUND: &str = "powerline/sounds/foodgrab.ogg";
@@ -162,19 +163,17 @@ fn play_confirmed_food_sounds(
     sounds: Res<PowerlineSounds>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     snakes: Query<(&TailPoints, &RoomId)>,
-    mut receivers: Query<&mut MessageReceiver<FoodCollision>, With<Client>>,
+    mut pickups: MessageReader<ConfirmedFoodPickup>,
 ) {
-    let Ok(mut receiver) = receivers.single_mut() else {
-        return;
-    };
     if !config.sound.enabled {
-        for _ in receiver.receive() {}
+        for _ in pickups.read() {}
         return;
     }
 
     let listener = listener_snapshot_from_roomed_tails(&players, &snakes);
     let local_snake = local_player_snake(&players);
-    for collision in receiver.receive() {
+    for pickup in pickups.read() {
+        let collision = &pickup.collision;
         if Some(collision.snake) == local_snake {
             let volume = config.sound.master_volume * config.sound.food_volume;
             spawn_one_shot(

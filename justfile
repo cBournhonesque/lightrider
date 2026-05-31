@@ -9,7 +9,9 @@ server config="config/test.ron" port="5000":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
+      set -a
       source secrets/admin.env
+      set +a
     fi
     cargo run -j 2 -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}}
 
@@ -36,7 +38,9 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
+      set -a
       source secrets/admin.env
+      set +a
     fi
     trap 'jobs -pr | xargs -r kill' EXIT
     cargo run -j 2 -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}} &
@@ -51,7 +55,9 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
+      set -a
       source secrets/admin.env
+      set +a
     fi
     run_dir="logs/debug/$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$run_dir"
@@ -90,6 +96,56 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
 
 trace-summary dir="logs/debug/latest":
     duckdb -batch -cmd "SET VARIABLE trace_glob = '{{dir}}/*.ndjson';" < tools/debug_trace_summary.sql
+
+trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3001" first_bot_id="3002" bot_clients="2" room="auto":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      set -a
+      source secrets/admin.env
+      set +a
+    fi
+    run_dir="logs/debug/$(date +%Y%m%d-%H%M%S)-mixed-headless"
+    mkdir -p "$run_dir"
+    ln -sfn "$(basename "$run_dir")" logs/debug/latest-mixed
+    cargo build -j 2 -p server --bin lightrider-server -p client --bin lightrider-client
+    pids=()
+    cleanup() {
+      for pid in "${pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+      wait 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    RUST_LOG="info,lightyear_debug=trace,server::food=warn" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
+      target/debug/lightrider-server --headless --port {{port}} --config {{config}} \
+      > "$run_dir/server.log" 2>&1 &
+    pids+=("$!")
+    sleep 2
+    RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-player-{{player_id}}.ndjson" \
+      target/debug/lightrider-client --headless --mode player --client-id {{player_id}} --server-port {{port}} --config {{config}} --room {{room}} \
+      > "$run_dir/client-player-{{player_id}}.log" 2>&1 &
+    pids+=("$!")
+    sleep 1
+    if (( {{bot_clients}} > 0 )); then
+      for i in $(seq 0 $(({{bot_clients}} - 1))); do
+        id=$(({{first_bot_id}} + i))
+        RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-bot-$id.ndjson" \
+          target/debug/lightrider-client --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
+          > "$run_dir/client-bot-$id.log" 2>&1 &
+        pids+=("$!")
+        sleep 1
+      done
+    fi
+    sleep {{seconds}}
+    cleanup
+    trap - EXIT
+    echo "trace run: $run_dir"
+    if command -v duckdb >/dev/null 2>&1; then
+      duckdb -batch -cmd "SET VARIABLE trace_glob = '$run_dir/*.ndjson';" < tools/debug_trace_summary.sql | tee "$run_dir/summary.txt"
+    else
+      echo "duckdb not found; inspect $run_dir/*.ndjson manually"
+    fi
 
 # Bevygap local smoke order:
 # 1. `just bevygap-nats` starts local NATS with JetStream, which Bevygap uses for request/reply,
@@ -214,7 +270,9 @@ bevygap-server-local config="config/test.ron" port="7777" context_url="http://12
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
+      set -a
       source secrets/admin.env
+      set +a
     fi
     export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
     export NATS_USER="${NATS_USER:-lightrider}"

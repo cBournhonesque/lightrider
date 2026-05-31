@@ -31,6 +31,50 @@ FROM debug_events
 GROUP BY target, kind
 ORDER BY rows DESC, target, kind;
 
+SELECT
+    'rollback_requests_by_process' AS section,
+    process_id,
+    count(*) AS rollbacks,
+    min(CAST(fields.local_tick AS BIGINT)) AS min_local_tick,
+    max(CAST(fields.local_tick AS BIGINT)) AS max_local_tick,
+    avg(CAST(fields.rollback_delta AS DOUBLE)) AS avg_rollback_delta,
+    max(CAST(fields.rollback_delta AS BIGINT)) AS max_rollback_delta
+FROM debug_events
+WHERE target = 'lightyear_debug::prediction'
+    AND kind = 'rollback_requested'
+GROUP BY process_id
+ORDER BY rollbacks DESC;
+
+SELECT
+    'rollback_delta_histogram' AS section,
+    CAST(fields.rollback_delta AS BIGINT) AS rollback_delta,
+    count(*) AS rollbacks
+FROM debug_events
+WHERE target = 'lightyear_debug::prediction'
+    AND kind = 'rollback_requested'
+GROUP BY rollback_delta
+ORDER BY rollback_delta;
+
+SELECT
+    'rollback_mismatch_components' AS section,
+    replace(CAST(fields.component AS VARCHAR), '\"', '') AS component,
+    count(*) AS mismatches
+FROM debug_events
+WHERE target = 'lightyear_debug::prediction'
+    AND kind = 'rollback_value_mismatch'
+GROUP BY component
+ORDER BY mismatches DESC;
+
+SELECT
+    'confirmed_history_stale_mismatch_components' AS section,
+    replace(CAST(fields.component AS VARCHAR), '\"', '') AS component,
+    count(*) AS stale_skips
+FROM debug_events
+WHERE target = 'lightyear_debug::prediction'
+    AND kind = 'confirmed_history_stale_skip_mismatch'
+GROUP BY component
+ORDER BY stale_skips DESC;
+
 SELECT 'snake_samples_by_schedule' AS section, role, schedule, sample_point, count(*) AS rows
 FROM snake_heads
 GROUP BY role, schedule, sample_point

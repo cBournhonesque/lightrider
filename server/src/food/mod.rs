@@ -37,7 +37,7 @@ fn spawn_food(
     }
     for (room, map_size, mut rng) in &mut maps {
         let room_food_count = food.iter().filter(|food_room| *food_room == room).count();
-        if room_food_count >= config.food.target_count {
+        if room_food_count >= config.food.spawn_target_count() {
             continue;
         }
 
@@ -64,47 +64,6 @@ pub(crate) fn spawn_food_entity(
         add_replicated_entity_to_room(commands, lightyear_room, food);
     }
     food
-}
-
-fn attract_food_to_heads(
-    config: Res<GameConfig>,
-    tails: Query<(&TailPoints, &RoomId)>,
-    mut food: Query<(&mut Position, &RoomId), With<FoodMarker>>,
-) {
-    let magnet_radius = config.food.magnet_radius.max(0.0);
-    let magnet_speed = config.food.magnet_speed.max(0.0);
-    if magnet_radius <= 0.0 || magnet_speed <= 0.0 {
-        return;
-    }
-
-    for (mut position, food_room) in &mut food {
-        let nearest_head = tails
-            .iter()
-            .filter(|(_, snake_room)| *snake_room == food_room)
-            .map(|(tail, _)| tail.front().0)
-            .filter(|head| head.distance(position.0) <= magnet_radius)
-            .min_by(|left, right| {
-                left.distance_squared(position.0)
-                    .total_cmp(&right.distance_squared(position.0))
-            });
-        if let Some(head) = nearest_head {
-            position.0 = magnetized_food_position(position.0, head, magnet_radius, magnet_speed);
-        }
-    }
-}
-
-pub fn magnetized_food_position(
-    position: Vec2,
-    head: Vec2,
-    magnet_radius: f32,
-    magnet_speed: f32,
-) -> Vec2 {
-    let to_head = head - position;
-    let distance = to_head.length();
-    if distance <= f32::EPSILON || distance > magnet_radius || magnet_speed <= 0.0 {
-        return position;
-    }
-    position + to_head / distance * distance.min(magnet_speed)
 }
 
 // TODO: handle two players colliding with the same food at the same time
@@ -184,9 +143,7 @@ impl Plugin for FoodPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                (attract_food_to_heads, food_collision)
-                    .chain()
-                    .in_set(ColliderSet::ComputeCollision),
+                food_collision.in_set(ColliderSet::ComputeCollision),
                 (grow_tail, despawn_food).after(food_collision),
             ),
         );
@@ -375,22 +332,6 @@ mod tests {
             Some(&FoodBoost(
                 GameConfig::default().movement.food_boost_acceleration
             ))
-        );
-    }
-
-    #[test]
-    fn magnetized_food_moves_toward_head_without_overshooting() {
-        assert_eq!(
-            magnetized_food_position(Vec2::ZERO, Vec2::new(20.0, 0.0), 30.0, 5.0),
-            Vec2::new(5.0, 0.0)
-        );
-        assert_eq!(
-            magnetized_food_position(Vec2::ZERO, Vec2::new(3.0, 0.0), 30.0, 5.0),
-            Vec2::new(3.0, 0.0)
-        );
-        assert_eq!(
-            magnetized_food_position(Vec2::ZERO, Vec2::new(40.0, 0.0), 30.0, 5.0),
-            Vec2::ZERO
         );
     }
 

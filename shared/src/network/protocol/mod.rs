@@ -85,18 +85,23 @@ impl Plugin for ProtocolPlugin {
 
         app.register_component::<components::snake::TailPoints>()
             .add_prediction()
+            .add_should_rollback(components::snake::tail_points_should_rollback)
             .register_interpolation_fn(components::snake::interpolate_tail_points)
             .add_custom_interpolation();
         app.register_component::<components::snake::TailLength>()
             .add_prediction()
+            .add_should_rollback(components::snake::tail_length_should_rollback)
             .register_interpolation_fn(components::snake::interpolate_tail_length)
             .add_custom_interpolation();
         app.register_component::<components::snake::Speed>()
-            .add_prediction();
+            .add_prediction()
+            .add_should_rollback(components::snake::speed_should_rollback);
         app.register_component::<components::snake::Acceleration>()
-            .add_prediction();
+            .add_prediction()
+            .add_should_rollback(components::snake::acceleration_should_rollback);
         app.register_component::<components::snake::FoodBoost>()
-            .add_prediction();
+            .add_prediction()
+            .add_should_rollback(components::snake::food_boost_should_rollback);
         app.register_component::<components::snake::HasPlayer>()
             .add_prediction();
         app.register_component::<inputs::SnakeInput>()

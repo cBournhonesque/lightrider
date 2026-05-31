@@ -3,18 +3,24 @@ use bevy_turborand::prelude::*;
 use lightyear::connection::client::{Connected, Disconnected};
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
-    MessageReceiver, RemoteId, RoomAllocator, RoomId as LightyearRoomId,
+    ControlledBy, MessageReceiver, PeerId, RemoteId, RoomAllocator, RoomId as LightyearRoomId,
     RoomPlugin as LightyearRoomPlugin, Rooms,
 };
 
+use crate::spawning::snake_spawn_pose;
 use shared::config::GameConfig;
 use shared::map::spawn_room_map;
+use shared::network::bundle::player::PlayerBundle;
+use shared::network::bundle::snake::SnakeBundle;
 use shared::network::protocol::prelude::*;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ClientRoom {
     pub(crate) room: RoomId,
 }
+
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+struct PendingPlayerName(String);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RoomAssignment {
@@ -255,12 +261,19 @@ fn ensure_initial_room(
 }
 
 fn handle_player_name_updates(
-    mut clients: Query<(&RemoteId, &mut MessageReceiver<PlayerNameUpdate>), With<Connected>>,
+    mut commands: Commands,
+    mut clients: Query<
+        (Entity, &RemoteId, &mut MessageReceiver<PlayerNameUpdate>),
+        With<Connected>,
+    >,
     mut players: Query<&mut Player>,
 ) {
-    for (remote_id, mut receiver) in &mut clients {
+    for (client_entity, remote_id, mut receiver) in &mut clients {
         for message in receiver.receive() {
             let name = sanitize_player_name(&message.name);
+            commands
+                .entity(client_entity)
+                .insert(PendingPlayerName(name.clone()));
             for mut player in &mut players {
                 if player.id == remote_id.0 {
                     player.name = name.clone();
@@ -293,13 +306,14 @@ fn handle_room_join_requests(
             &RemoteId,
             &mut MessageReceiver<RoomJoinRequest>,
             Option<&ClientRoom>,
+            Option<&PendingPlayerName>,
         ),
         With<Connected>,
     >,
     players: Query<(Entity, &Player)>,
     mut room_components: Query<&mut RoomId>,
 ) {
-    for (client_entity, remote_id, mut receiver, client_room) in &mut clients {
+    for (client_entity, remote_id, mut receiver, client_room, pending_name) in &mut clients {
         let mut current_room = client_room.map(|room| room.room);
         for request in receiver.receive() {
             let roll = rng.usize(..);
@@ -321,6 +335,8 @@ fn handle_room_join_requests(
                 remote_id.0,
                 current_room,
                 assignment,
+                &config,
+                pending_name,
                 &players,
                 &mut room_components,
             );
@@ -380,13 +396,15 @@ fn compute_room_ranks(rows: &mut [RankRow]) -> Vec<(Entity, PlayerRank)> {
     updates
 }
 
-pub(crate) fn move_client_to_room(
+fn move_client_to_room(
     commands: &mut Commands,
     directory: &mut RoomDirectory,
     client_entity: Entity,
     client_id: lightyear::prelude::PeerId,
     current_room: Option<RoomId>,
     assignment: RoomAssignment,
+    config: &GameConfig,
+    pending_name: Option<&PendingPlayerName>,
     players: &Query<(Entity, &Player)>,
     room_components: &mut Query<&mut RoomId>,
 ) {
@@ -403,6 +421,14 @@ pub(crate) fn move_client_to_room(
 
     let Some((player_entity, player)) = players.iter().find(|(_, player)| player.id == client_id)
     else {
+        spawn_client_player(
+            commands,
+            client_entity,
+            client_id,
+            assignment,
+            config,
+            pending_name,
+        );
         return;
     };
     move_replicated_entity_to_room(commands, player_entity, assignment.lightyear_room);
@@ -416,6 +442,54 @@ pub(crate) fn move_client_to_room(
             *snake_room = assignment.game_room;
         }
     }
+}
+
+fn spawn_client_player(
+    commands: &mut Commands,
+    client_entity: Entity,
+    client_id: PeerId,
+    assignment: RoomAssignment,
+    config: &GameConfig,
+    pending_name: Option<&PendingPlayerName>,
+) {
+    info!(
+        "Client {client_id:?} joined room {}",
+        assignment.game_room.0,
+    );
+    let (spawn_position, spawn_direction) =
+        snake_spawn_pose(config, assignment.game_room, client_id.to_bits());
+    let head_entity = SnakeBundle::spawn_with_room_at(
+        commands,
+        client_id,
+        &config.movement,
+        assignment.game_room,
+        spawn_position,
+        spawn_direction,
+    );
+    let player_entity = PlayerBundle::new_in_room(
+        Player {
+            id: client_id,
+            name: pending_name
+                .map(|name| name.0.clone())
+                .unwrap_or_else(|| format!("Player {}", client_id.to_bits())),
+            snake: Some(head_entity),
+        },
+        assignment.game_room,
+    )
+    .spawn(commands, client_id);
+
+    let controlled_by = ControlledBy {
+        owner: client_entity,
+        lifetime: Default::default(),
+    };
+    commands
+        .entity(head_entity)
+        .insert((HasPlayer(player_entity), controlled_by));
+    commands.entity(player_entity).insert(controlled_by);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, player_entity);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, head_entity);
+    spawn_snake_input_actions(commands, head_entity, client_id, true);
+    spawn_player_input_actions(commands, player_entity, client_id, true);
 }
 
 pub(crate) fn add_replicated_entity_to_room(

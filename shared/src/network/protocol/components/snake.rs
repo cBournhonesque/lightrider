@@ -7,6 +7,12 @@ use itertools::Itertools;
 use parry2d::math::Point;
 use serde::{Deserialize, Serialize};
 
+const TAIL_POINT_ROLLBACK_EPSILON: f32 = 0.5;
+const TAIL_LENGTH_ROLLBACK_EPSILON: f32 = 0.5;
+const SPEED_ROLLBACK_EPSILON: f32 = 0.02;
+const ACCELERATION_ROLLBACK_EPSILON: f32 = 0.02;
+const FOOD_BOOST_ROLLBACK_EPSILON: f32 = 0.02;
+
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub enum Direction {
     Left,
@@ -125,6 +131,35 @@ pub fn interpolate_tail_points(start: TailPoints, end: TailPoints, t: f32) -> Ta
         target_size: end.total_length(),
     };
     interpolate_tail_points_with_length(&start, &end, &start_length, &end_length, t).0
+}
+
+pub fn tail_points_should_rollback(confirmed: &TailPoints, predicted: &TailPoints) -> bool {
+    if confirmed.0.len() != predicted.0.len() {
+        return true;
+    }
+    confirmed.0.iter().zip(predicted.0.iter()).any(
+        |((confirmed_point, confirmed_direction), (predicted_point, predicted_direction))| {
+            confirmed_direction != predicted_direction
+                || confirmed_point.distance(*predicted_point) > TAIL_POINT_ROLLBACK_EPSILON
+        },
+    )
+}
+
+pub fn tail_length_should_rollback(confirmed: &TailLength, predicted: &TailLength) -> bool {
+    (confirmed.current_size - predicted.current_size).abs() > TAIL_LENGTH_ROLLBACK_EPSILON
+        || (confirmed.target_size - predicted.target_size).abs() > TAIL_LENGTH_ROLLBACK_EPSILON
+}
+
+pub fn speed_should_rollback(confirmed: &Speed, predicted: &Speed) -> bool {
+    (confirmed.0 - predicted.0).abs() > SPEED_ROLLBACK_EPSILON
+}
+
+pub fn acceleration_should_rollback(confirmed: &Acceleration, predicted: &Acceleration) -> bool {
+    (confirmed.0 - predicted.0).abs() > ACCELERATION_ROLLBACK_EPSILON
+}
+
+pub fn food_boost_should_rollback(confirmed: &FoodBoost, predicted: &FoodBoost) -> bool {
+    (confirmed.0 - predicted.0).abs() > FOOD_BOOST_ROLLBACK_EPSILON
 }
 
 pub fn interpolate_tail_points_with_length(
@@ -430,5 +465,50 @@ mod tests {
                 target_size: 150.0,
             }
         );
+    }
+
+    #[test]
+    fn rollback_checks_tolerate_tiny_snake_float_drift() {
+        let confirmed_tail = TailPoints(VecDeque::from([
+            (Vec2::new(10.0, 20.0), Direction::Right),
+            (Vec2::new(0.0, 20.0), Direction::Right),
+        ]));
+        let close_tail = TailPoints(VecDeque::from([
+            (Vec2::new(10.2, 20.0), Direction::Right),
+            (Vec2::new(0.2, 20.0), Direction::Right),
+        ]));
+        let far_tail = TailPoints(VecDeque::from([
+            (Vec2::new(10.75, 20.0), Direction::Right),
+            (Vec2::new(0.2, 20.0), Direction::Right),
+        ]));
+        let wrong_direction = TailPoints(VecDeque::from([
+            (Vec2::new(10.2, 20.0), Direction::Up),
+            (Vec2::new(0.2, 20.0), Direction::Right),
+        ]));
+
+        assert!(!tail_points_should_rollback(&confirmed_tail, &close_tail));
+        assert!(tail_points_should_rollback(&confirmed_tail, &far_tail));
+        assert!(tail_points_should_rollback(
+            &confirmed_tail,
+            &wrong_direction
+        ));
+        assert!(!speed_should_rollback(&Speed(1.0), &Speed(1.01)));
+        assert!(speed_should_rollback(&Speed(1.0), &Speed(1.05)));
+        assert!(!acceleration_should_rollback(
+            &Acceleration(0.04),
+            &Acceleration(0.055)
+        ));
+        assert!(acceleration_should_rollback(
+            &Acceleration(0.04),
+            &Acceleration(0.08)
+        ));
+        assert!(!food_boost_should_rollback(
+            &FoodBoost(0.02),
+            &FoodBoost(0.03)
+        ));
+        assert!(food_boost_should_rollback(
+            &FoodBoost(0.02),
+            &FoodBoost(0.06)
+        ));
     }
 }

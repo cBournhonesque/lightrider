@@ -46,11 +46,10 @@
     ),
     food: (
         target_count: 400,
+        max_count: 600,
         spawn_interval_seconds: 0.05,
         visual_radius: 3.0,
         radius: 8.0,
-        magnet_radius: 75.0,
-        magnet_speed: 10.0,
         tail_growth: 20.0,
         death_food_spacing: 28.0,
         death_food_max: 40,

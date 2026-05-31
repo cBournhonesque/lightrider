@@ -211,11 +211,10 @@ impl Default for SoundConfig {
 #[serde(default)]
 pub struct FoodConfig {
     pub target_count: usize,
+    pub max_count: usize,
     pub spawn_interval_seconds: f32,
     pub visual_radius: f32,
     pub radius: f32,
-    pub magnet_radius: f32,
-    pub magnet_speed: f32,
     pub tail_growth: f32,
     pub death_food_spacing: f32,
     pub death_food_max: usize,
@@ -225,11 +224,10 @@ impl Default for FoodConfig {
     fn default() -> Self {
         Self {
             target_count: 400,
+            max_count: 600,
             spawn_interval_seconds: 0.05,
             visual_radius: 3.0,
             radius: 8.0,
-            magnet_radius: 75.0,
-            magnet_speed: 10.0,
             tail_growth: 20.0,
             death_food_spacing: 28.0,
             death_food_max: 40,
@@ -240,6 +238,14 @@ impl Default for FoodConfig {
 impl FoodConfig {
     pub fn spawn_interval(&self) -> Duration {
         Duration::from_secs_f32(self.spawn_interval_seconds)
+    }
+
+    pub fn spawn_target_count(&self) -> usize {
+        self.target_count.min(self.max_count)
+    }
+
+    pub fn remaining_capacity(&self, current_count: usize) -> usize {
+        self.max_count.saturating_sub(current_count)
     }
 }
 
@@ -399,7 +405,7 @@ mod tests {
         assert_eq!(config.sound.speed_loop_max_volume, 0.8);
         assert_eq!(config.food.visual_radius, 3.0);
         assert_eq!(config.food.radius, 8.0);
-        assert_eq!(config.food.magnet_radius, 75.0);
+        assert_eq!(config.food.max_count, 600);
         assert_eq!(config.food.death_food_max, 40);
         assert_eq!(config.movement.food_boost_acceleration, 0.08);
         assert_eq!(config.movement.food_boost_decay, 0.85);
@@ -428,6 +434,24 @@ mod tests {
             config.rooms.max_players_per_room < GameConfig::default().rooms.max_players_per_room
         );
         assert!(config.food.target_count < GameConfig::default().food.target_count);
+        assert!(config.food.max_count < GameConfig::default().food.max_count);
+    }
+
+    #[test]
+    fn food_spawn_target_respects_max_count() {
+        let mut food = FoodConfig {
+            target_count: 400,
+            max_count: 250,
+            ..default()
+        };
+
+        assert_eq!(food.spawn_target_count(), 250);
+        assert_eq!(food.remaining_capacity(249), 1);
+        assert_eq!(food.remaining_capacity(250), 0);
+        assert_eq!(food.remaining_capacity(300), 0);
+
+        food.max_count = 0;
+        assert_eq!(food.spawn_target_count(), 0);
     }
 
     #[test]

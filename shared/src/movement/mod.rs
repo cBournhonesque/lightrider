@@ -55,7 +55,9 @@ pub fn turn_head_from_input(
     let Ok(mut tail) = query.get_mut(trigger.context) else {
         return;
     };
-    turn_tail(&mut tail, direction);
+    if is_perpendicular_turn(tail.front().1, direction) {
+        turn_tail(&mut tail, direction);
+    }
 }
 
 pub fn direction_from_input(input: Vec2) -> Option<Direction> {
@@ -77,7 +79,15 @@ pub fn direction_from_input(input: Vec2) -> Option<Direction> {
 
 pub fn turn_tail(tail: &mut TailPoints, requested: Direction) {
     let current = tail.front().1;
-    let same_axis = matches!(
+    if is_perpendicular_turn(current, requested) {
+        tail.front_mut().1 = requested;
+        let head = tail.front().clone();
+        tail.0.push_front(head);
+    }
+}
+
+pub fn is_perpendicular_turn(current: Direction, requested: Direction) -> bool {
+    !matches!(
         (current, requested),
         (
             Direction::Up | Direction::Down,
@@ -86,10 +96,7 @@ pub fn turn_tail(tail: &mut TailPoints, requested: Direction) {
             Direction::Left | Direction::Right,
             Direction::Left | Direction::Right
         )
-    );
-    if !same_axis {
-        tail.front_mut().1 = requested;
-    }
+    )
 }
 
 // 2. update acceleration (are there close snakes?)
@@ -165,13 +172,6 @@ pub fn update_tails(
 ) {
     let movement = &config.movement;
     for (mut tail, mut length, mut speed, acceleration) in query.iter_mut() {
-        // 3. update front of the tail: possibly add a new inflection point if necessary
-        if tail.is_changed() {
-            // copy the first point to the front when we have a turn
-            let head = tail.0.front().unwrap().clone();
-            tail.0.push_front(head);
-        }
-
         // 4. update acceleration and speed
         // update velocity
         // do not update speed if we are at min speed and acceleration is negative
@@ -271,12 +271,24 @@ mod tests {
 
         turn_tail(&mut tail, Direction::Down);
         assert_eq!(tail.front().1, Direction::Up);
+        assert_eq!(tail.0.len(), 2);
 
         turn_tail(&mut tail, Direction::Right);
         assert_eq!(tail.front().1, Direction::Right);
+        assert_eq!(tail.0.len(), 3);
 
         turn_tail(&mut tail, Direction::Left);
         assert_eq!(tail.front().1, Direction::Right);
+        assert_eq!(tail.0.len(), 3);
+    }
+
+    #[test]
+    fn perpendicular_turn_detection_rejects_noop_and_reverse() {
+        assert!(!is_perpendicular_turn(Direction::Up, Direction::Up));
+        assert!(!is_perpendicular_turn(Direction::Up, Direction::Down));
+        assert!(is_perpendicular_turn(Direction::Up, Direction::Left));
+        assert!(is_perpendicular_turn(Direction::Left, Direction::Down));
+        assert!(!is_perpendicular_turn(Direction::Left, Direction::Right));
     }
 
     #[test]
