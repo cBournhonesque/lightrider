@@ -90,6 +90,8 @@ fn food_collision(
                 writer.write(FoodCollision {
                     snake,
                     food: food_entity,
+                    food_position: position.0,
+                    head_position: collision_point,
                 });
                 break;
             }
@@ -222,7 +224,12 @@ mod tests {
                 .unwrap()
                 .drain()
                 .collect::<Vec<_>>(),
-            vec![FoodCollision { snake, food }]
+            vec![FoodCollision {
+                snake,
+                food,
+                food_position: Vec2::new(0.0, 201.0),
+                head_position: Vec2::new(0.0, 200.0),
+            }]
         );
     }
 
@@ -249,7 +256,12 @@ mod tests {
                 .unwrap()
                 .drain()
                 .collect::<Vec<_>>(),
-            vec![FoodCollision { snake, food }]
+            vec![FoodCollision {
+                snake,
+                food,
+                food_position: Vec2::new(0.0, 1.0),
+                head_position: Vec2::ZERO,
+            }]
         );
     }
 

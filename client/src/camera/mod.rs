@@ -71,6 +71,7 @@ fn toggle_camera(
 /// System to make the camera follow the head of the player, or the head of the killer
 fn follow_camera(
     config: Res<GameConfig>,
+    time: Res<Time>,
     camera_state: Res<State<CameraState>>,
     death_view: Res<DeathView>,
     predicted: Query<(&TailPoints, &TailLength), With<Predicted>>,
@@ -87,9 +88,11 @@ fn follow_camera(
             camera_pos.translation.x = head.x;
             camera_pos.translation.y = head.y;
             if *camera_state.get() == CameraState::Follow {
-                set_camera_scale(
+                smooth_camera_scale(
                     &mut projection,
                     normal_camera_scale_for_tail(&config, tail_length),
+                    time.delta_secs(),
+                    config.render.normal_camera_scale_smoothing,
                 );
             }
         } else if let Some(killer_snake) = death_view.killer_snake {
@@ -131,6 +134,37 @@ fn set_camera_scale(projection: &mut Projection, scale: f32) {
     projection.scale = scale.max(0.1);
 }
 
+fn smooth_camera_scale(
+    projection: &mut Projection,
+    target_scale: f32,
+    delta_seconds: f32,
+    smoothing: f32,
+) {
+    let Some(current_scale) = camera_scale(projection) else {
+        return;
+    };
+    let t = smoothing_factor(smoothing, delta_seconds);
+    set_camera_scale(
+        projection,
+        current_scale + (target_scale - current_scale) * t,
+    );
+}
+
+fn camera_scale(projection: &Projection) -> Option<f32> {
+    let Projection::Orthographic(projection) = projection else {
+        return None;
+    };
+    Some(projection.scale)
+}
+
+fn smoothing_factor(smoothing: f32, delta_seconds: f32) -> f32 {
+    if smoothing <= 0.0 {
+        1.0
+    } else {
+        1.0 - (-smoothing * delta_seconds.max(0.0)).exp()
+    }
+}
+
 fn normal_camera_scale_for_tail(config: &GameConfig, tail_length: &TailLength) -> f32 {
     let min_scale = config.render.normal_camera_scale.max(0.1);
     let max_scale = config.render.normal_camera_max_scale.max(min_scale);
@@ -167,5 +201,13 @@ mod tests {
         );
         assert!(grown > config.render.normal_camera_scale);
         assert!(grown <= config.render.normal_camera_max_scale);
+    }
+
+    #[test]
+    fn smoothing_factor_can_snap_or_smooth() {
+        assert_eq!(smoothing_factor(0.0, 1.0), 1.0);
+        let smoothed = smoothing_factor(6.0, 1.0 / 60.0);
+        assert!(smoothed > 0.0);
+        assert!(smoothed < 1.0);
     }
 }

@@ -141,6 +141,7 @@ pub struct RenderConfig {
     pub background_tile_size: f32,
     pub normal_camera_scale: f32,
     pub normal_camera_growth_per_tail_length: f32,
+    pub normal_camera_scale_smoothing: f32,
     pub normal_camera_max_scale: f32,
     pub debug_camera_scale: f32,
 }
@@ -154,7 +155,8 @@ impl Default for RenderConfig {
             map_outline_width: 3.0,
             background_tile_size: 128.0,
             normal_camera_scale: 0.35,
-            normal_camera_growth_per_tail_length: 0.001,
+            normal_camera_growth_per_tail_length: 0.00025,
+            normal_camera_scale_smoothing: 6.0,
             normal_camera_max_scale: 1.0,
             debug_camera_scale: 1.0,
         }
@@ -227,7 +229,7 @@ impl Default for FoodConfig {
             max_count: 600,
             spawn_interval_seconds: 0.05,
             visual_radius: 3.0,
-            radius: 8.0,
+            radius: 45.0,
             tail_growth: 20.0,
             death_food_spacing: 28.0,
             death_food_max: 40,
@@ -406,6 +408,8 @@ mod tests {
         assert_eq!(config.render.tail_width, 1.0);
         assert_eq!(config.render.map_outline_width, 3.0);
         assert_eq!(config.render.normal_camera_scale, 0.35);
+        assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00025);
+        assert_eq!(config.render.normal_camera_scale_smoothing, 6.0);
         assert_eq!(config.render.normal_camera_max_scale, 1.0);
         assert_eq!(config.render.debug_camera_scale, 1.0);
         assert!(config.sound.enabled);
@@ -414,7 +418,7 @@ mod tests {
         assert_eq!(config.sound.remote_speed_volume, 0.45);
         assert_eq!(config.sound.speed_loop_max_volume, 0.8);
         assert_eq!(config.food.visual_radius, 3.0);
-        assert_eq!(config.food.radius, 8.0);
+        assert_eq!(config.food.radius, 45.0);
         assert_eq!(config.food.max_count, 600);
         assert_eq!(config.food.death_food_max, 40);
         assert_eq!(config.movement.food_boost_acceleration, 0.08);

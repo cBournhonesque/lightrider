@@ -112,8 +112,8 @@ fn spawn_confirmed_food_pickup_animations(
     config: Res<GameConfig>,
     sheet: Res<PowerlineSpriteSheet>,
     mut pickups: MessageReader<ConfirmedFoodPickup>,
-    food: Query<&Position, With<FoodMarker>>,
     snakes: Query<&TailPoints>,
+    visuals: Query<(Entity, &FoodVisual)>,
 ) {
     if !config.render.use_assets {
         for _ in pickups.read() {}
@@ -122,14 +122,16 @@ fn spawn_confirmed_food_pickup_animations(
 
     let visual_size = (config.food.visual_radius.max(1.0) * 4.0).max(6.0);
     for pickup in pickups.read() {
-        let Ok(food_position) = food.get(pickup.collision.food) else {
-            continue;
-        };
-        let start = food_position.0;
+        for (visual_entity, visual) in &visuals {
+            if visual.target == pickup.collision.food {
+                commands.entity(visual_entity).try_despawn();
+            }
+        }
+        let start = pickup.collision.food_position;
         let end = snakes
             .get(pickup.collision.snake)
             .map(|tail| tail.front().0)
-            .unwrap_or(start);
+            .unwrap_or(pickup.collision.head_position);
         commands.spawn((
             FoodPickupAnimation {
                 elapsed: 0.0,
