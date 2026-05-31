@@ -8,9 +8,9 @@ use shared::network::protocol::prelude::{Player, TailPoints};
 
 use crate::render::colors::snake_color_for_player;
 
-const LABEL_OFFSET: Vec2 = Vec2::new(22.0, 20.0);
+const LABEL_OFFSET: Vec2 = Vec2::new(14.0, 13.0);
 const LABEL_Z: f32 = 20.0;
-const LABEL_FONT_SIZE: f32 = 13.0;
+const LABEL_FONT_SIZE: f32 = 9.0;
 
 pub(crate) struct NameLabelRenderPlugin;
 

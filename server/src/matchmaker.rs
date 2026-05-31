@@ -120,6 +120,10 @@ fn publish_readiness_once(
         return;
     };
     state.set_ready(true, Some(cert_digest.clone()));
+    let mut capacity = state.capacity().clone();
+    capacity.ready = true;
+    capacity.cert_digest = Some(cert_digest.clone());
+    state.publish_capacity(capacity);
     runtime.readiness_published = true;
     info!(
         server_id = %state.server().server_id,
@@ -186,6 +190,8 @@ fn registered_server(port: u16) -> RegisteredGameServer {
 fn nats_config_from_env() -> NatsConfig {
     NatsConfig {
         url: nats_url_from_env(),
+        username: env_string("NATS_USER"),
+        password: env_string("NATS_PASSWORD"),
         namespace: Some(
             env_string("LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE")
                 .or_else(|| env_string("MATCHMAKER_NATS_NAMESPACE"))
@@ -207,10 +213,7 @@ fn nats_url_from_env() -> String {
     if host.contains("://") {
         return host;
     }
-    match (env_string("NATS_USER"), env_string("NATS_PASSWORD")) {
-        (Some(user), Some(password)) => format!("nats://{user}:{password}@{host}"),
-        _ => format!("nats://{host}"),
-    }
+    format!("nats://{host}")
 }
 
 fn provider_kind_from_env() -> ProviderKind {
@@ -411,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn nats_url_embeds_legacy_credentials() {
+    fn nats_config_uses_legacy_credentials() {
         with_env(
             [
                 ("LIGHTYEAR_MATCHMAKER_NATS_URL", None::<&str>),
@@ -422,10 +425,10 @@ mod tests {
                 ("NATS_PASSWORD", Some("secret")),
             ],
             || {
-                assert_eq!(
-                    nats_url_from_env(),
-                    "nats://lightrider:secret@127.0.0.1:4222"
-                );
+                assert_eq!(nats_url_from_env(), "nats://127.0.0.1:4222");
+                let config = nats_config_from_env();
+                assert_eq!(config.username.as_deref(), Some("lightrider"));
+                assert_eq!(config.password.as_deref(), Some("secret"));
             },
         );
     }

@@ -16,9 +16,9 @@ use shared::network::protocol::prelude::*;
 pub(crate) struct SnakeRenderPlugin;
 
 const SNAKE_HEAD_Z: f32 = 11.0;
+const SNAKE_HEAD_GLOW_Z: f32 = 10.8;
 const SNAKE_TAIL_Z: f32 = 10.0;
-const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.54;
-const SNAKE_DEATH_FLASH_SECONDS: f32 = 0.1;
+const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.28;
 const MESH_CURVE_SEGMENTS: u32 = 14;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -41,6 +41,7 @@ struct SnakeVisualKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SnakeVisualPart {
     Head,
+    HeadGlow,
     Segment { index: usize, layer: TailLayer },
     Joint { index: usize, layer: TailLayer },
 }
@@ -72,17 +73,6 @@ enum TailMeshShape {
 #[derive(Component, Clone, Copy, Debug)]
 struct SnakeDeathVisual {
     elapsed: f32,
-    layer: TailLayer,
-    color: SnakePaletteColor,
-    width: f32,
-    target: Vec2,
-    kind: SnakeDeathVisualKind,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum SnakeDeathVisualKind {
-    Segment { start: Vec2, end: Vec2 },
-    Joint { position: Vec2 },
 }
 
 impl Plugin for SnakeRenderPlugin {
@@ -240,14 +230,25 @@ fn desired_snake_visuals(
 ) -> (Vec<DesiredSnakeSpriteVisual>, Vec<DesiredSnakeMeshVisual>) {
     let tail_width = config.render.tail_width.max(1.0);
     let head_size = config.render.head_size.max(tail_width * 1.8);
-    let head_length = (head_size * 2.4).max(tail_width * 8.0);
-    let head_width = (head_size * 0.55).max(tail_width * 3.0);
+    let head_diameter = (head_size * 1.35).max(tail_width * 4.0);
+    let head_glow_radius = head_diameter * 0.82;
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
     for (owner, points, player) in tails.iter() {
         let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
+        mesh_desired.push(DesiredSnakeMeshVisual {
+            key: SnakeVisualKey {
+                owner,
+                part: SnakeVisualPart::HeadGlow,
+            },
+            transform: Transform::from_translation(head.extend(SNAKE_HEAD_GLOW_Z)),
+            shape: TailMeshShape::Circle {
+                radius: head_glow_radius,
+            },
+            color: color.head_glow(),
+        });
         sprite_desired.push(DesiredSnakeSpriteVisual {
             key: SnakeVisualKey {
                 owner,
@@ -257,8 +258,8 @@ fn desired_snake_visuals(
                 .with_rotation(direction_rotation(points.front().1)),
             sprite: sheet.sprite(
                 PowerlineFrame::HeadDot,
-                Vec2::new(head_length, head_width),
-                color.head(),
+                Vec2::splat(head_diameter),
+                Color::linear_rgb(3.2, 3.2, 3.2),
             ),
         });
 
@@ -271,7 +272,7 @@ fn desired_snake_visuals(
             let rotation = Quat::from_rotation_z(delta.y.atan2(delta.x));
             for layer in TailLayer::ALL {
                 let Some((center, length)) =
-                    layer.segment_center_and_length(start.0, end.0, index, head_length)
+                    layer.segment_center_and_length(start.0, end.0, index, head_diameter)
                 else {
                     continue;
                 };
@@ -392,7 +393,6 @@ fn spawn_snake_death_animations(
     mut deaths: MessageReader<ConfirmedDeath>,
     mut mesh_assets: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    players: Query<&Player>,
     tails: Query<(Entity, &TailPoints, Option<&HasPlayer>)>,
 ) {
     if !config.render.use_assets {
@@ -405,18 +405,18 @@ fn spawn_snake_death_animations(
         let live_tail = tails.get(death.message.killed_snake).ok();
         let tail = live_tail.map(|(_, tail, _)| tail).or(death.tail.as_ref());
         let Some(tail) = tail else {
+            if let Some(position) = death.position {
+                spawn_death_circle(
+                    &mut commands,
+                    &mut mesh_assets,
+                    &mut materials,
+                    position,
+                    config.render.head_size.max(4.0),
+                    SNAKE_HEAD_Z,
+                );
+            }
             continue;
         };
-        let color = live_tail
-            .map(|(snake, _, has_player)| snake_visual_color(snake, has_player, &players))
-            .or_else(|| {
-                players
-                    .get(death.message.killed_player)
-                    .ok()
-                    .map(snake_color_for_player)
-            })
-            .unwrap_or_else(|| snake_color_for_fallback(death.message.killed_snake.to_bits()));
-        let target = tail_midpoint(tail).unwrap_or_else(|| death.position.unwrap_or(Vec2::ZERO));
 
         for (start, end) in tail.pairs_front_to_back() {
             let delta = end.0 - start.0;
@@ -433,17 +433,7 @@ fn spawn_snake_death_animations(
                     width: layer_width,
                 };
                 commands.spawn((
-                    SnakeDeathVisual {
-                        elapsed: 0.0,
-                        layer,
-                        color,
-                        width: layer_width,
-                        target,
-                        kind: SnakeDeathVisualKind::Segment {
-                            start: start.0,
-                            end: end.0,
-                        },
-                    },
+                    SnakeDeathVisual { elapsed: 0.0 },
                     Mesh2d(mesh_assets.add(shape.mesh())),
                     MeshMaterial2d(materials.add(blended_material(layer.death_flash_color()))),
                     Transform::from_translation(center.extend(layer.z() + 0.2))
@@ -458,14 +448,7 @@ fn spawn_snake_death_animations(
                 let radius = layer.width(tail_width) * 0.5;
                 let shape = TailMeshShape::Circle { radius };
                 commands.spawn((
-                    SnakeDeathVisual {
-                        elapsed: 0.0,
-                        layer,
-                        color,
-                        width: radius * 2.0,
-                        target,
-                        kind: SnakeDeathVisualKind::Joint { position: *point },
-                    },
+                    SnakeDeathVisual { elapsed: 0.0 },
                     Mesh2d(mesh_assets.add(shape.mesh())),
                     MeshMaterial2d(materials.add(blended_material(layer.death_flash_color()))),
                     Transform::from_translation((*point).extend(layer.z() + 0.2)),
@@ -485,10 +468,9 @@ fn update_snake_death_animations(
         &mut SnakeDeathVisual,
         &Mesh2d,
         &MeshMaterial2d<ColorMaterial>,
-        &mut Transform,
     )>,
 ) {
-    for (entity, mut visual, mesh, material, mut transform) in &mut visuals {
+    for (entity, mut visual, mesh, material) in &mut visuals {
         visual.elapsed += time.delta_secs();
         if visual.elapsed >= SNAKE_DEATH_ANIMATION_SECONDS {
             mesh_assets.remove(mesh.0.id());
@@ -497,57 +479,26 @@ fn update_snake_death_animations(
             continue;
         }
 
-        let collapse_t = ((visual.elapsed - SNAKE_DEATH_FLASH_SECONDS)
-            / (SNAKE_DEATH_ANIMATION_SECONDS - SNAKE_DEATH_FLASH_SECONDS))
-            .clamp(0.0, 1.0);
-        let eased = smoothstep(collapse_t);
-        let fade = (1.0 - collapse_t).clamp(0.0, 1.0);
-        let color = if visual.elapsed <= SNAKE_DEATH_FLASH_SECONDS {
-            visual.layer.death_flash_color()
-        } else {
-            faded_color(visual.layer.color(visual.color), fade)
-        };
+        let fade = (1.0 - visual.elapsed / SNAKE_DEATH_ANIMATION_SECONDS).clamp(0.0, 1.0);
+        let color = Color::linear_rgba(7.0, 7.0, 7.0, fade);
         set_material_color(&mut materials, material, color);
-
-        match visual.kind {
-            SnakeDeathVisualKind::Segment { start, end } => {
-                let start = start.lerp(visual.target, eased);
-                let end = end.lerp(visual.target, eased);
-                let delta = end - start;
-                let length = delta.length();
-                if length <= 0.1 {
-                    if let Some(mesh_asset) = mesh_assets.get_mut(&mesh.0) {
-                        *mesh_asset = TailMeshShape::Circle {
-                            radius: visual.width * 0.2 * fade.max(0.1),
-                        }
-                        .mesh();
-                    }
-                    transform.translation = visual.target.extend(visual.layer.z() + 0.2);
-                    transform.rotation = Quat::IDENTITY;
-                    continue;
-                }
-
-                let width = visual.width * (0.25 + 0.75 * fade);
-                let shape = TailMeshShape::Capsule {
-                    length: length.max(width),
-                    width,
-                };
-                if let Some(mesh_asset) = mesh_assets.get_mut(&mesh.0) {
-                    *mesh_asset = shape.mesh();
-                }
-                transform.translation = ((start + end) * 0.5).extend(visual.layer.z() + 0.2);
-                transform.rotation = Quat::from_rotation_z(delta.y.atan2(delta.x));
-            }
-            SnakeDeathVisualKind::Joint { position } => {
-                let position = position.lerp(visual.target, eased);
-                let radius = visual.width * 0.5 * (0.2 + 0.8 * fade);
-                if let Some(mesh_asset) = mesh_assets.get_mut(&mesh.0) {
-                    *mesh_asset = TailMeshShape::Circle { radius }.mesh();
-                }
-                transform.translation = position.extend(visual.layer.z() + 0.2);
-            }
-        }
     }
+}
+
+fn spawn_death_circle(
+    commands: &mut Commands,
+    mesh_assets: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    position: Vec2,
+    radius: f32,
+    z: f32,
+) {
+    commands.spawn((
+        SnakeDeathVisual { elapsed: 0.0 },
+        Mesh2d(mesh_assets.add(TailMeshShape::Circle { radius }.mesh())),
+        MeshMaterial2d(materials.add(blended_material(TailLayer::Core.death_flash_color()))),
+        Transform::from_translation(position.extend(z)),
+    ));
 }
 
 impl TailMeshShape {
@@ -664,41 +615,6 @@ fn fan_mesh(perimeter: Vec<Vec2>) -> Mesh {
     mesh
 }
 
-fn tail_midpoint(tail: &TailPoints) -> Option<Vec2> {
-    let total = tail.total_length();
-    if total <= f32::EPSILON {
-        return tail.0.front().map(|(point, _)| *point);
-    }
-    tail_position_at_distance(tail, total * 0.5)
-}
-
-fn tail_position_at_distance(tail: &TailPoints, distance: f32) -> Option<Vec2> {
-    let mut remaining = distance.max(0.0);
-    for (start, end) in tail.pairs_front_to_back() {
-        let delta = end.0 - start.0;
-        let length = delta.length();
-        if length <= f32::EPSILON {
-            continue;
-        }
-        if remaining <= length {
-            return Some(start.0 + delta / length * remaining);
-        }
-        remaining -= length;
-    }
-    tail.0.back().map(|(point, _)| *point)
-}
-
-fn smoothstep(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-fn faded_color(color: Color, alpha_scale: f32) -> Color {
-    let mut color = color;
-    color.set_alpha(color.alpha() * alpha_scale.clamp(0.0, 1.0));
-    color
-}
-
 fn direction_rotation(direction: Direction) -> Quat {
     let delta = direction.delta();
     Quat::from_rotation_z(delta.y.atan2(delta.x))
@@ -716,5 +632,45 @@ fn draw_tail_segment(gizmos: &mut Gizmos, start: Vec2, end: Vec2, width: f32, co
     for line in 0..line_count {
         let offset = normal * (line as f32 - center);
         gizmos.line_2d(start + offset, end + offset, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn death_animation_spawns_position_fallback_without_tail_snapshot() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<GameConfig>();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<ColorMaterial>>();
+        app.add_message::<ConfirmedDeath>();
+        app.add_systems(Update, spawn_snake_death_animations);
+
+        app.world_mut()
+            .resource_mut::<Messages<ConfirmedDeath>>()
+            .write(ConfirmedDeath {
+                message: PlayerDeath {
+                    killer_player: Entity::from_bits(1),
+                    killed_player: Entity::from_bits(2),
+                    killer_snake: Entity::from_bits(3),
+                    killed_snake: Entity::from_bits(4),
+                    killer_name: "killer".to_string(),
+                    killed_name: "killed".to_string(),
+                    room: RoomId(1),
+                    reason: DeathReason::Collision,
+                    stats: PlayerDeathStats::default(),
+                },
+                local_player: true,
+                position: Some(Vec2::new(12.0, 34.0)),
+                tail: None,
+            });
+
+        app.update();
+
+        let mut query = app.world_mut().query::<&SnakeDeathVisual>();
+        assert_eq!(query.iter(app.world()).count(), 1);
     }
 }

@@ -30,8 +30,8 @@ impl SnakePaletteColor {
         self.linear_color(4.2, 1.0)
     }
 
-    pub(crate) fn head(self) -> Color {
-        self.linear_color(3.2, 1.0)
+    pub(crate) fn head_glow(self) -> Color {
+        self.linear_color(2.6, 0.28)
     }
 
     pub(crate) fn spark(self) -> Color {

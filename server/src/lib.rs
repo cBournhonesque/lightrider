@@ -1,7 +1,8 @@
+use bevy::app::ScheduleRunnerPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use clap::Parser;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use crate::food::FoodPlugin;
 use shared::config::GameConfig;
@@ -53,9 +54,13 @@ pub async fn app(cli: Cli) -> App {
     };
     app.insert_resource(config.clone());
     if cli.headless {
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(StatesPlugin);
-        app.add_plugins(log_plugin);
+        app.add_plugins((
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+                1.0 / 60.0,
+            ))),
+            StatesPlugin,
+            log_plugin,
+        ));
     } else {
         app.add_plugins(DefaultPlugins.set(log_plugin));
     }

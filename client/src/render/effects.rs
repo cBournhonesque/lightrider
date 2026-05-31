@@ -35,6 +35,7 @@ struct SpeedParticleVisual {
 #[derive(Clone, Copy, Debug)]
 struct BoostContact {
     head: Vec2,
+    core: Vec2,
     marker: Vec2,
     distance: f32,
     other: Entity,
@@ -88,7 +89,7 @@ fn sync_boost_marker(
     let mut seen = HashSet::new();
 
     if let Some(contact) = contact {
-        let delta = contact.head - contact.marker;
+        let delta = contact.head - contact.core;
         let angle = delta.y.atan2(delta.x) - std::f32::consts::FRAC_PI_2;
         let marker_size = config.render.head_size.max(4.0) * 1.45;
         let other_color = snake_entity_color(contact.other, &snakes, &players);
@@ -97,7 +98,7 @@ fn sync_boost_marker(
             desired.push((
                 BoostVisualPart::Lightning,
                 Transform::from_translation(
-                    ((contact.head + contact.marker) * 0.5).extend(BOOST_LIGHTNING_Z),
+                    ((contact.head + contact.core) * 0.5).extend(BOOST_LIGHTNING_Z),
                 )
                 .with_rotation(Quat::from_rotation_z(angle)),
                 sheet.sprite(
@@ -365,13 +366,15 @@ fn nearest_tail_ray_hit(
             };
             if nearest.map_or(true, |nearest: BoostContact| distance < nearest.distance) {
                 let hit = origin + direction * distance;
+                let lightning_active = distance >= lightning_min_distance;
                 nearest = Some(BoostContact {
                     head: origin,
+                    core: hit,
                     marker: hit - direction * core_radius,
                     distance,
                     other: other_entity,
-                    lightning_active: distance >= lightning_min_distance,
-                    spark_active,
+                    lightning_active,
+                    spark_active: spark_active || !lightning_active,
                 });
             }
         }

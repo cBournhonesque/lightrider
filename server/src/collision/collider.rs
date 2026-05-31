@@ -1,5 +1,6 @@
 //! We compute collisions causing death only on the server.
 use bevy::prelude::*;
+use lightyear::prelude::LocalTimeline;
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::{DeathReason, RoomId, SnakeCollision, Speed, TailPoints};
@@ -29,6 +30,7 @@ impl Plugin for ColliderPlugin {
 pub const COLLISION_DISTANCE: f32 = 1.0;
 
 pub(crate) fn snake_collisions(
+    timeline: Option<Res<LocalTimeline>>,
     tails: Query<(Entity, &TailPoints, &RoomId, &Speed)>,
     mut writer: MessageWriter<SnakeCollision>,
 ) {
@@ -38,18 +40,47 @@ pub(crate) fn snake_collisions(
         let origin =
             tail.front().0 - direction * sweep_distance + direction * COLLISION_DISTANCE / 1000.0;
         trace!(head = ?tail.front().0, direction = ?tail.front().1, "Collision ray cast");
-        if let Some(killer) =
+        if let Some(hit) =
             nearest_collision(origin, direction, sweep_distance, entity, room, &tails)
         {
+            let killer = hit.entity;
+            let reason = if killer == entity {
+                DeathReason::Suicide
+            } else {
+                DeathReason::Collision
+            };
             debug!(?entity, ?killer, "Collision");
+            trace!(
+                target: "lightyear_debug::manual",
+                kind = "server_snake_collision",
+                schedule = "FixedUpdate",
+                sample_point = "FixedUpdate",
+                tick_id = timeline
+                    .as_ref()
+                    .map(|timeline| u64::from(timeline.tick().0))
+                    .unwrap_or(u64::MAX),
+                killed = ?entity,
+                killer = ?killer,
+                reason = ?reason,
+                head_x = tail.front().0.x,
+                head_y = tail.front().0.y,
+                direction_x = direction.x,
+                direction_y = direction.y,
+                origin_x = origin.x,
+                origin_y = origin.y,
+                sweep_distance = sweep_distance,
+                hit_distance = hit.distance,
+                segment_index = hit.segment_index as u64,
+                segment_start_x = hit.segment_start.x,
+                segment_start_y = hit.segment_start.y,
+                segment_end_x = hit.segment_end.x,
+                segment_end_y = hit.segment_end.y,
+                "server snake collision"
+            );
             writer.write(SnakeCollision {
                 killed: entity,
                 killer,
-                reason: if killer == entity {
-                    DeathReason::Suicide
-                } else {
-                    DeathReason::Collision
-                },
+                reason,
             });
         }
     }
@@ -80,6 +111,15 @@ pub(crate) fn arena_contains(position: Vec2, width: f32, height: f32) -> bool {
         && position.y <= half_height
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CollisionHit {
+    entity: Entity,
+    distance: f32,
+    segment_index: usize,
+    segment_start: Vec2,
+    segment_end: Vec2,
+}
+
 fn nearest_collision(
     origin: Vec2,
     direction: Vec2,
@@ -87,8 +127,8 @@ fn nearest_collision(
     main: Entity,
     room: &RoomId,
     tails: &Query<(Entity, &TailPoints, &RoomId, &Speed)>,
-) -> Option<Entity> {
-    let mut nearest: Option<(f32, Entity)> = None;
+) -> Option<CollisionHit> {
+    let mut nearest: Option<CollisionHit> = None;
     for (other_entity, other_tail, other_room, _) in tails.iter() {
         if other_room != room {
             continue;
@@ -110,12 +150,18 @@ fn nearest_collision(
             if other_entity == main && distance <= COLLISION_DISTANCE / 1000.0 {
                 continue;
             }
-            if nearest.map_or(true, |(nearest_distance, _)| distance < nearest_distance) {
-                nearest = Some((distance, other_entity));
+            if nearest.map_or(true, |nearest| distance < nearest.distance) {
+                nearest = Some(CollisionHit {
+                    entity: other_entity,
+                    distance,
+                    segment_index: index,
+                    segment_start: segment_start.0,
+                    segment_end: segment_end.0,
+                });
             }
         }
     }
-    nearest.map(|(_, entity)| entity)
+    nearest
 }
 
 #[cfg(test)]

@@ -41,13 +41,13 @@ jobs:
           token: ${{ secrets.CHECKOUT_TOKEN || github.token }}
           path: lightyear
 
-      - name: Check out Bevygap
+      - name: Check out Lightyear Matchmaker
         uses: actions/checkout@v4
         with:
-          repository: cBournhonesque/bevygap
-          ref: ${{ vars.BEVYGAP_REF || 'main' }}
+          repository: cBournhonesque/lightyear-matchmaker
+          ref: ${{ vars.LIGHTYEAR_MATCHMAKER_REF || 'main' }}
           token: ${{ secrets.CHECKOUT_TOKEN || github.token }}
-          path: bevygap
+          path: lightyear-matchmaker
 
       - name: Print dependency refs
         shell: bash
@@ -55,7 +55,7 @@ jobs:
           set -euo pipefail
           printf 'lightrider ref: %s\n' "${GITHUB_REF_NAME}"
           printf 'lightyear ref: %s\n' "${{ vars.LIGHTYEAR_REF || 'main' }}"
-          printf 'bevygap ref: %s\n' "${{ vars.BEVYGAP_REF || 'main' }}"
+          printf 'lightyear-matchmaker ref: %s\n' "${{ vars.LIGHTYEAR_MATCHMAKER_REF || 'main' }}"
 
       - name: Stage image build context
         shell: bash
@@ -77,7 +77,7 @@ jobs:
           rsync -a --delete \
             --exclude .git \
             --exclude target \
-            bevygap/ lightrider/.edgegap-build/context/bevygap/
+            lightyear-matchmaker/ lightrider/.edgegap-build/context/lightyear-matchmaker/
           if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
             cp /etc/ssl/certs/ca-certificates.crt lightrider/.edgegap-build/context/host-ca-certificates.crt
           else

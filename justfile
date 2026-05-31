@@ -147,62 +147,56 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
       echo "duckdb not found; inspect $run_dir/*.ndjson manually"
     fi
 
-# Bevygap local smoke order:
-# 1. `just bevygap-nats` starts local NATS with JetStream, which Bevygap uses for request/reply,
-#    session/client KV mappings, certificate digest KV, and active connection tracking.
-# 2. `just bevygap-fake-context` starts a tiny local Edgegap context endpoint. The current
-#    Bevygap server plugin always fetches ARBITRIUM_CONTEXT_URL, even for local smoke tests.
-# 3. `just bevygap-server-local` starts Lightrider with `--features bevygap -- --bevygap`
-#    and should publish context plus WebTransport cert digest into NATS.
-# 4. `just bevygap-matchmaker-mock-stack-local` starts the matchmaker worker plus
-#    WebSocket HTTPD gateway without creating real Edgegap sessions.
-# 5. `just bevygap-client-bot` requests a matchmaker token over WebSocket and connects with it.
-# 6. `just bevygap-matchmaker-local` switches from mock sessions to real Edgegap sessions and
-#    requires `EDGEGAP_API_KEY` in the environment or secrets.
-# Print the ordered Bevygap local-smoke instructions.
-bevygap-help:
+# Lightyear Matchmaker local workflow:
+# 1. `just matchmaker-nats` starts local NATS with JetStream. The game server
+#    publishes readiness/capacity there, and the matchmaker writes assignments.
+# 2. `just lightyear-matchmaker-server-local` starts a static Lightrider game
+#    server that registers itself with the matchmaker through NATS.
+# 3. `just lightyear-matchmaker-service-local` starts the deployable
+#    lightyear_matchmaker_server with the NATS-backed static provider.
+# 4. `just lightyear-matchmaker-client-bot` requests a token over WebSocket and
+#    connects to the assigned game server.
+# 5. `just lightyear-matchmaker-local-smoke` runs the full local stack in one
+#    command and checks logs for assignment and client-connect events.
+matchmaker-help:
     #!/usr/bin/env bash
     set -euo pipefail
     cat <<'EOF'
-    Bevygap local order:
-      1. just bevygap-nats-pull
-      2. just bevygap-nats
-      3. in another terminal: just bevygap-server-local
+    Lightyear Matchmaker local order:
+      1. just matchmaker-nats-pull
+      2. just matchmaker-nats
+      3. in another terminal: just lightyear-matchmaker-server-local
+      4. in another terminal: just lightyear-matchmaker-service-local
+      5. just lightyear-matchmaker-client-bot
 
-    That validates the server-side NATS/context/cert-digest path.
-
-    Mock token flow:
-      4. just bevygap-matchmaker-mock-stack-local
-      5. just bevygap-client-bot
-
-    One-command mock smoke:
-      just bevygap-local-smoke
+    One-command local static smoke:
+      just lightyear-matchmaker-local-smoke
 
     Real Edgegap token flow:
-      just bevygap-matchmaker-local app_name=<edgegap-app> app_version=<edgegap-version>
+      EDGEGAP_API_KEY=... \
+      LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE=edgegap \
+      EDGEGAP_APP_NAME=lightrider \
+      EDGEGAP_APP_VERSION=<edgegap-version> \
+        just lightyear-matchmaker-service-local
 
-    The real token flow creates Edgegap sessions, so EDGEGAP_API_KEY must be exported
-    or present in secrets/edgegap.env.
-
-    The local server recipe uses BEVYGAP_CONTEXT_MODE=local by default, so it
-    synthesizes Edgegap context in-process instead of requiring a fake context
-    HTTP server.
+    The Edgegap flow creates Edgegap sessions, so EDGEGAP_API_KEY must be
+    exported or present in secrets/edgegap.env.
 
     Local NATS uses:
       NATS_HOST=127.0.0.1:4222
       NATS_USER=lightrider
       NATS_PASSWORD=lightrider
-      NATS_INSECURE=1
-      BEVYGAP_NATS_NAMESPACE=lightrider_dev
+      LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE=lightrider_dev
 
-    BEVYGAP_NATS_NAMESPACE scopes Bevygap buckets, streams, and subjects so
-    multiple app versions can share one NATS instance without mixing sessions.
+    LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE scopes buckets, streams, and subjects
+    so multiple app versions can share one NATS instance without mixing state.
     EOF
 
-bevygap-nats-pull:
+matchmaker-nats-pull:
     podman pull nats:latest
 
-bevygap-nats:
+# Run a disposable local NATS + JetStream instance for matchmaker smoke tests.
+matchmaker-nats:
     #!/usr/bin/env bash
     set -euo pipefail
     podman rm -f lightrider-nats >/dev/null 2>&1 || true
@@ -212,16 +206,14 @@ bevygap-nats:
       nats:latest \
       -js \
       -m 8222 \
-      --user lightrider \
-      --pass lightrider
+      --user "${NATS_USER:-lightrider}" \
+      --pass "${NATS_PASSWORD:-lightrider}"
 
-bevygap-nats-health:
+matchmaker-nats-health:
     curl -fsS http://127.0.0.1:8222/healthz
 
-matchmaker-nats-pull: bevygap-nats-pull
-
-matchmaker-nats: bevygap-nats
-
+# Start a local game server that publishes readiness/capacity to NATS. This is
+# the static-provider path used by the VPS-hosted static game server too.
 lightyear-matchmaker-server-local config="config/test.ron" port="7777":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -233,7 +225,7 @@ lightyear-matchmaker-server-local config="config/test.ron" port="7777":
     export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
     export NATS_USER="${NATS_USER:-lightrider}"
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
-    export LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}"
+    export LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-lightrider_dev}}"
     export LIGHTRIDER_SERVER_ID="${LIGHTRIDER_SERVER_ID:-local-lightrider}"
     export LIGHTRIDER_MATCHMAKER_PROVIDER="${LIGHTRIDER_MATCHMAKER_PROVIDER:-static}"
     export LIGHTRIDER_PUBLIC_IP="${LIGHTRIDER_PUBLIC_IP:-127.0.0.1}"
@@ -241,9 +233,16 @@ lightyear-matchmaker-server-local config="config/test.ron" port="7777":
     export SELF_SIGNED_SANS="${SELF_SIGNED_SANS:-127.0.0.1,localhost}"
     cargo run -j 2 -p server --features lightyear-matchmaker --bin lightrider-server -- --headless --matchmaker --port {{port}} --config {{config}}
 
+# Start the standalone matchmaker. By default it uses live static capacity from
+# NATS; set LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE=edgegap to use Edgegap.
 lightyear-matchmaker-service-local bind="127.0.0.1:3000" config_path="":
     #!/usr/bin/env bash
     set -euo pipefail
+    for env_file in secrets/edgegap.env secrets/prod-netcode.env secrets/nats.env; do
+      if [[ -f "$env_file" ]]; then
+        source "$env_file"
+      fi
+    done
     config="{{config_path}}"
     if [[ -z "$config" ]]; then
       config="$(mktemp -t lightrider-matchmaker.XXXXXX.toml)"
@@ -257,16 +256,19 @@ lightyear-matchmaker-service-local bind="127.0.0.1:3000" config_path="":
     nats_host="${NATS_HOST:-127.0.0.1:4222}"
     nats_user="${NATS_USER:-lightrider}"
     nats_password="${NATS_PASSWORD:-lightrider}"
-    namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}"
+    namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-lightrider_dev}}"
     protocol_id="${LIGHTRIDER_PROTOCOL_ID:-0}"
     private_key="${LIGHTRIDER_PRIVATE_KEY:-}"
+    app_name="${EDGEGAP_APP_NAME:-lightrider}"
+    app_version="${EDGEGAP_APP_VERSION:-dev}"
+    allocation_source="${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-nats_static}"
     cat > "$config" <<EOF
     [server]
     bind = "{{bind}}"
 
     [game]
-    name = "lightrider"
-    version = "dev"
+    name = "$app_name"
+    version = "$app_version"
 
     [lightyear]
     protocol_id = $protocol_id
@@ -275,20 +277,36 @@ lightyear-matchmaker-service-local bind="127.0.0.1:3000" config_path="":
     token_expire_secs = 30
 
     [nats]
-    url = "nats://$nats_user:$nats_password@$nats_host"
+    url = "nats://$nats_host"
+    username = "$nats_user"
+    password = "$nats_password"
     namespace = "$namespace"
 
     [allocation]
-    source = "nats_static"
+    source = "$allocation_source"
     require_assignment_prepare = true
     assignment_prepare_timeout_ms = 5000
     assignment_prepare_poll_ms = 25
+
+    [edgegap_provider]
+    app = "$app_name"
+    version = "$app_version"
+    api_key_env = "EDGEGAP_API_KEY"
+    base_url = "${EDGEGAP_API_BASE_URL:-https://api.edgegap.com}"
+    port_name = "${EDGEGAP_GAME_PORT_NAME:-game}"
+    session_ready_timeout_secs = ${LIGHTYEAR_MATCHMAKER_EDGEGAP_READY_TIMEOUT_SECS:-120}
+    session_poll_ms = ${LIGHTYEAR_MATCHMAKER_EDGEGAP_POLL_MS:-500}
+    release_missing_ok = true
     EOF
     cargo run -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server -- --config "$config"
 
+# Run one headless client through the matchmaker WebSocket API.
 lightyear-matchmaker-client-bot id="3001" config="config/test.ron" matchmaker_url="ws://127.0.0.1:3000/ws" game="lightrider" version="dev" room="auto":
     cargo run -j 2 -p client --features lightyear-matchmaker --bin lightrider-client -- --headless --mode bot --client-id {{id}} --config {{config}} --room {{room}} --matchmaker-url {{matchmaker_url}} --matchmaker-game {{game}} --matchmaker-version {{version}}
 
+# Build server/client/matchmaker binaries, run NATS, run a local static game
+# server, run the matchmaker, then verify a bot can obtain a Lightyear token and
+# connect. Logs are written under logs/lightyear-matchmaker/.
 lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777" matchmaker_port="3000" client_id="3001":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -298,6 +316,10 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
 
     target_dir="${CARGO_TARGET_DIR:-target}"
     matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-../lightyear-matchmaker/target}"
+    nats_host="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_HOST:-127.0.0.1:4222}"
+    nats_user="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_USER:-lightrider}"
+    nats_password="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_PASSWORD:-lightrider}"
+    namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-lightrider_dev}}"
     cargo build -j 2 -p server --features lightyear-matchmaker --bin lightrider-server
     cargo build -j 2 -p client --features lightyear-matchmaker --bin lightrider-client
     CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
@@ -312,7 +334,7 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
     }
     trap cleanup EXIT
 
-    just matchmaker-nats > "$run_dir/nats.log" 2>&1 &
+    NATS_USER="$nats_user" NATS_PASSWORD="$nats_password" just matchmaker-nats > "$run_dir/nats.log" 2>&1 &
     pids+=("$!")
     for _ in $(seq 1 40); do
       curl -fsS http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
@@ -321,10 +343,10 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
     curl -fsS http://127.0.0.1:8222/healthz > "$run_dir/nats-health.json"
 
     env \
-      NATS_HOST="${NATS_HOST:-127.0.0.1:4222}" \
-      NATS_USER="${NATS_USER:-lightrider}" \
-      NATS_PASSWORD="${NATS_PASSWORD:-lightrider}" \
-      LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}" \
+      NATS_HOST="$nats_host" \
+      NATS_USER="$nats_user" \
+      NATS_PASSWORD="$nats_password" \
+      LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="$namespace" \
       LIGHTRIDER_SERVER_ID="${LIGHTRIDER_SERVER_ID:-local-lightrider}" \
       LIGHTRIDER_MATCHMAKER_PROVIDER="${LIGHTRIDER_MATCHMAKER_PROVIDER:-static}" \
       LIGHTRIDER_PUBLIC_IP="${LIGHTRIDER_PUBLIC_IP:-127.0.0.1}" \
@@ -356,8 +378,10 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
     token_expire_secs = 30
 
     [nats]
-    url = "nats://${NATS_USER:-lightrider}:${NATS_PASSWORD:-lightrider}@${NATS_HOST:-127.0.0.1:4222}"
-    namespace = "${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}}"
+    url = "nats://$nats_host"
+    username = "$nats_user"
+    password = "$nats_password"
+    namespace = "$namespace"
 
     [allocation]
     source = "nats_static"
@@ -402,324 +426,19 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
 
     echo "lightyear-matchmaker local smoke passed: $run_dir"
 
-bevygap-fake-context bind="127.0.0.1" port="9876" public_ip="127.0.0.1" game_port="7777":
+# Compile the static-capable game server locally. This is useful before building
+# the container image or when testing the VPS server entrypoint by hand.
+game-server-build-local:
+    cargo build -j 2 -p server --features lightyear-matchmaker --bin lightrider-server
+
+# Compile the standalone lightyear_matchmaker_server from the sibling repo.
+matchmaker-build-local:
     #!/usr/bin/env bash
     set -euo pipefail
-    LIGHTRIDER_FAKE_CONTEXT_BIND="{{bind}}" \
-    LIGHTRIDER_FAKE_CONTEXT_PORT="{{port}}" \
-    LIGHTRIDER_FAKE_CONTEXT_PUBLIC_IP="{{public_ip}}" \
-    LIGHTRIDER_FAKE_CONTEXT_GAME_PORT="{{game_port}}" \
-      python3 - <<'PY'
-    import json
-    import os
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-../lightyear-matchmaker/target}"
+    CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
 
-    bind = os.environ["LIGHTRIDER_FAKE_CONTEXT_BIND"]
-    port = int(os.environ["LIGHTRIDER_FAKE_CONTEXT_PORT"])
-    public_ip = os.environ["LIGHTRIDER_FAKE_CONTEXT_PUBLIC_IP"]
-    game_port = int(os.environ["LIGHTRIDER_FAKE_CONTEXT_GAME_PORT"])
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            body = {
-                "request_id": "local-lightrider",
-                "public_ip": public_ip,
-                "fqdn": "localhost",
-                "sockets": 1,
-                "location": {"city": "Local", "country": "Dev"},
-                "ports": {
-                    "game": {
-                        "name": "game",
-                        "internal": game_port,
-                        "external": game_port,
-                        "protocol": "UDP",
-                    }
-                },
-            }
-            data = json.dumps(body).encode("utf-8")
-            self.send_response(200)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def log_message(self, fmt, *args):
-            print("fake-edgegap-context:", fmt % args)
-
-    print(f"fake Edgegap context listening on http://{bind}:{port}/context/local-lightrider/1")
-    HTTPServer((bind, port), Handler).serve_forever()
-    PY
-
-bevygap-server-local config="config/test.ron" port="7777" context_url="http://127.0.0.1:9876/context/local-lightrider/1":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ -f secrets/admin.env ]]; then
-      set -a
-      source secrets/admin.env
-      set +a
-    fi
-    export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
-    export NATS_USER="${NATS_USER:-lightrider}"
-    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
-    export NATS_INSECURE="${NATS_INSECURE:-1}"
-    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
-    export BEVYGAP_CONTEXT_MODE="${BEVYGAP_CONTEXT_MODE:-local}"
-    export ARBITRIUM_REQUEST_ID="${ARBITRIUM_REQUEST_ID:-local-lightrider}"
-    export ARBITRIUM_DELETE_URL="${ARBITRIUM_DELETE_URL:-http://127.0.0.1:9876/delete/local-lightrider}"
-    export ARBITRIUM_DELETE_TOKEN="${ARBITRIUM_DELETE_TOKEN:-local-delete-token}"
-    export ARBITRIUM_DEPLOYMENT_LOCATION="${ARBITRIUM_DEPLOYMENT_LOCATION:-{\"city\":\"Local\",\"country\":\"Dev\"}}"
-    export ARBITRIUM_CONTEXT_URL="${ARBITRIUM_CONTEXT_URL:-{{context_url}}}"
-    export ARBITRIUM_CONTEXT_TOKEN="${ARBITRIUM_CONTEXT_TOKEN:-local-context-token}"
-    export ARBITRIUM_PUBLIC_IP="${ARBITRIUM_PUBLIC_IP:-127.0.0.1}"
-    export ARBITRIUM_PORTS_MAPPING="${ARBITRIUM_PORTS_MAPPING:-{\"game\":{\"internal\":{{port}},\"external\":{{port}},\"protocol\":\"UDP\"}}}"
-    export SELF_SIGNED_SANS="${SELF_SIGNED_SANS:-127.0.0.1,localhost}"
-    cargo run -j 2 -p server --features bevygap --bin lightrider-server -- --headless --bevygap --port {{port}} --config {{config}}
-
-bevygap-matchmaker-local app_name="lightrider" app_version="dev":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    for env_file in secrets/edgegap.env secrets/prod-netcode.env secrets/nats.env; do
-      if [[ -f "$env_file" ]]; then
-        source "$env_file"
-      fi
-    done
-    export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
-    export NATS_USER="${NATS_USER:-lightrider}"
-    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
-    export NATS_INSECURE="${NATS_INSECURE:-1}"
-    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
-    echo "bevygap-matchmaker-local: NATS_HOST=$NATS_HOST NATS_USER=$NATS_USER NATS_INSECURE=$NATS_INSECURE BEVYGAP_NATS_NAMESPACE=$BEVYGAP_NATS_NAMESPACE"
-    if [[ -z "${EDGEGAP_API_KEY:-}" && -n "${EDGEGAP_API_TOKEN:-}" ]]; then
-      export EDGEGAP_API_KEY="$EDGEGAP_API_TOKEN"
-    fi
-    if [[ -z "${EDGEGAP_API_KEY:-}" && -n "${EDGEGAP_TOKEN:-}" ]]; then
-      export EDGEGAP_API_KEY="$EDGEGAP_TOKEN"
-    fi
-    : "${EDGEGAP_API_KEY:?set EDGEGAP_API_KEY, EDGEGAP_API_TOKEN, or EDGEGAP_TOKEN in the environment or secrets/edgegap.env}"
-    cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker -- \
-      --app-name {{app_name}} \
-      --app-version {{app_version}} \
-      --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}" \
-      --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
-      --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
-      --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
-      --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}" \
-      --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}" \
-      ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"}
-
-bevygap-matchmaker-mock-local app_name="lightrider" app_version="dev" public_ip="127.0.0.1" port="7777":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
-    export NATS_USER="${NATS_USER:-lightrider}"
-    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
-    export NATS_INSECURE="${NATS_INSECURE:-1}"
-    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
-    cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker -- \
-      --app-name {{app_name}} \
-      --app-version {{app_version}} \
-      --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}" \
-      --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
-      --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
-      --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
-      --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}" \
-      --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}" \
-      ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"} \
-      --mock-edgegap \
-      --mock-public-ip {{public_ip}} \
-      --mock-external-port {{port}} \
-      --mock-deployment-request-id "${ARBITRIUM_REQUEST_ID:-local-lightrider}"
-
-bevygap-matchmaker-httpd-local bind="127.0.0.1:3000" cors="http://localhost:8000" fake_ip="81.128.157.100":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    for env_file in secrets/nats.env; do
-      if [[ -f "$env_file" ]]; then
-        source "$env_file"
-      fi
-    done
-    export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
-    export NATS_USER="${NATS_USER:-lightrider}"
-    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
-    export NATS_INSECURE="${NATS_INSECURE:-1}"
-    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
-    echo "bevygap-matchmaker-httpd-local: NATS_HOST=$NATS_HOST NATS_USER=$NATS_USER NATS_INSECURE=$NATS_INSECURE BEVYGAP_NATS_NAMESPACE=$BEVYGAP_NATS_NAMESPACE"
-    cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker_httpd -- \
-      --bind {{bind}} \
-      --cors {{cors}} \
-      --fake-ip {{fake_ip}}
-
-bevygap-matchmaker-mock-stack-local app_name="lightrider" app_version="dev" public_ip="127.0.0.1" game_port="7777" bind="127.0.0.1:3000" cors="http://localhost:8000" fake_ip="81.128.157.100":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    pids=()
-    cleanup() {
-      for pid in "${pids[@]}"; do
-        kill "$pid" 2>/dev/null || true
-      done
-      wait 2>/dev/null || true
-    }
-    trap cleanup EXIT INT TERM
-    export NATS_HOST="${NATS_HOST:-127.0.0.1:4222}"
-    export NATS_USER="${NATS_USER:-lightrider}"
-    export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
-    export NATS_INSECURE="${NATS_INSECURE:-1}"
-    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}"
-    cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker -- \
-      --app-name {{app_name}} \
-      --app-version {{app_version}} \
-      --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}" \
-      --max-players-per-deployment "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}" \
-      --max-rooms-per-deployment "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}" \
-      --max-cpu-percent-per-deployment "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}" \
-      --cert-digest-timeout-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_TIMEOUT_MS:-15000}" \
-      --cert-digest-poll-ms "${BEVYGAP_CERT_DIGEST_LOOKUP_POLL_MS:-200}" \
-      ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"} \
-      --mock-edgegap \
-      --mock-public-ip {{public_ip}} \
-      --mock-external-port {{game_port}} \
-      --mock-deployment-request-id "${ARBITRIUM_REQUEST_ID:-local-lightrider}" &
-    pids+=("$!")
-    cargo run -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker_httpd -- \
-      --bind {{bind}} \
-      --cors {{cors}} \
-      --fake-ip {{fake_ip}}
-
-bevygap-client-bot id="3001" config="config/test.ron" matchmaker_url="ws://127.0.0.1:3000/matchmaker/ws" game="lightrider" version="dev" room="auto":
-    cargo run -j 2 -p client --features bevygap --bin lightrider-client -- --headless --mode bot --client-id {{id}} --config {{config}} --room {{room}} --matchmaker-url {{matchmaker_url}} --matchmaker-game {{game}} --matchmaker-version {{version}}
-
-bevygap-local-smoke seconds="8" config="config/test.ron" port="7777" httpd_port="3000" context_port="9876" client_id="3001":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # context_port is retained for old command lines; the server now uses
-    # BEVYGAP_CONTEXT_MODE=local and does not need a fake context HTTP server.
-    run_dir="logs/bevygap/$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$run_dir"
-    ln -sfn "$(basename "$run_dir")" logs/bevygap/latest
-
-    cargo build -j 2 -p server --features bevygap --bin lightrider-server
-    cargo build -j 2 -p client --features bevygap --bin lightrider-client
-    cargo build -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker --bin bevygap_matchmaker
-    cargo build -j 2 --manifest-path ../bevygap/Cargo.toml -p bevygap_matchmaker_httpd --bin bevygap_matchmaker_httpd
-
-    pids=()
-    cleanup() {
-      for pid in "${pids[@]}"; do
-        kill "$pid" 2>/dev/null || true
-      done
-      wait 2>/dev/null || true
-      podman rm -f lightrider-nats >/dev/null 2>&1 || true
-    }
-    trap cleanup EXIT
-
-    just bevygap-nats > "$run_dir/nats.log" 2>&1 &
-    pids+=("$!")
-    for _ in $(seq 1 40); do
-      curl -fsS http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
-      sleep 0.25
-    done
-    curl -fsS http://127.0.0.1:8222/healthz > "$run_dir/nats-health.json"
-
-    env \
-      NATS_HOST="${NATS_HOST:-127.0.0.1:4222}" \
-      NATS_USER="${NATS_USER:-lightrider}" \
-      NATS_PASSWORD="${NATS_PASSWORD:-lightrider}" \
-      NATS_INSECURE="${NATS_INSECURE:-1}" \
-      BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}" \
-      BEVYGAP_CONTEXT_MODE="${BEVYGAP_CONTEXT_MODE:-local}" \
-      ARBITRIUM_REQUEST_ID="${ARBITRIUM_REQUEST_ID:-local-lightrider}" \
-      ARBITRIUM_DELETE_URL="${ARBITRIUM_DELETE_URL:-http://127.0.0.1:{{context_port}}/delete/local-lightrider}" \
-      ARBITRIUM_DELETE_TOKEN="${ARBITRIUM_DELETE_TOKEN:-local-delete-token}" \
-      ARBITRIUM_DEPLOYMENT_LOCATION="${ARBITRIUM_DEPLOYMENT_LOCATION:-{\"city\":\"Local\",\"country\":\"Dev\"}}" \
-      ARBITRIUM_CONTEXT_URL="${ARBITRIUM_CONTEXT_URL:-http://127.0.0.1:{{context_port}}/context/local-lightrider/1}" \
-      ARBITRIUM_CONTEXT_TOKEN="${ARBITRIUM_CONTEXT_TOKEN:-local-context-token}" \
-      ARBITRIUM_PUBLIC_IP="${ARBITRIUM_PUBLIC_IP:-127.0.0.1}" \
-      ARBITRIUM_PORTS_MAPPING="${ARBITRIUM_PORTS_MAPPING:-{\"game\":{\"internal\":{{port}},\"external\":{{port}},\"protocol\":\"UDP\"}}}" \
-      SELF_SIGNED_SANS="${SELF_SIGNED_SANS:-127.0.0.1,localhost}" \
-      target/debug/lightrider-server --headless --bevygap --port {{port}} --config {{config}} \
-      > "$run_dir/server.log" 2>&1 &
-    pids+=("$!")
-    for _ in $(seq 1 80); do
-      if rg -q "CertDigest added|BevygapReady|CONTEXT added" "$run_dir/server.log"; then
-        break
-      fi
-      sleep 0.25
-    done
-
-    env \
-      NATS_HOST="${NATS_HOST:-127.0.0.1:4222}" \
-      NATS_USER="${NATS_USER:-lightrider}" \
-      NATS_PASSWORD="${NATS_PASSWORD:-lightrider}" \
-      NATS_INSECURE="${NATS_INSECURE:-1}" \
-      BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}" \
-      ../bevygap/target/debug/bevygap_matchmaker \
-        --app-name lightrider \
-        --app-version dev \
-        --lightyear-protocol-id "${LIGHTRIDER_PROTOCOL_ID:-0}" \
-        ${LIGHTRIDER_PRIVATE_KEY:+--lightyear-private-key "$LIGHTRIDER_PRIVATE_KEY"} \
-        --mock-edgegap \
-        --mock-public-ip 127.0.0.1 \
-        --mock-external-port {{port}} \
-        --mock-deployment-request-id "${ARBITRIUM_REQUEST_ID:-local-lightrider}" \
-      > "$run_dir/matchmaker.log" 2>&1 &
-    pids+=("$!")
-    for _ in $(seq 1 80); do
-      if rg -q "Listening for session requests" "$run_dir/matchmaker.log"; then
-        break
-      fi
-      sleep 0.25
-    done
-
-    env \
-      NATS_HOST="${NATS_HOST:-127.0.0.1:4222}" \
-      NATS_USER="${NATS_USER:-lightrider}" \
-      NATS_PASSWORD="${NATS_PASSWORD:-lightrider}" \
-      NATS_INSECURE="${NATS_INSECURE:-1}" \
-      BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE:-lightrider_dev}" \
-      ../bevygap/target/debug/bevygap_matchmaker_httpd \
-        --bind "127.0.0.1:{{httpd_port}}" \
-        --cors "http://localhost:8000" \
-        --fake-ip "81.128.157.100" \
-      > "$run_dir/httpd.log" 2>&1 &
-    pids+=("$!")
-    for _ in $(seq 1 80); do
-      if rg -q "bevygap_matchmaker_httpd listening" "$run_dir/httpd.log"; then
-        break
-      fi
-      sleep 0.25
-    done
-
-    timeout "$(({{seconds}} + 8))" \
-      target/debug/lightrider-client \
-        --headless --mode bot --client-id {{client_id}} --config {{config}} --room auto \
-        --matchmaker-url "ws://127.0.0.1:{{httpd_port}}/matchmaker/ws" \
-        --matchmaker-game lightrider \
-        --matchmaker-version dev \
-        > "$run_dir/client.log" 2>&1 || true
-
-    sleep {{seconds}}
-
-    required_patterns=(
-      "Extracted cert digest"
-      "CertDigest added"
-      "Using mock Edgegap session"
-      "Session Ready"
-      "Got matchmaker response"
-      "Connecting to server"
-      "Lightyear connect event"
-      "Active connection put"
-      "Active connection put observed"
-    )
-    for pattern in "${required_patterns[@]}"; do
-      if ! rg -q "$pattern" "$run_dir"; then
-        echo "bevygap local smoke failed: missing '$pattern' in $run_dir" >&2
-        echo "logs: $run_dir" >&2
-        exit 1
-      fi
-    done
-
-    echo "bevygap local smoke passed: $run_dir"
-
+# Build the WASM client with the Lightyear Matchmaker feature enabled.
 web-build:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -743,7 +462,7 @@ web-build:
     fi
     rustup run nightly cargo build -j 2 \
       -p web_client \
-      --features bevygap \
+      --features lightyear-matchmaker \
       --bin lightrider-web \
       --target wasm32-unknown-unknown
     rm -rf web/pkg
@@ -760,7 +479,7 @@ web-serve bind="127.0.0.1" port="8000": web-build
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Serving http://localhost:{{port}}/"
-    echo "For the local Bevygap stack, open:"
+    echo "For the local Lightyear Matchmaker stack, open:"
     echo "http://localhost:{{port}}/?matchmaker_url=ws://127.0.0.1:3000/matchmaker/ws&matchmaker_game=lightrider&matchmaker_version=dev"
     python3 -m http.server "{{port}}" --bind "{{bind}}" --directory web
 
@@ -773,10 +492,14 @@ clean-incremental:
 clean-edgegap-cache:
     podman builder prune -f
 
+# Stage the multi-repo image build context used by both game-server and
+# matchmaker images. The Dockerfiles expect these sibling directories under
+# .edgegap-build/context.
 edgegap-context:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p .edgegap-build/context
+    rm -rf .edgegap-build/context/bevygap
     rsync -a --delete \
       --exclude .edgegap-build \
       --exclude .git \
@@ -792,7 +515,7 @@ edgegap-context:
     rsync -a --delete \
       --exclude .git \
       --exclude target \
-      ../bevygap/ .edgegap-build/context/bevygap/
+      ../lightyear-matchmaker/ .edgegap-build/context/lightyear-matchmaker/
     if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
       cp /etc/ssl/certs/ca-certificates.crt .edgegap-build/context/host-ca-certificates.crt
     else
@@ -807,6 +530,8 @@ edgegap-login:
       --username "$EDGEGAP_REGISTRY_USERNAME" \
       --password-stdin
 
+# Build the deployable game-server image. The historical recipe name is kept
+# because it also builds the image used by Edgegap app versions.
 edgegap-build *args: edgegap-context
     #!/usr/bin/env bash
     set -euo pipefail
@@ -933,6 +658,17 @@ edgegap-build-push *args:
     done
     just edgegap-build tag="$tag" memory="$build_memory" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
     just edgegap-push "$tag"
+
+# Clear aliases for the game-server image path. These call the older
+# edgegap-* recipes because the image is still the Edgegap app-version image.
+game-server-build *args:
+    just edgegap-build {{args}}
+
+game-server-push tag=edgegap-default-tag:
+    just edgegap-push "{{tag}}"
+
+game-server-build-push *args:
+    just edgegap-build-push {{args}}
 
 edgegap-app-show version="dev" app="lightrider":
     tools/edgegap_app_version.sh show --app "{{app}}" --version "{{version}}"
@@ -1150,9 +886,110 @@ edgegap-release-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app=
     export NATS_USER="${NATS_USER:-lightrider}"
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
     export EDGEGAP_NATS_INSECURE="${EDGEGAP_NATS_INSECURE:-1}"
-    export BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE_OVERRIDE:-{{app}}_${edgegap_version}}"
+    export LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-{{app}}_${edgegap_version}}"
     just edgegap-app-sync "{{tag}}" "$edgegap_version" "{{app}}"
     just edgegap-app-verify "{{tag}}" "$edgegap_version" "{{app}}"
+
+# Pull one image on the static/control VPS and restart the corresponding
+# systemd service. Public wrappers below choose the image/service pair.
+_remote-pull-service service image_env image_name *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host=""
+    tag=""
+    image=""
+    ssh_port="22"
+    ssh_key=""
+    env_file="secrets/web-server.env"
+    restart="1"
+    positional=0
+    for arg in {{args}}; do
+      case "$arg" in
+        host=*) host="${arg#host=}" ;;
+        tag=*) tag="${arg#tag=}" ;;
+        image=*) image="${arg#image=}" ;;
+        ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
+        port=*) ssh_port="${arg#port=}" ;;
+        ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
+        env=*) env_file="${arg#env=}" ;;
+        restart=*) restart="${arg#restart=}" ;;
+        *)
+          case "$positional" in
+            0) host="$arg" ;;
+            1) tag="$arg" ;;
+            2) ssh_port="$arg" ;;
+            3) env_file="$arg" ;;
+            4) ssh_key="$arg" ;;
+            *)
+              echo "unexpected extra argument for remote pull: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    if [[ -z "$host" ]]; then
+      echo "usage: just static-server-pull-{game-server,matchmaker} host=<vps-ip-or-host> [tag=<tag>|image=<image>] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key] [restart=1]" >&2
+      exit 2
+    fi
+    if [[ -f "$env_file" ]]; then
+      source "$env_file"
+    fi
+    if [[ -f secrets/edgegap.env ]]; then
+      source secrets/edgegap.env
+    fi
+    image_env="{{image_env}}"
+    configured_image="${!image_env:-}"
+    if [[ -z "$image" ]]; then
+      if [[ -n "$configured_image" && -z "$tag" ]]; then
+        image="$configured_image"
+      else
+        : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT is required to build the image name}"
+        registry="${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}"
+        tag="${tag:-${LIGHTRIDER_MATCHMAKER_TAG:-${EDGEGAP_APP_VERSION:-{{edgegap-default-tag}}}}}"
+        image="$registry/$EDGEGAP_REGISTRY_PROJECT/{{image_name}}:$tag"
+      fi
+    fi
+    ssh_key="${ssh_key/#\~\//$HOME/}"
+    ssh_opts=(-p "$ssh_port")
+    if [[ -n "$ssh_key" ]]; then
+      test -f "$ssh_key" || {
+        echo "SSH key not found: $ssh_key" >&2
+        exit 1
+      }
+      ssh_opts+=(-i "$ssh_key" -o IdentitiesOnly=yes)
+    fi
+    registry_url="${EDGEGAP_REGISTRY_URL:-}"
+    registry_user="${EDGEGAP_REGISTRY_USERNAME:-}"
+    registry_token="${EDGEGAP_REGISTRY_TOKEN:-}"
+    ssh "${ssh_opts[@]}" "root@$host" \
+      "REGISTRY_URL=$(printf '%q' "$registry_url") REGISTRY_USER=$(printf '%q' "$registry_user") REGISTRY_TOKEN=$(printf '%q' "$registry_token") IMAGE=$(printf '%q' "$image") SERVICE=$(printf '%q' "{{service}}") RESTART=$(printf '%q' "$restart") bash -s" <<'REMOTE'
+    set -euo pipefail
+    if [[ -n "${REGISTRY_URL:-}" && -n "${REGISTRY_USER:-}" && -n "${REGISTRY_TOKEN:-}" ]]; then
+      printf '%s' "$REGISTRY_TOKEN" | podman login "$REGISTRY_URL" --username "$REGISTRY_USER" --password-stdin
+    fi
+    podman pull "$IMAGE"
+    if [[ "$RESTART" == "1" || "$RESTART" == "true" || "$RESTART" == "yes" ]]; then
+      systemctl restart "$SERVICE"
+      systemctl --no-pager --full status "$SERVICE" || true
+    fi
+    REMOTE
+    echo "Pulled $image on $host for {{service}}"
+
+# Pull and restart the static game-server service on the control/static VPS.
+static-server-pull-game-server *args:
+    just _remote-pull-service lightrider-static-server LIGHTRIDER_STATIC_SERVER_IMAGE lightrider-server {{args}}
+
+# Pull and restart the matchmaker/control service on the control/static VPS.
+static-server-pull-matchmaker *args:
+    just _remote-pull-service lightrider-matchmaker LIGHTRIDER_MATCHMAKER_IMAGE lightrider-matchmaker {{args}}
+
+# Pull both images on the control/static VPS. Matchmaker restarts first because
+# it owns NATS in the current single-container control-host layout.
+static-server-pull-all *args:
+    just static-server-pull-matchmaker {{args}}
+    just static-server-pull-game-server {{args}}
 
 deploy-web-server-pull *args:
     #!/usr/bin/env bash
@@ -1234,7 +1071,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       edgegap_app_version="${EDGEGAP_APP_VERSION:-{{tag}}}"
     fi
     if [[ -n "{{edgegap_version}}" ]]; then
-      BEVYGAP_NATS_NAMESPACE="${BEVYGAP_NATS_NAMESPACE_OVERRIDE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
+      LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
     fi
     web_domain="${LIGHTRIDER_WEB_DOMAIN:-}"
     web_domain="${web_domain#http://}"
@@ -1280,6 +1117,8 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env LIGHTRIDER_PROTOCOL_ID "$LIGHTRIDER_PROTOCOL_ID"
       write_env LIGHTRIDER_PRIVATE_KEY "$LIGHTRIDER_PRIVATE_KEY"
       write_env LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE "1"
+      write_env LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE "${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-nats_static}"
+      write_env LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE "${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
       write_env NATS_USER "${NATS_USER:-lightrider}"
       write_env NATS_PASSWORD "$NATS_PASSWORD"
       write_env NATS_ALLOW_INSECURE "${NATS_ALLOW_INSECURE:-1}"
@@ -1288,14 +1127,6 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env LIGHTRIDER_CADDY_EMAIL "${LIGHTRIDER_CADDY_EMAIL:-}"
       write_env MATCHMAKER_CORS "${MATCHMAKER_CORS:-$default_matchmaker_cors}"
       write_env LIGHTRIDER_MATCHMAKER_URL "${LIGHTRIDER_MATCHMAKER_URL:-$default_matchmaker_url}"
-      write_env BEVYGAP_NATS_NAMESPACE "${BEVYGAP_NATS_NAMESPACE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
-      write_env BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT "${BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT:-800}"
-      write_env BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT "${BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT:-16}"
-      write_env BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT "${BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT:-85}"
-      write_env BEVYGAP_STATIC_CLIENT_COUNTRY_CODES "${BEVYGAP_STATIC_CLIENT_COUNTRY_CODES:-US}"
-      if [[ -n "${BEVYGAP_GEOIP_DB:-}" ]]; then
-        write_env BEVYGAP_GEOIP_DB "$BEVYGAP_GEOIP_DB"
-      fi
       write_env LIGHTRIDER_RUN_STATIC_SERVER "${LIGHTRIDER_RUN_STATIC_SERVER:-1}"
       write_env LIGHTRIDER_STATIC_SERVER_IMAGE "${LIGHTRIDER_STATIC_SERVER_IMAGE:-${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-server:{{tag}}}"
       write_env LIGHTRIDER_STATIC_PUBLIC_IP "${LIGHTRIDER_STATIC_PUBLIC_IP:-{{host}}}"
@@ -1418,7 +1249,7 @@ web-server-enable-nats-tls-from-caddy *args:
     install -m 600 "$key" "$key_dest"
 
     tmp="$(mktemp)"
-    grep -v -E '^(NATS_ALLOW_INSECURE|NATS_TLS_CERT|NATS_TLS_KEY|MATCHMAKER_NATS_HOST|BEVYGAP_REQUIRE_SECURE_NATS)=' "$env_file" > "$tmp" || true
+    grep -v -E '^(NATS_ALLOW_INSECURE|NATS_TLS_CERT|NATS_TLS_KEY|MATCHMAKER_NATS_HOST|LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS)=' "$env_file" > "$tmp" || true
     cat "$tmp" > "$env_file"
     rm -f "$tmp"
     {
@@ -1426,18 +1257,19 @@ web-server-enable-nats-tls-from-caddy *args:
       printf 'NATS_TLS_CERT=%s\n' "$cert_dest"
       printf 'NATS_TLS_KEY=%s\n' "$key_dest"
       printf 'MATCHMAKER_NATS_HOST=%s:4222\n' "$domain"
-      printf 'BEVYGAP_REQUIRE_SECURE_NATS=1\n'
+      printf 'LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS=1\n'
     } >> "$env_file"
     chmod 600 "$env_file"
 
     if [[ -f "$static_env_file" ]]; then
       tmp="$(mktemp)"
-      grep -v -E '^(NATS_HOST|NATS_INSECURE|BEVYGAP_REQUIRE_SECURE_NATS)=' "$static_env_file" > "$tmp" || true
+      grep -v -E '^(NATS_HOST|NATS_INSECURE|LIGHTYEAR_MATCHMAKER_NATS_URL|LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS)=' "$static_env_file" > "$tmp" || true
       cat "$tmp" > "$static_env_file"
       rm -f "$tmp"
       {
         printf 'NATS_HOST=%s:4222\n' "$domain"
-        printf 'BEVYGAP_REQUIRE_SECURE_NATS=1\n'
+        printf 'LIGHTYEAR_MATCHMAKER_NATS_URL=tls://%s:4222\n' "$domain"
+        printf 'LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS=1\n'
       } >> "$static_env_file"
       chmod 600 "$static_env_file"
     fi

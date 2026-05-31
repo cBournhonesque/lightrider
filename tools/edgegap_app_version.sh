@@ -25,9 +25,10 @@ Configuration:
     NATS_HOST, NATS_USER, NATS_PASSWORD,
     LIGHTRIDER_PROTOCOL_ID, LIGHTRIDER_PRIVATE_KEY.
   Optional desired env:
-    BEVYGAP_NATS_NAMESPACE, BEVYGAP_SESSION_MAPPING_TTL_MS,
-    BEVYGAP_UNCLAIMED_SESSION_TTL_SECS, BEVYGAP_ACTIVE_CONNECTION_TTL_SECS,
-    BEVYGAP_CERT_DIGEST_TTL_SECS.
+    LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE,
+    LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS,
+    LIGHTYEAR_MATCHMAKER_ASSIGNMENTS_TTL_SECS,
+    LIGHTYEAR_MATCHMAKER_ACTIVE_CONNECTIONS_TTL_SECS.
 
   Authorization is sent exactly as provided, so keep the "token " prefix in the secret value.
 EOF
@@ -178,17 +179,21 @@ api_request() {
 build_desired_payload() {
   local mode="${1:-create}"
   local nats_insecure=""
-  local secure_nats="${BEVYGAP_REQUIRE_SECURE_NATS:-1}"
+  local secure_nats="${LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS:-1}"
   if truthy "${EDGEGAP_NATS_INSECURE:-${NATS_INSECURE:-}}"; then
     nats_insecure="1"
     secure_nats="0"
+  fi
+  local nats_url="${LIGHTYEAR_MATCHMAKER_NATS_URL:-}"
+  if [[ -z "$nats_url" && "$secure_nats" == "1" && "$NATS_HOST" != *"://"* ]]; then
+    nats_url="tls://${NATS_HOST}"
   fi
 
   local include_registry_credentials=1
   if [[ "${EDGEGAP_INCLUDE_REGISTRY_CREDENTIALS:-1}" == "0" ]]; then
     include_registry_credentials=0
   fi
-  local bevygap_nats_namespace="${BEVYGAP_NATS_NAMESPACE:-${app}_${version}}"
+  local matchmaker_nats_namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${app}_${version}}"
 
   local private_username=""
   local private_token=""
@@ -211,9 +216,10 @@ build_desired_payload() {
     --arg protocol "${EDGEGAP_GAME_PROTOCOL:-UDP}" \
     --arg config_path "${LIGHTRIDER_CONFIG:-/app/config/default.ron}" \
     --arg nats_host "$NATS_HOST" \
+    --arg nats_url "$nats_url" \
     --arg nats_user "$NATS_USER" \
     --arg nats_password "$NATS_PASSWORD" \
-    --arg bevygap_nats_namespace "$bevygap_nats_namespace" \
+    --arg matchmaker_nats_namespace "$matchmaker_nats_namespace" \
     --arg protocol_id "$LIGHTRIDER_PROTOCOL_ID" \
     --arg private_key "$LIGHTRIDER_PRIVATE_KEY" \
     --arg require_production_netcode "${LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE:-1}" \
@@ -221,10 +227,8 @@ build_desired_payload() {
     --arg nats_insecure "$nats_insecure" \
     --arg nats_ca "${NATS_CA:-}" \
     --arg nats_ca_contents "${NATS_CA_CONTENTS:-}" \
-    --arg session_mapping_ttl_ms "${BEVYGAP_SESSION_MAPPING_TTL_MS:-}" \
-    --arg unclaimed_session_ttl_secs "${BEVYGAP_UNCLAIMED_SESSION_TTL_SECS:-}" \
-    --arg active_connection_ttl_secs "${BEVYGAP_ACTIVE_CONNECTION_TTL_SECS:-}" \
-    --arg cert_digest_ttl_secs "${BEVYGAP_CERT_DIGEST_TTL_SECS:-}" \
+    --arg assignments_ttl_secs "${LIGHTYEAR_MATCHMAKER_ASSIGNMENTS_TTL_SECS:-}" \
+    --arg active_connection_ttl_secs "${LIGHTYEAR_MATCHMAKER_ACTIVE_CONNECTIONS_TTL_SECS:-}" \
     --arg session_kind "${EDGEGAP_SESSION_KIND:-Seat}" \
     --arg session_sockets "${EDGEGAP_SESSION_SOCKETS:-50}" \
     --arg session_empty_ttl "${EDGEGAP_SESSION_EMPTY_TTL:-5}" \
@@ -263,22 +267,22 @@ build_desired_payload() {
       envs: [
         env_item("PORT"; $game_port; false),
         env_item("LIGHTRIDER_CONFIG"; $config_path; false),
-        env_item("LIGHTRIDER_BEVYGAP"; "1"; false),
+        env_item("LIGHTRIDER_MATCHMAKER"; "1"; false),
+        env_item("LIGHTRIDER_MATCHMAKER_PROVIDER"; "edgegap"; false),
         env_item("LIGHTRIDER_PROTOCOL_ID"; $protocol_id; false),
         env_item("LIGHTRIDER_PRIVATE_KEY"; $private_key; true),
         env_item("LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE"; $require_production_netcode; false),
         env_item("NATS_HOST"; $nats_host; false),
+        maybe_env("LIGHTYEAR_MATCHMAKER_NATS_URL"; $nats_url; false),
         env_item("NATS_USER"; $nats_user; false),
         env_item("NATS_PASSWORD"; $nats_password; true),
-        env_item("BEVYGAP_NATS_NAMESPACE"; $bevygap_nats_namespace; false),
-        env_item("BEVYGAP_REQUIRE_SECURE_NATS"; $secure_nats; false),
+        env_item("LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE"; $matchmaker_nats_namespace; false),
+        env_item("LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS"; $secure_nats; false),
         maybe_env("NATS_INSECURE"; $nats_insecure; false),
         maybe_env("NATS_CA"; $nats_ca; false),
         maybe_env("NATS_CA_CONTENTS"; $nats_ca_contents; true),
-        maybe_env("BEVYGAP_SESSION_MAPPING_TTL_MS"; $session_mapping_ttl_ms; false),
-        maybe_env("BEVYGAP_UNCLAIMED_SESSION_TTL_SECS"; $unclaimed_session_ttl_secs; false),
-        maybe_env("BEVYGAP_ACTIVE_CONNECTION_TTL_SECS"; $active_connection_ttl_secs; false),
-        maybe_env("BEVYGAP_CERT_DIGEST_TTL_SECS"; $cert_digest_ttl_secs; false)
+        maybe_env("LIGHTYEAR_MATCHMAKER_ASSIGNMENTS_TTL_SECS"; $assignments_ttl_secs; false),
+        maybe_env("LIGHTYEAR_MATCHMAKER_ACTIVE_CONNECTIONS_TTL_SECS"; $active_connection_ttl_secs; false)
       ]
     }
     + (if $payload_mode == "patch" then {} else {
