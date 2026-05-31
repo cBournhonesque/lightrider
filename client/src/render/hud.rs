@@ -8,7 +8,7 @@ use shared::config::{ArenaConfig, GameConfig};
 use shared::network::protocol::prelude::{
     Player, PlayerDeathStats, PlayerRank, PlayerScore, PlayerStatus, RoomId, TailPoints,
 };
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 const TOP_LEADERBOARD_ROWS: usize = 5;
 const NEARBY_LEADERBOARD_ROWS: usize = 5;
@@ -16,6 +16,7 @@ const MAX_LEADERBOARD_ROWS: usize = 10;
 const MINIMAP_WIDTH: f32 = 180.0;
 const MINIMAP_HEIGHT: f32 = 82.0;
 const MINIMAP_DOT_SIZE: f32 = 8.0;
+const MINIMAP_TRAIL_THICKNESS: f32 = 2.0;
 const MINIMAP_CROWN_WIDTH: f32 = 16.0;
 const MINIMAP_CROWN_HEIGHT: f32 = 14.0;
 const DEBUG_BUTTON_WIDTH: f32 = 78.0;
@@ -52,6 +53,14 @@ struct DebugStatsText;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 struct MiniMapDot(MiniMapDotKind);
+
+#[derive(Component)]
+struct MiniMapRoot;
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+struct MiniMapTrailSegment {
+    index: usize,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MiniMapDotKind {
@@ -102,6 +111,7 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
 
     commands
         .spawn((
+            MiniMapRoot,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),
@@ -147,18 +157,21 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 MiniMapDot(MiniMapDotKind::Leader),
                 minimap_node(Vec2::splat(MINIMAP_DOT_SIZE)),
                 BackgroundColor(Color::srgb(1.0, 0.86, 0.26)),
+                ZIndex(2),
                 Visibility::Hidden,
             ));
             parent.spawn((
                 MiniMapDot(MiniMapDotKind::LeaderCrown),
                 minimap_node(Vec2::new(MINIMAP_CROWN_WIDTH, MINIMAP_CROWN_HEIGHT)),
                 ImageNode::new(sheet.image()).with_rect(PowerlineFrame::Crown.rect()),
+                ZIndex(3),
                 Visibility::Hidden,
             ));
             parent.spawn((
                 MiniMapDot(MiniMapDotKind::Player),
                 minimap_node(Vec2::splat(MINIMAP_DOT_SIZE)),
                 BackgroundColor(Color::srgb(0.16, 0.78, 1.0)),
+                ZIndex(2),
                 Visibility::Hidden,
             ));
         });
@@ -354,18 +367,32 @@ fn update_leaderboard(
 }
 
 fn update_minimap(
+    mut commands: Commands,
     config: Res<GameConfig>,
+    minimap_root: Query<Entity, With<MiniMapRoot>>,
     players: Query<(&Player, &PlayerScore, &PlayerRank, &RoomId, Has<Controlled>)>,
     predicted_tails: Query<&TailPoints, With<Predicted>>,
     tails: Query<&TailPoints>,
-    mut dots: Query<(&MiniMapDot, &mut Node, &mut Visibility)>,
+    mut dots: Query<(&MiniMapDot, &mut Node, &mut Visibility), Without<MiniMapTrailSegment>>,
+    mut trail_segments: Query<
+        (
+            Entity,
+            &MiniMapTrailSegment,
+            &mut Node,
+            &mut BackgroundColor,
+            &mut Visibility,
+        ),
+        Without<MiniMapDot>,
+    >,
 ) {
     let local_player = players.iter().find(|(_, _, _, _, is_local)| *is_local);
     let local_room = local_player.map(|(_, _, _, room, _)| *room);
-    let local_position =
-        predicted_tails.single().ok().map(snake_head).or_else(|| {
-            local_player.and_then(|(player, _, _, _, _)| player_position(player, &tails))
-        });
+    let local_tail = predicted_tails.single().ok().or_else(|| {
+        local_player
+            .and_then(|(player, _, _, _, _)| player.snake)
+            .and_then(|snake| tails.get(snake).ok())
+    });
+    let local_position = local_tail.map(snake_head);
     let leader_position = local_room.and_then(|room| {
         players
             .iter()
@@ -392,6 +419,73 @@ fn update_minimap(
             *visibility = Visibility::Inherited;
         } else {
             *visibility = Visibility::Hidden;
+        }
+    }
+
+    sync_minimap_trail(
+        &mut commands,
+        minimap_root.single().ok(),
+        local_tail,
+        &config.arena,
+        &mut trail_segments,
+    );
+}
+
+fn sync_minimap_trail(
+    commands: &mut Commands,
+    minimap_root: Option<Entity>,
+    tail: Option<&TailPoints>,
+    arena: &ArenaConfig,
+    trail_segments: &mut Query<
+        (
+            Entity,
+            &MiniMapTrailSegment,
+            &mut Node,
+            &mut BackgroundColor,
+            &mut Visibility,
+        ),
+        Without<MiniMapDot>,
+    >,
+) {
+    let desired = tail
+        .map(|tail| minimap_trail_nodes(tail, arena))
+        .unwrap_or_default();
+    let mut seen = HashSet::with_capacity(desired.len());
+
+    for (index, node) in desired {
+        seen.insert(index);
+        let mut updated = false;
+        for (_, segment, mut existing_node, mut background, mut visibility) in
+            trail_segments.iter_mut()
+        {
+            if segment.index == index {
+                *existing_node = node.clone();
+                *background = minimap_trail_color();
+                *visibility = Visibility::Inherited;
+                updated = true;
+                break;
+            }
+        }
+        if !updated {
+            let Some(root) = minimap_root else {
+                continue;
+            };
+            commands.entity(root).with_children(|parent| {
+                parent.spawn((
+                    MiniMapTrailSegment { index },
+                    node,
+                    minimap_trail_color(),
+                    ZIndex(-1),
+                    Visibility::Inherited,
+                ));
+            });
+        }
+    }
+
+    for (entity, segment, _, _, mut visibility) in trail_segments.iter_mut() {
+        if !seen.contains(&segment.index) {
+            *visibility = Visibility::Hidden;
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -476,6 +570,55 @@ fn minimap_position_for_size(
     let normalized_y = (0.5 - (position.y / arena.height)).clamp(0.0, 1.0);
     let max = Vec2::new(MINIMAP_WIDTH - size.x, MINIMAP_HEIGHT - size.y).max(Vec2::ZERO);
     (Vec2::new(normalized_x * max.x, normalized_y * max.y) + offset).clamp(Vec2::ZERO, max)
+}
+
+fn minimap_trail_nodes(tail: &TailPoints, arena: &ArenaConfig) -> Vec<(usize, Node)> {
+    tail.pairs_front_to_back()
+        .enumerate()
+        .filter_map(|(index, (start, end))| {
+            let start = minimap_position_for_size(start.0, arena, Vec2::ZERO, Vec2::ZERO);
+            let end = minimap_position_for_size(end.0, arena, Vec2::ZERO, Vec2::ZERO);
+            minimap_trail_node(start, end).map(|node| (index, node))
+        })
+        .collect()
+}
+
+fn minimap_trail_node(start: Vec2, end: Vec2) -> Option<Node> {
+    let delta = end - start;
+    if delta.length_squared() <= f32::EPSILON {
+        return None;
+    }
+    let thickness = MINIMAP_TRAIL_THICKNESS;
+    let horizontal = delta.x.abs() >= delta.y.abs();
+    let (left, top, width, height) = if horizontal {
+        (
+            start.x.min(end.x),
+            start.y - thickness * 0.5,
+            delta.x.abs().max(thickness),
+            thickness,
+        )
+    } else {
+        (
+            start.x - thickness * 0.5,
+            start.y.min(end.y),
+            thickness,
+            delta.y.abs().max(thickness),
+        )
+    };
+    let left = left.clamp(0.0, MINIMAP_WIDTH);
+    let top = top.clamp(0.0, MINIMAP_HEIGHT);
+    Some(Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(left),
+        top: Val::Px(top),
+        width: Val::Px(width.min((MINIMAP_WIDTH - left).max(0.0))),
+        height: Val::Px(height.min((MINIMAP_HEIGHT - top).max(0.0))),
+        ..default()
+    })
+}
+
+fn minimap_trail_color() -> BackgroundColor {
+    BackgroundColor(Color::srgba(0.16, 0.78, 1.0, 0.72))
 }
 
 fn select_leaderboard_rows(entries: &mut [LeaderboardEntry]) -> Vec<LeaderboardEntry> {

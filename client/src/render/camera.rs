@@ -15,8 +15,8 @@ fn init_camera(mut commands: Commands) {
         Camera2d,
         Tonemapping::TonyMcMapface,
         Bloom {
-            intensity: 0.22,
-            low_frequency_boost: 0.8,
+            intensity: 0.34,
+            low_frequency_boost: 1.1,
             ..Bloom::NATURAL
         },
         DebandDither::Enabled,

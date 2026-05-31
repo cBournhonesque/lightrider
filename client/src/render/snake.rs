@@ -47,8 +47,6 @@ enum SnakeVisualPart {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum TailLayer {
-    GlowOuter,
-    GlowInner,
     Core,
 }
 
@@ -334,36 +332,28 @@ fn snake_visual_color(
 }
 
 impl TailLayer {
-    const ALL: [Self; 3] = [Self::GlowOuter, Self::GlowInner, Self::Core];
+    const ALL: [Self; 1] = [Self::Core];
 
     fn width(self, tail_width: f32) -> f32 {
         match self {
-            Self::GlowOuter => (tail_width * 10.0).max(10.0),
-            Self::GlowInner => (tail_width * 4.5).max(5.0),
             Self::Core => tail_width.max(1.25),
         }
     }
 
     fn color(self, color: SnakePaletteColor) -> Color {
         match self {
-            Self::GlowOuter => color.outer_glow(),
-            Self::GlowInner => color.inner_glow(),
             Self::Core => color.tail_core(),
         }
     }
 
     fn death_flash_color(self) -> Color {
         match self {
-            Self::GlowOuter => Color::linear_rgba(4.0, 4.0, 4.0, 0.05),
-            Self::GlowInner => Color::linear_rgba(5.0, 5.0, 5.0, 0.16),
             Self::Core => Color::linear_rgba(7.0, 7.0, 7.0, 1.0),
         }
     }
 
     fn z(self) -> f32 {
         match self {
-            Self::GlowOuter => SNAKE_TAIL_Z - 0.02,
-            Self::GlowInner => SNAKE_TAIL_Z - 0.01,
             Self::Core => SNAKE_TAIL_Z,
         }
     }
@@ -412,10 +402,20 @@ fn spawn_snake_death_animations(
 
     let tail_width = config.render.tail_width.max(1.0);
     for death in deaths.read() {
-        let Ok((snake, tail, has_player)) = tails.get(death.message.killed_snake) else {
+        let live_tail = tails.get(death.message.killed_snake).ok();
+        let tail = live_tail.map(|(_, tail, _)| tail).or(death.tail.as_ref());
+        let Some(tail) = tail else {
             continue;
         };
-        let color = snake_visual_color(snake, has_player, &players);
+        let color = live_tail
+            .map(|(snake, _, has_player)| snake_visual_color(snake, has_player, &players))
+            .or_else(|| {
+                players
+                    .get(death.message.killed_player)
+                    .ok()
+                    .map(snake_color_for_player)
+            })
+            .unwrap_or_else(|| snake_color_for_fallback(death.message.killed_snake.to_bits()));
         let target = tail_midpoint(tail).unwrap_or_else(|| death.position.unwrap_or(Vec2::ZERO));
 
         for (start, end) in tail.pairs_front_to_back() {

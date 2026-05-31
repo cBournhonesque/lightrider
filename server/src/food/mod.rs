@@ -83,13 +83,11 @@ fn food_collision(
     let mut eaten_food = EntityHashSet::default();
     for (snake, tail, room) in tails.iter() {
         let collision_point = tail.front().0;
-        trace!(head = ?tail.front().0, direction = ?tail.front().1, "Food collision check");
         for (food_entity, position, food_room) in food.iter() {
             if food_room != room || eaten_food.contains(&food_entity) {
                 continue;
             }
             if collision_point.distance(position.0) <= config.food.radius {
-                info!(?snake, ?food_entity, "Food collision");
                 eaten_food.insert(food_entity);
                 writer.write(FoodCollision {
                     snake,

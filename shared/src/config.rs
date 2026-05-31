@@ -157,7 +157,7 @@ impl Default for RenderConfig {
             normal_camera_scale: 0.35,
             normal_camera_growth_per_tail_length: 0.00025,
             normal_camera_scale_smoothing: 6.0,
-            normal_camera_max_scale: 0.85,
+            normal_camera_max_scale: 0.62,
             debug_camera_scale: 1.0,
         }
     }
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(config.render.normal_camera_scale, 0.35);
         assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00025);
         assert_eq!(config.render.normal_camera_scale_smoothing, 6.0);
-        assert_eq!(config.render.normal_camera_max_scale, 0.85);
+        assert_eq!(config.render.normal_camera_max_scale, 0.62);
         assert_eq!(config.render.debug_camera_scale, 1.0);
         assert!(config.sound.enabled);
         assert_eq!(config.sound.death_volume, 0.2);

@@ -15,7 +15,7 @@ pub(crate) struct EffectsRenderPlugin;
 const BOOST_MARKER_Z: f32 = 14.0;
 const BOOST_LIGHTNING_Z: f32 = 13.0;
 const SPEED_PARTICLE_Z: f32 = 12.5;
-const SPEED_PARTICLE_COUNT: usize = 10;
+const SPEED_PARTICLE_COUNT: usize = 16;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct BoostVisual(BoostVisualPart);
@@ -89,7 +89,7 @@ fn sync_boost_marker(
     if let Some(contact) = contact {
         let delta = contact.head - contact.hit;
         let angle = delta.y.atan2(delta.x) - std::f32::consts::FRAC_PI_2;
-        let marker_size = config.render.head_size.max(4.0) * 2.5;
+        let marker_size = config.render.head_size.max(4.0) * 1.45;
         let other_color = snake_entity_color(contact.other, &snakes, &players);
         let mut desired = Vec::with_capacity(2);
         if contact.lightning_active {
@@ -112,7 +112,7 @@ fn sync_boost_marker(
                 .with_rotation(Quat::from_rotation_z(angle)),
             sheet.sprite(
                 spark_frame,
-                Vec2::new(marker_size * 1.75, marker_size * 1.05),
+                Vec2::new(marker_size, marker_size * 0.72),
                 other_color.spark(),
             ),
         ));
@@ -210,29 +210,32 @@ fn desired_speed_particles(
         let direction = tail.front().1.delta();
         let normal = direction.perp();
         let particle_count =
-            ((SPEED_PARTICLE_COUNT as f32) * (0.35 + speed_t * 0.65)).ceil() as usize;
+            ((SPEED_PARTICLE_COUNT as f32) * (0.45 + speed_t * 0.55)).ceil() as usize;
         for index in 0..particle_count.min(SPEED_PARTICLE_COUNT) {
-            let phase = elapsed_seconds * (2.5 + speed_t * 5.0)
-                + index as f32 * 1.73
-                + snake.to_bits() as f32 * 0.001;
-            let behind = 5.0 + (index as f32 % 5.0) * 2.4 + phase.sin().abs() * 4.0;
-            let side = phase.cos() * (head_size * 0.95 + speed_t * 3.0);
+            let seed = index as f32 * 0.618_034 + snake.to_bits() as f32 * 0.000_013;
+            let emission_rate = 7.0 + speed_t * 9.0;
+            let age = (elapsed_seconds * emission_rate + seed).fract();
+            let spread = (seed * std::f32::consts::TAU + elapsed_seconds * 0.7).sin();
+            let behind = head_size * 0.55 + age * (head_size * 3.4 + speed_t * 22.0);
+            let side = spread * (head_size * 0.28 + age * head_size * 0.75);
             let position = head - direction * behind + normal * side;
-            let size = head_size * (0.45 + speed_t * 0.45) * (0.75 + 0.25 * phase.sin().abs());
+            let fade = (1.0 - age).powf(1.35);
+            let size = head_size * (0.16 + speed_t * 0.18) * (0.45 + 0.55 * fade);
+            let color = Color::srgba(0.74, 0.96, 1.0, fade * (0.22 + speed_t * 0.45));
             desired.push(DesiredParticle {
                 key: SpeedParticleVisual { snake, index },
                 transform: Transform::from_translation(position.extend(SPEED_PARTICLE_Z))
-                    .with_rotation(Quat::from_rotation_z(phase)),
-                sprite: sheet.sprite(
-                    PowerlineFrame::ParticleDot,
-                    Vec2::splat(size),
-                    Color::srgba(0.74, 0.96, 1.0, 0.28 + speed_t * 0.5),
-                ),
+                    .with_rotation(direction_rotation(direction)),
+                sprite: sheet.sprite(PowerlineFrame::HeadDot, Vec2::splat(size), color),
             });
         }
     }
 
     desired
+}
+
+fn direction_rotation(direction: Vec2) -> Quat {
+    Quat::from_rotation_z(direction.y.atan2(direction.x))
 }
 
 fn nearest_controlled_boost_contact(

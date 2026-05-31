@@ -17,7 +17,11 @@ pub(crate) struct ConfirmedDeath {
     pub(crate) message: PlayerDeath,
     pub(crate) local_player: bool,
     pub(crate) position: Option<Vec2>,
+    pub(crate) tail: Option<TailPoints>,
 }
+
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+struct LastLocalSnakeTail(Option<TailPoints>);
 
 #[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
 pub(crate) struct DeathView {
@@ -54,7 +58,11 @@ impl Plugin for DeathPlugin {
         );
 
         // all
-        app.add_systems(Update, handle_death_message);
+        app.init_resource::<LastLocalSnakeTail>();
+        app.add_systems(
+            Update,
+            (cache_local_snake_tail, handle_death_message).chain(),
+        );
 
         // reflect
         app.register_type::<GameState>();
@@ -70,8 +78,9 @@ fn handle_death_message(
     config: Res<GameConfig>,
     time: Res<Time>,
     mut receivers: Query<&mut MessageReceiver<PlayerDeath>, With<Client>>,
-    player: Query<Entity, (With<Player>, With<Controlled>)>,
+    player: Query<(Entity, &Player), With<Controlled>>,
     tails: Query<&TailPoints>,
+    local_tail_cache: Res<LastLocalSnakeTail>,
     mut confirmed_deaths: MessageWriter<ConfirmedDeath>,
 ) {
     let Ok(mut receiver) = receivers.single_mut() else {
@@ -80,9 +89,11 @@ fn handle_death_message(
     let local_player = player.single().ok();
     for message in receiver.receive() {
         trace!(?message, "Received death message");
-        let local_player_died = local_player == Some(message.killed_player);
+        let local_player_died =
+            local_player.map(|(entity, _)| entity) == Some(message.killed_player);
         confirmed_deaths.write(ConfirmedDeath {
             position: death_sound_position(&message, &tails),
+            tail: death_tail_snapshot(&message, &tails, local_player, &local_tail_cache),
             message: message.clone(),
             local_player: local_player_died,
         });
@@ -96,6 +107,40 @@ fn handle_death_message(
             next_state.set(GameState::Dead);
         }
     }
+}
+
+fn cache_local_snake_tail(
+    player: Query<&Player, With<Controlled>>,
+    tails: Query<&TailPoints>,
+    mut cache: ResMut<LastLocalSnakeTail>,
+) {
+    let Some(tail) = player
+        .single()
+        .ok()
+        .and_then(|player| player.snake)
+        .and_then(|snake| tails.get(snake).ok())
+    else {
+        return;
+    };
+    cache.0 = Some(tail.clone());
+}
+
+fn death_tail_snapshot(
+    message: &PlayerDeath,
+    tails: &Query<&TailPoints>,
+    local_player: Option<(Entity, &Player)>,
+    local_tail_cache: &LastLocalSnakeTail,
+) -> Option<TailPoints> {
+    tails.get(message.killed_snake).ok().cloned().or_else(|| {
+        let (player_entity, player) = local_player?;
+        if player_entity != message.killed_player {
+            return None;
+        }
+        player
+            .snake
+            .and_then(|snake| tails.get(snake).ok().cloned())
+            .or_else(|| local_tail_cache.0.clone())
+    })
 }
 
 fn death_sound_position(message: &PlayerDeath, tails: &Query<&TailPoints>) -> Option<Vec2> {
