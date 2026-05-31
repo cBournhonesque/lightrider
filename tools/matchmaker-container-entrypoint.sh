@@ -58,8 +58,10 @@ nats_password="${NATS_PASSWORD:-lightrider}"
 nats_store_dir="${NATS_STORE_DIR:-/data/nats}"
 web_port="${WEB_PORT:-8080}"
 matchmaker_port="${MATCHMAKER_PORT:-3000}"
-app_name="${EDGEGAP_APP_NAME:-lightrider}"
-app_version="${EDGEGAP_APP_VERSION:-dev}"
+app_name="${LIGHTRIDER_MATCHMAKER_GAME:-${EDGEGAP_APP_NAME:-lightrider}}"
+app_version="${LIGHTRIDER_MATCHMAKER_VERSION:-${EDGEGAP_APP_VERSION:-dev}}"
+edgegap_app_name="${EDGEGAP_APP_NAME:-$app_name}"
+edgegap_app_version="${EDGEGAP_APP_VERSION:-$app_version}"
 namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-${app_name}_${app_version}}}"
 allocation_source="${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-${MATCHMAKER_ALLOCATION_SOURCE:-nats_static}}"
 
@@ -175,8 +177,8 @@ client_timeout_secs = ${LIGHTYEAR_MATCHMAKER_CLIENT_TIMEOUT_SECS:-15}
 token_expire_secs = ${LIGHTYEAR_MATCHMAKER_TOKEN_EXPIRE_SECS:-30}
 
 [edgegap_provider]
-app = $(toml_string "$app_name")
-version = $(toml_string "$app_version")
+app = $(toml_string "$edgegap_app_name")
+version = $(toml_string "$edgegap_app_version")
 api_key_env = "EDGEGAP_API_KEY"
 base_url = $(toml_string "${EDGEGAP_API_BASE_URL:-https://api.edgegap.com}")
 port_name = $(toml_string "${EDGEGAP_GAME_PORT_NAME:-game}")

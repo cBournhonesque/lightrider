@@ -86,11 +86,13 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<components::snake::TailPoints>()
             .add_prediction()
             .add_should_rollback(components::snake::tail_points_should_rollback)
+            .add_correction_fn(components::snake::interpolate_tail_points_correction)
             .register_interpolation_fn(components::snake::interpolate_tail_points)
             .add_custom_interpolation();
         app.register_component::<components::snake::TailLength>()
             .add_prediction()
             .add_should_rollback(components::snake::tail_length_should_rollback)
+            .add_correction_fn(components::snake::interpolate_tail_length_correction)
             .register_interpolation_fn(components::snake::interpolate_tail_length)
             .add_custom_interpolation();
         app.register_component::<components::snake::Speed>()

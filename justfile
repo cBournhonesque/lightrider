@@ -63,6 +63,20 @@ bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" 
 local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="1001" room="auto" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
+    bots_arg="{{bots}}"
+    config_arg="{{config}}"
+    port_arg="{{port}}"
+    client_id_arg="{{client_id}}"
+    first_bot_id_arg="{{first_bot_id}}"
+    room_arg="{{room}}"
+    release_arg="{{release}}"
+    if [[ "$bots_arg" == release=* ]]; then
+      release_arg="${bots_arg#release=}"
+      bots_arg="4"
+    fi
+    if [[ "$release_arg" == release=* ]]; then
+      release_arg="${release_arg#release=}"
+    fi
     if [[ -f secrets/admin.env ]]; then
       set -a
       source secrets/admin.env
@@ -70,16 +84,16 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
     fi
     trap 'jobs -pr | xargs -r kill' EXIT
     cargo_args=(-j 2)
-    if [[ "{{release}}" == "true" ]]; then
+    if [[ "$release_arg" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}} &
+    cargo run "${cargo_args[@]}" -p server --bin lightrider-server -- --headless --port "$port_arg" --config "$config_arg" &
     sleep 2
-    for i in $(seq 0 $(({{bots}} - 1))); do
-      cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $(({{first_bot_id}} + i)) --server-port {{port}} --config {{config}} --room {{room}} &
+    for i in $(seq 0 $((bots_arg - 1))); do
+      cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $((first_bot_id_arg + i)) --server-port "$port_arg" --config "$config_arg" --room "$room_arg" &
       sleep 1
     done
-    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --client-id {{client_id}} --server-port {{port}} --config {{config}} --room {{room}}
+    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --client-id "$client_id_arg" --server-port "$port_arg" --config "$config_arg" --room "$room_arg"
 
 trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_client_id="2001" room="auto" release="false":
     #!/usr/bin/env bash
@@ -1145,12 +1159,14 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     if [[ -z "${NATS_PASSWORD:-}" || "${NATS_PASSWORD:-}" == "lightrider" ]]; then
       NATS_PASSWORD="$(openssl rand -hex 24)"
     fi
+    matchmaker_game="${LIGHTRIDER_MATCHMAKER_GAME:-${EDGEGAP_APP_NAME:-lightrider}}"
+    matchmaker_version="${LIGHTRIDER_MATCHMAKER_VERSION:-${EDGEGAP_APP_VERSION:-{{tag}}}}"
     edgegap_app_version="{{edgegap_version}}"
     if [[ -z "$edgegap_app_version" ]]; then
-      edgegap_app_version="${EDGEGAP_APP_VERSION:-{{tag}}}"
+      edgegap_app_version="${EDGEGAP_APP_VERSION:-$matchmaker_version}"
     fi
     if [[ -n "{{edgegap_version}}" ]]; then
-      LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
+      LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-${matchmaker_game}_${matchmaker_version}}"
     fi
     web_domain="${LIGHTRIDER_WEB_DOMAIN:-}"
     web_domain="${web_domain#http://}"
@@ -1183,10 +1199,12 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     {
       echo "# Lightrider web-server/control-host install env."
       echo "# This file is shell-sourced locally, then converted to a container env file on the VPS."
-      echo "# Keep LIGHTRIDER_PROTOCOL_ID/LIGHTRIDER_PRIVATE_KEY in sync with the Edgegap game-server app version."
+      echo "# Keep LIGHTRIDER_PROTOCOL_ID/LIGHTRIDER_PRIVATE_KEY in sync with the game-server image."
       write_env LIGHTRIDER_MATCHMAKER_IMAGE "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-matchmaker:{{tag}}"
       write_env LIGHTRIDER_MATCHMAKER_TAG "{{tag}}"
-      write_env EDGEGAP_APP_NAME "${EDGEGAP_APP_NAME:-lightrider}"
+      write_env LIGHTRIDER_MATCHMAKER_GAME "$matchmaker_game"
+      write_env LIGHTRIDER_MATCHMAKER_VERSION "$matchmaker_version"
+      write_env EDGEGAP_APP_NAME "${EDGEGAP_APP_NAME:-$matchmaker_game}"
       write_env EDGEGAP_APP_VERSION "$edgegap_app_version"
       write_env EDGEGAP_API_KEY "${EDGEGAP_API_KEY:-${EDGEGAP_API_TOKEN:-}}"
       write_env EDGEGAP_REGISTRY_URL "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}"
@@ -1197,7 +1215,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env LIGHTRIDER_PRIVATE_KEY "$LIGHTRIDER_PRIVATE_KEY"
       write_env LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE "1"
       write_env LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE "${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-nats_static}"
-      write_env LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE "${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${EDGEGAP_APP_NAME:-lightrider}_${edgegap_app_version}}"
+      write_env LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE "${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${matchmaker_game}_${matchmaker_version}}"
       write_env NATS_USER "${NATS_USER:-lightrider}"
       write_env NATS_PASSWORD "$NATS_PASSWORD"
       write_env NATS_ALLOW_INSECURE "${NATS_ALLOW_INSECURE:-1}"
@@ -1222,6 +1240,70 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     chmod 600 "{{file}}"
     echo "Wrote {{file}}"
 
+web-server-env-check file="secrets/web-server.env":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -f "{{file}}" || {
+      echo "{{file}} does not exist. Run: just web-server-env-template" >&2
+      exit 1
+    }
+    set -a
+    source "{{file}}"
+    set +a
+    require_var() {
+      local name="$1"
+      if [[ -z "${!name:-}" ]]; then
+        echo "required deployment env is empty or missing: $name" >&2
+        exit 1
+      fi
+    }
+    truthy() {
+      case "${1:-}" in
+        1|true|TRUE|True|yes|YES|Yes|y|Y|on|ON|On) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
+
+    require_var LIGHTRIDER_MATCHMAKER_IMAGE
+    require_var LIGHTRIDER_MATCHMAKER_TAG
+    require_var LIGHTRIDER_PROTOCOL_ID
+    require_var LIGHTRIDER_PRIVATE_KEY
+    require_var LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE
+    require_var LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE
+    require_var NATS_USER
+    require_var NATS_PASSWORD
+
+    if [[ ! "$LIGHTRIDER_PROTOCOL_ID" =~ ^[0-9]+$ || "$LIGHTRIDER_PROTOCOL_ID" == "0" ]]; then
+      echo "LIGHTRIDER_PROTOCOL_ID must be a nonzero integer" >&2
+      exit 1
+    fi
+    if [[ "$NATS_USER" == "lightrider" && "$NATS_PASSWORD" == "lightrider" ]]; then
+      echo "NATS_USER/NATS_PASSWORD still use local dev defaults; generate production credentials first" >&2
+      exit 1
+    fi
+    if [[ "$LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE" == "edgegap" ]]; then
+      require_var EDGEGAP_API_KEY
+    fi
+    if truthy "${LIGHTRIDER_RUN_STATIC_SERVER:-1}"; then
+      require_var LIGHTRIDER_STATIC_SERVER_IMAGE
+      require_var LIGHTRIDER_STATIC_PUBLIC_IP
+      require_var LIGHTRIDER_STATIC_PORT
+    fi
+    if truthy "${LIGHTRIDER_ENABLE_HTTPS:-0}"; then
+      require_var LIGHTRIDER_WEB_DOMAIN
+      require_var LIGHTRIDER_MATCHMAKER_URL
+      if [[ "$LIGHTRIDER_MATCHMAKER_URL" != wss://* ]]; then
+        echo "LIGHTRIDER_MATCHMAKER_URL should use wss:// when HTTPS is enabled" >&2
+        exit 1
+      fi
+    fi
+    if [[ "$LIGHTRIDER_MATCHMAKER_IMAGE" == registry.edgegap.com/* || "${LIGHTRIDER_STATIC_SERVER_IMAGE:-}" == registry.edgegap.com/* ]]; then
+      require_var EDGEGAP_REGISTRY_USERNAME
+      require_var EDGEGAP_REGISTRY_TOKEN
+    fi
+
+    echo "web-server env ok: {{file}}"
+
 web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.env" ssh_key="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1229,6 +1311,7 @@ web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.en
       echo "{{env}} does not exist. Run: just web-server-env-template" >&2
       exit 1
     }
+    just web-server-env-check "{{env}}"
     ssh_key="{{ssh_key}}"
     if [[ "$ssh_key" == "~/"* ]]; then
       ssh_key="${HOME}/${ssh_key#~/}"
@@ -1444,6 +1527,7 @@ deploy-web-server *args:
       just matchmaker-build-push "$tag" "$build_memory" "$build_cpus" "$build_cpu_quota" "$build_cpuset_cpus"
     fi
     LIGHTRIDER_ENABLE_HTTPS="$enable_https" LIGHTRIDER_WEB_DOMAIN="$web_domain" FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
+    just web-server-env-check "$env_file"
     just web-server-install "$vps_host" "$ssh_port" "$env_file" "$ssh_key"
     if [[ "$enable_https" == "1" || "$enable_https" == "true" || "$enable_https" == "yes" ]]; then
       just web-server-health "$web_domain" https

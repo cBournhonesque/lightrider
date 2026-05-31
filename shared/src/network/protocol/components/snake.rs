@@ -1,14 +1,18 @@
 use std::collections::VecDeque;
+use std::vec::Vec;
 
 use bevy::ecs::entity::{EntityMapper, MapEntities};
+use bevy::math::curve::{Curve, Ease, FunctionCurve, Interval};
 use bevy::prelude::*;
 use derive_more::{Add, Mul};
 use itertools::Itertools;
+use lightyear::prelude::Diffable;
 use parry2d::math::Point;
 use serde::{Deserialize, Serialize};
 
 const TAIL_POINT_ROLLBACK_EPSILON: f32 = 0.5;
 const TAIL_LENGTH_ROLLBACK_EPSILON: f32 = 0.5;
+const TAIL_VISUAL_CORRECTION_EPSILON: f32 = 0.05;
 const SPEED_ROLLBACK_EPSILON: f32 = 0.02;
 const ACCELERATION_ROLLBACK_EPSILON: f32 = 0.02;
 const FOOD_BOOST_ROLLBACK_EPSILON: f32 = 0.02;
@@ -32,7 +36,9 @@ impl Direction {
     }
 }
 
-#[derive(Component, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect, Add, Mul)]
+#[derive(
+    Component, Deserialize, Serialize, Clone, Debug, Default, PartialEq, Reflect, Add, Mul,
+)]
 pub struct TailLength {
     pub current_size: f32,
     pub target_size: f32,
@@ -41,6 +47,11 @@ pub struct TailLength {
 #[derive(Component, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 // tail inflection points, from front (head point) to back (tail end point)
 pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TailPointsCorrection {
+    offsets: Vec<Vec2>,
+}
 
 // TODO: replace this with Parent in bevy 0.13
 #[derive(Component, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
@@ -121,6 +132,50 @@ pub fn interpolate_tail_length(start: TailLength, end: TailLength, t: f32) -> Ta
     }
 }
 
+pub fn interpolate_tail_length_correction(
+    start: TailLength,
+    end: TailLength,
+    t: f32,
+) -> TailLength {
+    let interpolated = interpolate_tail_length(start, end, t);
+    if interpolated
+        .current_size
+        .abs()
+        .max(interpolated.target_size.abs())
+        <= TAIL_VISUAL_CORRECTION_EPSILON
+    {
+        TailLength::default()
+    } else {
+        interpolated
+    }
+}
+
+impl Ease for TailLength {
+    fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
+        FunctionCurve::new(Interval::UNIT, move |t| {
+            interpolate_tail_length(start.clone(), end.clone(), t)
+        })
+    }
+}
+
+impl Diffable for TailLength {
+    fn base_value() -> Self {
+        Self::default()
+    }
+
+    fn diff(&self, new: &Self) -> Self {
+        Self {
+            current_size: new.current_size - self.current_size,
+            target_size: new.target_size - self.target_size,
+        }
+    }
+
+    fn apply_diff(&mut self, delta: &Self) {
+        self.current_size += delta.current_size;
+        self.target_size += delta.target_size;
+    }
+}
+
 pub fn interpolate_tail_points(start: TailPoints, end: TailPoints, t: f32) -> TailPoints {
     let start_length = TailLength {
         current_size: start.total_length(),
@@ -131,6 +186,86 @@ pub fn interpolate_tail_points(start: TailPoints, end: TailPoints, t: f32) -> Ta
         target_size: end.total_length(),
     };
     interpolate_tail_points_with_length(&start, &end, &start_length, &end_length, t).0
+}
+
+pub fn interpolate_tail_points_correction(
+    start: TailPointsCorrection,
+    end: TailPointsCorrection,
+    t: f32,
+) -> TailPointsCorrection {
+    let t = t.clamp(0.0, 1.0);
+    let len = start.offsets.len().max(end.offsets.len());
+    let offsets = (0..len)
+        .map(|index| {
+            start
+                .offsets
+                .get(index)
+                .copied()
+                .unwrap_or(Vec2::ZERO)
+                .lerp(end.offsets.get(index).copied().unwrap_or(Vec2::ZERO), t)
+        })
+        .collect::<Vec<_>>();
+
+    let max_offset = offsets
+        .iter()
+        .map(|offset| offset.length())
+        .fold(0.0, f32::max);
+    if max_offset <= TAIL_VISUAL_CORRECTION_EPSILON {
+        TailPointsCorrection::default()
+    } else {
+        TailPointsCorrection { offsets }
+    }
+}
+
+impl Ease for TailPointsCorrection {
+    fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
+        FunctionCurve::new(Interval::UNIT, move |t| {
+            interpolate_tail_points_correction(start.clone(), end.clone(), t)
+        })
+    }
+}
+
+impl Diffable<TailPointsCorrection> for TailPoints {
+    fn base_value() -> Self {
+        TailPoints(VecDeque::new())
+    }
+
+    fn diff(&self, new: &Self) -> TailPointsCorrection {
+        if self.0.len() != new.0.len() {
+            return TailPointsCorrection::default();
+        }
+
+        let mut offsets = Vec::with_capacity(self.0.len());
+        for ((current_point, current_direction), (visual_point, visual_direction)) in
+            self.0.iter().zip(new.0.iter())
+        {
+            if current_direction != visual_direction {
+                return TailPointsCorrection::default();
+            }
+            offsets.push(*visual_point - *current_point);
+        }
+        TailPointsCorrection { offsets }
+    }
+
+    fn apply_diff(&mut self, delta: &TailPointsCorrection) {
+        if delta.offsets.is_empty() {
+            return;
+        }
+        if self.0.is_empty() {
+            self.0 = delta
+                .offsets
+                .iter()
+                .map(|offset| (*offset, Direction::Right))
+                .collect();
+            return;
+        }
+        if self.0.len() != delta.offsets.len() {
+            return;
+        }
+        for ((point, _), offset) in self.0.iter_mut().zip(delta.offsets.iter()) {
+            *point += *offset;
+        }
+    }
 }
 
 pub fn tail_points_should_rollback(confirmed: &TailPoints, predicted: &TailPoints) -> bool {
@@ -464,6 +599,56 @@ mod tests {
                 current_size: 125.0,
                 target_size: 150.0,
             }
+        );
+    }
+
+    #[test]
+    fn tail_length_correction_decays_towards_zero() {
+        let error = TailLength {
+            current_size: 4.0,
+            target_size: -2.0,
+        };
+
+        assert_eq!(
+            interpolate_tail_length_correction(TailLength::default(), error.clone(), 0.25),
+            TailLength {
+                current_size: 1.0,
+                target_size: -0.5,
+            }
+        );
+        assert_eq!(
+            interpolate_tail_length_correction(TailLength::default(), error, 0.001),
+            TailLength::default()
+        );
+    }
+
+    #[test]
+    fn tail_points_correction_applies_and_decays_offsets() {
+        let corrected = TailPoints(VecDeque::from([
+            (Vec2::new(10.0, 20.0), Direction::Right),
+            (Vec2::new(0.0, 20.0), Direction::Right),
+        ]));
+        let visual = TailPoints(VecDeque::from([
+            (Vec2::new(12.0, 20.0), Direction::Right),
+            (Vec2::new(2.0, 20.0), Direction::Right),
+        ]));
+        let error = corrected.diff(&visual);
+        let residual =
+            interpolate_tail_points_correction(TailPointsCorrection::default(), error, 0.5);
+        let mut smoothed = corrected.clone();
+
+        smoothed.apply_diff(&residual);
+
+        assert_eq!(
+            smoothed.0,
+            VecDeque::from([
+                (Vec2::new(11.0, 20.0), Direction::Right),
+                (Vec2::new(1.0, 20.0), Direction::Right),
+            ])
+        );
+        assert_eq!(
+            interpolate_tail_points_correction(TailPointsCorrection::default(), residual, 0.001,),
+            TailPointsCorrection::default()
         );
     }
 

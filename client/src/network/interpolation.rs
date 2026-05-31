@@ -9,6 +9,7 @@ pub struct InterpolationPlugin;
 impl Plugin for InterpolationPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameInterpolationPlugin::<TailPoints>::default());
+        app.add_plugins(FrameInterpolationPlugin::<TailLength>::default());
         app.add_systems(
             PostUpdate,
             interpolate_snakes.in_set(InterpolationSystems::Interpolate),
@@ -19,7 +20,7 @@ impl Plugin for InterpolationPlugin {
 
 fn add_frame_interpolation_to_predicted_snakes(
     mut commands: Commands,
-    snakes: Query<
+    tails: Query<
         Entity,
         (
             With<Predicted>,
@@ -27,11 +28,24 @@ fn add_frame_interpolation_to_predicted_snakes(
             Without<FrameInterpolate<TailPoints>>,
         ),
     >,
+    lengths: Query<
+        Entity,
+        (
+            With<Predicted>,
+            With<TailLength>,
+            Without<FrameInterpolate<TailLength>>,
+        ),
+    >,
 ) {
-    for snake in &snakes {
+    for snake in &tails {
         commands
             .entity(snake)
             .insert(FrameInterpolate::<TailPoints>::default());
+    }
+    for snake in &lengths {
+        commands
+            .entity(snake)
+            .insert(FrameInterpolate::<TailLength>::default());
     }
 }
 

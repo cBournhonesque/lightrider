@@ -65,6 +65,40 @@ WHERE target = 'lightyear_debug::prediction'
 GROUP BY component
 ORDER BY mismatches DESC;
 
+WITH rollbacks AS (
+    SELECT
+        process_id,
+        CAST(fields.local_tick AS BIGINT) AS local_tick,
+        CAST(fields.rollback_delta AS BIGINT) AS rollback_delta
+    FROM debug_events
+    WHERE target = 'lightyear_debug::prediction'
+        AND kind = 'rollback_requested'
+),
+controlled_heads AS (
+    SELECT
+        process_id,
+        tick_id,
+        max(speed) AS speed
+    FROM snake_heads
+    WHERE schedule = 'FixedLast'
+        AND is_predicted
+        AND is_controlled
+    GROUP BY process_id, tick_id
+)
+SELECT
+    'rollback_controlled_speed_buckets' AS section,
+    rollbacks.process_id,
+    floor(coalesce(controlled_heads.speed, 0.0) * 4.0) / 4.0 AS speed_bucket,
+    count(*) AS rollbacks,
+    avg(rollback_delta) AS avg_rollback_delta,
+    max(rollback_delta) AS max_rollback_delta
+FROM rollbacks
+JOIN controlled_heads
+    ON controlled_heads.process_id = rollbacks.process_id
+    AND controlled_heads.tick_id = rollbacks.local_tick
+GROUP BY rollbacks.process_id, speed_bucket
+ORDER BY rollbacks.process_id, speed_bucket;
+
 SELECT
     'confirmed_history_stale_mismatch_components' AS section,
     replace(CAST(fields.component AS VARCHAR), '\"', '') AS component,
