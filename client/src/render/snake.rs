@@ -18,7 +18,8 @@ pub(crate) struct SnakeRenderPlugin;
 const SNAKE_HEAD_Z: f32 = 11.0;
 const SNAKE_HEAD_GLOW_Z: f32 = 10.8;
 const SNAKE_TAIL_Z: f32 = 10.0;
-const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.28;
+const SNAKE_DEATH_Z: f32 = 16.0;
+const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.42;
 const MESH_CURVE_SEGMENTS: u32 = 14;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -230,8 +231,8 @@ fn desired_snake_visuals(
 ) -> (Vec<DesiredSnakeSpriteVisual>, Vec<DesiredSnakeMeshVisual>) {
     let tail_width = config.render.tail_width.max(1.0);
     let head_size = config.render.head_size.max(tail_width * 1.8);
-    let head_diameter = (head_size * 1.35).max(tail_width * 4.0);
-    let head_glow_radius = head_diameter * 0.82;
+    let head_diameter = (head_size * 0.9).max(tail_width * 3.2);
+    let head_glow_radius = head_diameter * 1.25;
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
@@ -411,8 +412,8 @@ fn spawn_snake_death_animations(
                     &mut mesh_assets,
                     &mut materials,
                     position,
-                    config.render.head_size.max(4.0),
-                    SNAKE_HEAD_Z,
+                    config.render.head_size.max(3.0) * 0.5,
+                    SNAKE_DEATH_Z + 0.2,
                 );
             }
             continue;
@@ -436,11 +437,20 @@ fn spawn_snake_death_animations(
                     SnakeDeathVisual { elapsed: 0.0 },
                     Mesh2d(mesh_assets.add(shape.mesh())),
                     MeshMaterial2d(materials.add(blended_material(layer.death_flash_color()))),
-                    Transform::from_translation(center.extend(layer.z() + 0.2))
+                    Transform::from_translation(center.extend(SNAKE_DEATH_Z))
                         .with_rotation(rotation),
                 ));
             }
         }
+
+        spawn_death_circle(
+            &mut commands,
+            &mut mesh_assets,
+            &mut materials,
+            tail.front().0,
+            config.render.head_size.max(3.0) * 0.5,
+            SNAKE_DEATH_Z + 0.2,
+        );
 
         let joint_count = tail.0.len().saturating_sub(1);
         for (point, _) in tail.0.iter().skip(1).take(joint_count.saturating_sub(1)) {
@@ -451,7 +461,7 @@ fn spawn_snake_death_animations(
                     SnakeDeathVisual { elapsed: 0.0 },
                     Mesh2d(mesh_assets.add(shape.mesh())),
                     MeshMaterial2d(materials.add(blended_material(layer.death_flash_color()))),
-                    Transform::from_translation((*point).extend(layer.z() + 0.2)),
+                    Transform::from_translation((*point).extend(SNAKE_DEATH_Z)),
                 ));
             }
         }

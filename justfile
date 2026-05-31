@@ -5,7 +5,7 @@ edgegap-default-tag := `git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H
 export CARGO_BUILD_JOBS := "2"
 export CARGO_INCREMENTAL := "1"
 
-server config="config/test.ron" port="5000":
+server config="config/test.ron" port="5000" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
@@ -13,28 +13,54 @@ server config="config/test.ron" port="5000":
       source secrets/admin.env
       set +a
     fi
-    cargo run -j 2 -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}}
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}}
 
-client id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
-    cargo run -j 2 -p client --bin lightrider-client -- --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
+client id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
 
-client-debug id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
-    cargo run -j 2 -p client --bin lightrider-client -- --debug --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
+client-debug id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --debug --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
 
-bot id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
-    cargo run -j 2 -p client --bin lightrider-client -- --headless --mode bot --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
+bot id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id {{id}} --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}}
 
-bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto":
+bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'jobs -pr | xargs -r kill' EXIT
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
     for i in $(seq 0 $(({{count}} - 1))); do
-      cargo run -j 2 -p client --bin lightrider-client -- --headless --mode bot --client-id $(({{first_id}} + i)) --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}} &
+      cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $(({{first_id}} + i)) --server-addr {{server_addr}} --server-port {{port}} --config {{config}} --room {{room}} &
       sleep 1
     done
     wait
 
-local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="1001" room="auto":
+local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="1001" room="auto" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
@@ -43,15 +69,19 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
       set +a
     fi
     trap 'jobs -pr | xargs -r kill' EXIT
-    cargo run -j 2 -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}} &
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" -p server --bin lightrider-server -- --headless --port {{port}} --config {{config}} &
     sleep 2
     for i in $(seq 0 $(({{bots}} - 1))); do
-      cargo run -j 2 -p client --bin lightrider-client -- --headless --mode bot --client-id $(({{first_bot_id}} + i)) --server-port {{port}} --config {{config}} --room {{room}} &
+      cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $(({{first_bot_id}} + i)) --server-port {{port}} --config {{config}} --room {{room}} &
       sleep 1
     done
-    cargo run -j 2 -p client --bin lightrider-client -- --client-id {{client_id}} --server-port {{port}} --config {{config}} --room {{room}}
+    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --client-id {{client_id}} --server-port {{port}} --config {{config}} --room {{room}}
 
-trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_client_id="2001" room="auto":
+trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_client_id="2001" room="auto" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
@@ -62,7 +92,13 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
     run_dir="logs/debug/$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$run_dir"
     ln -sfn "$(basename "$run_dir")" logs/debug/latest
-    cargo build -j 2 -p server --bin lightrider-server -p client --bin lightrider-client
+    cargo_args=(-j 2)
+    bin_dir="debug"
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+      bin_dir="release"
+    fi
+    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
     pids=()
     cleanup() {
       for pid in "${pids[@]}"; do
@@ -72,14 +108,14 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
     }
     trap cleanup EXIT
     RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
-      target/debug/lightrider-server --headless --port {{port}} --config {{config}} \
+      "target/$bin_dir/lightrider-server" --headless --port {{port}} --config {{config}} \
       > "$run_dir/server.log" 2>&1 &
     pids+=("$!")
     sleep 2
     for i in $(seq 0 $(({{clients}} - 1))); do
       id=$(({{first_client_id}} + i))
       RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
-        target/debug/lightrider-client --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
+        "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
         > "$run_dir/client-$id.log" 2>&1 &
       pids+=("$!")
       sleep 1
@@ -97,7 +133,7 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
 trace-summary dir="logs/debug/latest":
     duckdb -batch -cmd "SET VARIABLE trace_glob = '{{dir}}/*.ndjson';" < tools/debug_trace_summary.sql
 
-trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3001" first_bot_id="3002" bot_clients="2" room="auto":
+trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3001" first_bot_id="3002" bot_clients="2" room="auto" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
@@ -108,7 +144,13 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
     run_dir="logs/debug/$(date +%Y%m%d-%H%M%S)-mixed-headless"
     mkdir -p "$run_dir"
     ln -sfn "$(basename "$run_dir")" logs/debug/latest-mixed
-    cargo build -j 2 -p server --bin lightrider-server -p client --bin lightrider-client
+    cargo_args=(-j 2)
+    bin_dir="debug"
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+      bin_dir="release"
+    fi
+    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
     pids=()
     cleanup() {
       for pid in "${pids[@]}"; do
@@ -118,12 +160,12 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
     }
     trap cleanup EXIT
     RUST_LOG="info,lightyear_debug=trace,server::food=warn" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
-      target/debug/lightrider-server --headless --port {{port}} --config {{config}} \
+      "target/$bin_dir/lightrider-server" --headless --port {{port}} --config {{config}} \
       > "$run_dir/server.log" 2>&1 &
     pids+=("$!")
     sleep 2
     RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-player-{{player_id}}.ndjson" \
-      target/debug/lightrider-client --headless --mode player --client-id {{player_id}} --server-port {{port}} --config {{config}} --room {{room}} \
+      "target/$bin_dir/lightrider-client" --headless --mode player --client-id {{player_id}} --server-port {{port}} --config {{config}} --room {{room}} \
       > "$run_dir/client-player-{{player_id}}.log" 2>&1 &
     pids+=("$!")
     sleep 1
@@ -131,7 +173,7 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
       for i in $(seq 0 $(({{bot_clients}} - 1))); do
         id=$(({{first_bot_id}} + i))
         RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-bot-$id.ndjson" \
-          target/debug/lightrider-client --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
+          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
           > "$run_dir/client-bot-$id.log" 2>&1 &
         pids+=("$!")
         sleep 1
@@ -214,7 +256,7 @@ matchmaker-nats-health:
 
 # Start a local game server that publishes readiness/capacity to NATS. This is
 # the static-provider path used by the VPS-hosted static game server too.
-lightyear-matchmaker-server-local config="config/test.ron" port="7777":
+lightyear-matchmaker-server-local config="config/test.ron" port="7777" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
@@ -231,11 +273,15 @@ lightyear-matchmaker-server-local config="config/test.ron" port="7777":
     export LIGHTRIDER_PUBLIC_IP="${LIGHTRIDER_PUBLIC_IP:-127.0.0.1}"
     export LIGHTRIDER_PUBLIC_PORT="${LIGHTRIDER_PUBLIC_PORT:-{{port}}}"
     export SELF_SIGNED_SANS="${SELF_SIGNED_SANS:-127.0.0.1,localhost}"
-    cargo run -j 2 -p server --features lightyear-matchmaker --bin lightrider-server -- --headless --matchmaker --port {{port}} --config {{config}}
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" -p server --features lightyear-matchmaker --bin lightrider-server -- --headless --matchmaker --port {{port}} --config {{config}}
 
 # Start the standalone matchmaker. By default it uses live static capacity from
 # NATS; set LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE=edgegap to use Edgegap.
-lightyear-matchmaker-service-local bind="127.0.0.1:3000" config_path="":
+lightyear-matchmaker-service-local bind="127.0.0.1:3000" config_path="" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     for env_file in secrets/edgegap.env secrets/prod-netcode.env secrets/nats.env; do
@@ -298,16 +344,26 @@ lightyear-matchmaker-service-local bind="127.0.0.1:3000" config_path="":
     session_poll_ms = ${LIGHTYEAR_MATCHMAKER_EDGEGAP_POLL_MS:-500}
     release_missing_ok = true
     EOF
-    cargo run -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server -- --config "$config"
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server -- --config "$config"
 
 # Run one headless client through the matchmaker WebSocket API.
-lightyear-matchmaker-client-bot id="3001" config="config/test.ron" matchmaker_url="ws://127.0.0.1:3000/ws" game="lightrider" version="dev" room="auto":
-    cargo run -j 2 -p client --features lightyear-matchmaker --bin lightrider-client -- --headless --mode bot --client-id {{id}} --config {{config}} --room {{room}} --matchmaker-url {{matchmaker_url}} --matchmaker-game {{game}} --matchmaker-version {{version}}
+lightyear-matchmaker-client-bot id="3001" config="config/test.ron" matchmaker_url="ws://127.0.0.1:3000/ws" game="lightrider" version="dev" room="auto" release="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo run "${cargo_args[@]}" -p client --features lightyear-matchmaker --bin lightrider-client -- --headless --mode bot --client-id {{id}} --config {{config}} --room {{room}} --matchmaker-url {{matchmaker_url}} --matchmaker-game {{game}} --matchmaker-version {{version}}
 
 # Build server/client/matchmaker binaries, run NATS, run a local static game
 # server, run the matchmaker, then verify a bot can obtain a Lightyear token and
 # connect. Logs are written under logs/lightyear-matchmaker/.
-lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777" matchmaker_port="3000" client_id="3001":
+lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777" matchmaker_port="3000" client_id="3001" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     run_dir="logs/lightyear-matchmaker/$(date +%Y%m%d-%H%M%S)"
@@ -316,13 +372,19 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
 
     target_dir="${CARGO_TARGET_DIR:-target}"
     matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-../lightyear-matchmaker/target}"
+    bin_dir="debug"
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+      bin_dir="release"
+    fi
     nats_host="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_HOST:-127.0.0.1:4222}"
     nats_user="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_USER:-lightrider}"
     nats_password="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_PASSWORD:-lightrider}"
     namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-lightrider_dev}}"
-    cargo build -j 2 -p server --features lightyear-matchmaker --bin lightrider-server
-    cargo build -j 2 -p client --features lightyear-matchmaker --bin lightrider-client
-    CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
+    cargo build "${cargo_args[@]}" -p server --features lightyear-matchmaker --bin lightrider-server
+    cargo build "${cargo_args[@]}" -p client --features lightyear-matchmaker --bin lightrider-client
+    CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build "${cargo_args[@]}" --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
 
     pids=()
     cleanup() {
@@ -352,7 +414,7 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
       LIGHTRIDER_PUBLIC_IP="${LIGHTRIDER_PUBLIC_IP:-127.0.0.1}" \
       LIGHTRIDER_PUBLIC_PORT="${LIGHTRIDER_PUBLIC_PORT:-{{port}}}" \
       SELF_SIGNED_SANS="${SELF_SIGNED_SANS:-127.0.0.1,localhost}" \
-      "$target_dir/debug/lightrider-server" --headless --matchmaker --port {{port}} --config {{config}} \
+      "$target_dir/$bin_dir/lightrider-server" --headless --matchmaker --port {{port}} --config {{config}} \
       > "$run_dir/server.log" 2>&1 &
     pids+=("$!")
     for _ in $(seq 1 80); do
@@ -389,7 +451,7 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
     assignment_prepare_timeout_ms = 5000
     assignment_prepare_poll_ms = 25
     EOF
-    "$matchmaker_target_dir/debug/lightyear_matchmaker_server" --config "$matchmaker_config" \
+    "$matchmaker_target_dir/$bin_dir/lightyear_matchmaker_server" --config "$matchmaker_config" \
       > "$run_dir/matchmaker.log" 2>&1 &
     pids+=("$!")
     for _ in $(seq 1 80); do
@@ -400,7 +462,7 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
     done
 
     timeout "$(({{seconds}} + 8))" \
-      "$target_dir/debug/lightrider-client" \
+      "$target_dir/$bin_dir/lightrider-client" \
         --headless --mode bot --client-id {{client_id}} --config {{config}} --room auto \
         --matchmaker-url "ws://127.0.0.1:{{matchmaker_port}}/ws" \
         --matchmaker-game lightrider \
@@ -428,18 +490,28 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
 
 # Compile the static-capable game server locally. This is useful before building
 # the container image or when testing the VPS server entrypoint by hand.
-game-server-build-local:
-    cargo build -j 2 -p server --features lightyear-matchmaker --bin lightrider-server
+game-server-build-local release="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo build "${cargo_args[@]}" -p server --features lightyear-matchmaker --bin lightrider-server
 
 # Compile the standalone lightyear_matchmaker_server from the sibling repo.
-matchmaker-build-local:
+matchmaker-build-local release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-../lightyear-matchmaker/target}"
-    CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build -j 2 --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
+    cargo_args=(-j 2)
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+    fi
+    CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build "${cargo_args[@]}" --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
 
 # Build the WASM client with the Lightyear Matchmaker feature enabled.
-web-build:
+web-build release="false":
     #!/usr/bin/env bash
     set -euo pipefail
     rustup target add wasm32-unknown-unknown
@@ -460,7 +532,13 @@ web-build:
         --force \
         --root "$tool_root"
     fi
-    rustup run nightly cargo build -j 2 \
+    cargo_args=(-j 2)
+    wasm_profile="debug"
+    if [[ "{{release}}" == "true" ]]; then
+      cargo_args+=(--release)
+      wasm_profile="release"
+    fi
+    rustup run nightly cargo build "${cargo_args[@]}" \
       -p web_client \
       --features lightyear-matchmaker \
       --bin lightrider-web \
@@ -469,15 +547,16 @@ web-build:
     "$wasm_bindgen" \
       --target web \
       --out-dir web/pkg \
-      target/wasm32-unknown-unknown/debug/lightrider-web.wasm
+      "target/wasm32-unknown-unknown/$wasm_profile/lightrider-web.wasm"
     rm -rf web/assets
     mkdir -p web/assets
     cp -R assets/. web/assets/
     echo "Built web/pkg/lightrider-web.js"
 
-web-serve bind="127.0.0.1" port="8000": web-build
+web-serve bind="127.0.0.1" port="8000" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
+    just web-build release={{release}}
     echo "Serving http://localhost:{{port}}/"
     echo "For the local Lightyear Matchmaker stack, open:"
     echo "http://localhost:{{port}}/?matchmaker_url=ws://127.0.0.1:3000/matchmaker/ws&matchmaker_game=lightrider&matchmaker_version=dev"

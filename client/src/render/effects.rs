@@ -91,7 +91,7 @@ fn sync_boost_marker(
     if let Some(contact) = contact {
         let delta = contact.head - contact.core;
         let angle = delta.y.atan2(delta.x) - std::f32::consts::FRAC_PI_2;
-        let marker_size = config.render.head_size.max(4.0) * 1.45;
+        let marker_size = config.render.head_size.max(3.0) * 1.2;
         let other_color = snake_entity_color(contact.other, &snakes, &players);
         let mut desired = Vec::with_capacity(2);
         if contact.lightning_active {
@@ -273,14 +273,12 @@ fn nearest_controlled_boost_contact(
         let head = tail.front().0;
         let direction = tail.front().1.delta();
         let lightning_min_distance = config.render.head_size.max(4.0) * 1.6;
-        let core_radius = config.render.tail_width.max(1.25) * 0.5;
         let left = nearest_tail_ray_hit(
             head,
             direction.perp(),
             direction,
             max_distance,
             lightning_min_distance,
-            core_radius,
             entity,
             room,
             snakes,
@@ -292,7 +290,6 @@ fn nearest_controlled_boost_contact(
             direction,
             max_distance,
             lightning_min_distance,
-            core_radius,
             entity,
             room,
             snakes,
@@ -324,7 +321,6 @@ fn nearest_tail_ray_hit(
     forward: Vec2,
     max_distance: f32,
     lightning_min_distance: f32,
-    core_radius: f32,
     excluded: Entity,
     room: &RoomId,
     snakes: &Query<
@@ -370,7 +366,7 @@ fn nearest_tail_ray_hit(
                 nearest = Some(BoostContact {
                     head: origin,
                     core: hit,
-                    marker: hit - direction * core_radius,
+                    marker: hit,
                     distance,
                     other: other_entity,
                     lightning_active,

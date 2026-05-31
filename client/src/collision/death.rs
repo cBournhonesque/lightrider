@@ -91,9 +91,10 @@ fn handle_death_message(
         trace!(?message, "Received death message");
         let local_player_died =
             local_player.map(|(entity, _)| entity) == Some(message.killed_player);
+        let tail = death_tail_snapshot(&message, &tails, local_player, &local_tail_cache);
         confirmed_deaths.write(ConfirmedDeath {
-            position: death_sound_position(&message, &tails),
-            tail: death_tail_snapshot(&message, &tails, local_player, &local_tail_cache),
+            position: death_position(&message, &tails, tail.as_ref()),
+            tail,
             message: message.clone(),
             local_player: local_player_died,
         });
@@ -131,24 +132,32 @@ fn death_tail_snapshot(
     local_player: Option<(Entity, &Player)>,
     local_tail_cache: &LastLocalSnakeTail,
 ) -> Option<TailPoints> {
-    tails.get(message.killed_snake).ok().cloned().or_else(|| {
+    let local_tail = || {
         let (player_entity, player) = local_player?;
         if player_entity != message.killed_player {
             return None;
         }
-        player
-            .snake
-            .and_then(|snake| tails.get(snake).ok().cloned())
-            .or_else(|| local_tail_cache.0.clone())
-    })
+        local_tail_cache.0.clone().or_else(|| {
+            player
+                .snake
+                .and_then(|snake| tails.get(snake).ok().cloned())
+        })
+    };
+    local_tail().or_else(|| tails.get(message.killed_snake).ok().cloned())
 }
 
-fn death_sound_position(message: &PlayerDeath, tails: &Query<&TailPoints>) -> Option<Vec2> {
-    tails
-        .get(message.killed_snake)
-        .or_else(|_| tails.get(message.killer_snake))
-        .ok()
-        .map(|tail| tail.front().0)
+fn death_position(
+    message: &PlayerDeath,
+    tails: &Query<&TailPoints>,
+    tail_snapshot: Option<&TailPoints>,
+) -> Option<Vec2> {
+    tail_snapshot.map(|tail| tail.front().0).or_else(|| {
+        tails
+            .get(message.killed_snake)
+            .or_else(|_| tails.get(message.killer_snake))
+            .ok()
+            .map(|tail| tail.front().0)
+    })
 }
 
 fn death_camera_target(message: &PlayerDeath) -> Option<Entity> {
