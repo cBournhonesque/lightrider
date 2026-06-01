@@ -32,6 +32,71 @@ GROUP BY target, kind
 ORDER BY rows DESC, target, kind;
 
 SELECT
+    'perf_frame_by_process' AS section,
+    role,
+    process_id,
+    count(*) AS samples,
+    avg(CAST(fields.frame_delta_avg_ms AS DOUBLE)) AS avg_frame_ms,
+    max(CAST(fields.frame_delta_max_ms AS DOUBLE)) AS max_frame_ms,
+    avg(CAST(fields.fps AS DOUBLE)) AS avg_fps,
+    avg(CAST(fields.link_count AS DOUBLE)) AS avg_links,
+    avg(CAST(fields.link_rtt_avg_ms AS DOUBLE)) AS avg_rtt_ms,
+    avg(CAST(fields.link_jitter_avg_ms AS DOUBLE)) AS avg_jitter_ms,
+    max(CAST(fields.link_recv_buffered AS BIGINT)) AS max_recv_buffered,
+    max(CAST(fields.link_send_buffered AS BIGINT)) AS max_send_buffered
+FROM debug_events
+WHERE kind = 'perf_frame'
+GROUP BY role, process_id
+ORDER BY role, process_id;
+
+SELECT
+    'transport_by_process' AS section,
+    process_id,
+    kind,
+    count(*) AS rows,
+    sum(coalesce(CAST(fields.bytes AS BIGINT), CAST(fields.send_bytes AS BIGINT), 0)) AS bytes
+FROM debug_events
+WHERE target = 'lightyear_debug::transport'
+GROUP BY process_id, kind
+ORDER BY process_id, kind;
+
+WITH transport_fragments AS (
+    SELECT
+        process_id,
+        kind,
+        coalesce(
+            CAST(frame_index AS BIGINT),
+            CAST(fields.local_tick AS BIGINT),
+            CAST(fields.remote_tick AS BIGINT),
+            CAST(tick_id AS BIGINT),
+            -1
+        ) AS frame_ref
+    FROM debug_events
+    WHERE target = 'lightyear_debug::transport'
+        AND (
+            lower(kind) LIKE '%fragment%'
+            OR lower(CAST(fields.packet_type AS VARCHAR)) LIKE '%fragment%'
+        )
+)
+SELECT
+    'transport_fragments_by_process' AS section,
+    process_id,
+    kind,
+    sum(fragments_per_frame) AS fragments,
+    max(fragments_per_frame) AS max_fragments_per_frame
+FROM (
+    SELECT
+        process_id,
+        kind,
+        frame_ref,
+        count(*) AS fragments_per_frame
+    FROM transport_fragments
+    GROUP BY process_id, kind, frame_ref
+) AS per_tick
+GROUP BY process_id, kind
+ORDER BY process_id, kind;
+
+SELECT
     'rollback_requests_by_process' AS section,
     process_id,
     count(*) AS rollbacks,

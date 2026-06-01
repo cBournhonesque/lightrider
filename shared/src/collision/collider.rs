@@ -1,10 +1,11 @@
-use bevy::ecs::query::{Or, QueryFilter};
+use bevy::ecs::query::Or;
 use bevy::prelude::*;
 use lightyear::prelude::Interpolated;
 
 use crate::config::GameConfig;
 use crate::movement::SimulationSet;
 use crate::network::protocol::prelude::{RoomId, TailPoints};
+use crate::spatial::{TailSegment, TailSpatialIndex};
 use crate::utils::geometry::ray_segment_intersection;
 use crate::utils::query::Simulated;
 
@@ -62,18 +63,29 @@ pub(crate) fn snake_friction(
     if max_distance <= 0.0 {
         return;
     }
+    let tail_index = TailSpatialIndex::from_tails(
+        tails
+            .iter()
+            .map(|(entity, tail, room)| (entity, *room, tail)),
+    );
     for (entity, tail, room) in boosted.iter() {
         let origin = tail.front().0;
         let direction = tail.front().1.delta();
-        let left_hit =
-            nearest_tail_ray_hit(origin, direction.perp(), max_distance, entity, room, &tails);
+        let left_hit = nearest_tail_ray_hit(
+            origin,
+            direction.perp(),
+            max_distance,
+            entity,
+            *room,
+            &tail_index,
+        );
         let right_hit = nearest_tail_ray_hit(
             origin,
             -direction.perp(),
             max_distance,
             entity,
-            room,
-            &tails,
+            *room,
+            &tail_index,
         );
 
         if let Some((distance, other)) = nearest_hit(left_hit, right_hit) {
@@ -99,11 +111,54 @@ fn nearest_tail_ray_hit(
     direction: Vec2,
     max_distance: f32,
     excluded: Entity,
-    room: &RoomId,
-    tails: &Query<(Entity, &TailPoints, &RoomId), impl QueryFilter>,
+    room: RoomId,
+    tail_index: &TailSpatialIndex,
+) -> Option<(f32, Entity)> {
+    let candidates = if direction.x.abs() >= direction.y.abs() {
+        let end = origin + direction * max_distance;
+        tail_index.vertical_segments_near(room, origin.x.min(end.x), origin.x.max(end.x))
+    } else {
+        let end = origin + direction * max_distance;
+        tail_index.horizontal_segments_near(room, origin.y.min(end.y), origin.y.max(end.y))
+    };
+    nearest_tail_ray_hit_from_segments(origin, direction, max_distance, excluded, candidates)
+}
+
+fn nearest_tail_ray_hit_from_segments<'a>(
+    origin: Vec2,
+    direction: Vec2,
+    max_distance: f32,
+    excluded: Entity,
+    candidates: impl IntoIterator<Item = &'a TailSegment>,
 ) -> Option<(f32, Entity)> {
     let mut nearest: Option<(f32, Entity)> = None;
-    for (other_entity, other_tail, other_room) in tails.iter() {
+    for segment in candidates {
+        if segment.owner == excluded {
+            continue;
+        }
+        let Some(distance) =
+            ray_segment_intersection(origin, direction, max_distance, segment.start, segment.end)
+        else {
+            continue;
+        };
+        if nearest.map_or(true, |(nearest_distance, _)| distance < nearest_distance) {
+            nearest = Some((distance, segment.owner));
+        }
+    }
+    nearest
+}
+
+#[cfg(test)]
+fn nearest_tail_ray_hit_bruteforce<'a>(
+    origin: Vec2,
+    direction: Vec2,
+    max_distance: f32,
+    excluded: Entity,
+    room: &RoomId,
+    tails: impl IntoIterator<Item = (Entity, &'a TailPoints, &'a RoomId)>,
+) -> Option<(f32, Entity)> {
+    let mut nearest: Option<(f32, Entity)> = None;
+    for (other_entity, other_tail, other_room) in tails {
         if other_entity == excluded || other_room != room {
             continue;
         }
@@ -140,6 +195,60 @@ mod tests {
 
     fn run_fixed_update(app: &mut App) {
         app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    #[test]
+    fn indexed_friction_query_matches_bruteforce() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let room = RoomId(1);
+        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
+        app.world_mut().entity_mut(snake1).insert((
+            room,
+            TailPoints(VecDeque::from([
+                (Vec2::new(0.0, 0.0), Direction::Up),
+                (Vec2::new(0.0, -100.0), Direction::Up),
+            ])),
+        ));
+        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
+        app.world_mut().entity_mut(snake2).insert((
+            room,
+            TailPoints(VecDeque::from([
+                (Vec2::new(8.0, 50.0), Direction::Up),
+                (Vec2::new(8.0, -50.0), Direction::Up),
+            ])),
+        ));
+        let other_room_snake = app.world_mut().spawn(SnakeBundle::default()).id();
+        app.world_mut().entity_mut(other_room_snake).insert((
+            RoomId(2),
+            TailPoints(VecDeque::from([
+                (Vec2::new(2.0, 50.0), Direction::Up),
+                (Vec2::new(2.0, -50.0), Direction::Up),
+            ])),
+        ));
+
+        let mut query = app.world_mut().query::<(Entity, &TailPoints, &RoomId)>();
+        let index = TailSpatialIndex::from_tails(
+            query
+                .iter(app.world())
+                .map(|(entity, tail, room)| (entity, *room, tail)),
+        );
+
+        let origin = Vec2::ZERO;
+        let direction = Vec2::X;
+        let indexed = nearest_tail_ray_hit(origin, direction, 20.0, snake1, room, &index);
+        let brute_force = nearest_tail_ray_hit_bruteforce(
+            origin,
+            direction,
+            20.0,
+            snake1,
+            &room,
+            query.iter(app.world()),
+        );
+
+        assert_eq!(indexed, brute_force);
+        assert_eq!(indexed, Some((8.0, snake2)));
     }
 
     #[test]

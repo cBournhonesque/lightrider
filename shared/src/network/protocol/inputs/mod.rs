@@ -1,11 +1,9 @@
 use bevy::prelude::*;
-use lightyear::prelude::input::bei::{bindings, Action, ActionOf, Bindings, Cardinal, InputMarker};
+use lightyear::prelude::input::bei::{Action, ActionOf, Bindings, Cardinal, InputMarker};
 use lightyear::prelude::{PeerId, PreSpawned};
 
-pub use game::{PlayerInput, SpawnPlayer};
 pub use movement::{MoveSnake, SnakeInput};
 
-mod game;
 mod movement;
 
 #[derive(Component)]
@@ -38,26 +36,6 @@ fn configure_action_entity(
     } else {
         action.insert(input_marker);
     }
-}
-
-pub fn spawn_player_input_actions(
-    commands: &mut Commands,
-    player_entity: Entity,
-    client_id: PeerId,
-    is_server: bool,
-) {
-    let mut action = commands.spawn((
-        ActionOf::<PlayerInput>::new(player_entity),
-        Action::<SpawnPlayer>::new(),
-        bindings![KeyCode::Enter, KeyCode::Space],
-        action_prespawn(client_id, 1, player_entity, is_server),
-    ));
-    configure_action_entity(
-        &mut action,
-        client_id,
-        is_server,
-        InputMarker::<PlayerInput>::default(),
-    );
 }
 
 pub fn spawn_snake_input_actions(

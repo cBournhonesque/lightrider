@@ -1,14 +1,16 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::log::{BoxedFmtLayer, BoxedLayer, Level, LogPlugin};
 use bevy::prelude::*;
+use bevy::time::Real;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{
-    Controlled, ControlledBy, Interpolated, LocalTimeline, Predicted, Replicated, Tick,
+    Controlled, ControlledBy, Interpolated, Link, LocalTimeline, Predicted, Replicated, Tick,
 };
 use serde_json::{Map, Number, Value};
 use tracing::field::{Field, Visit};
@@ -26,6 +28,7 @@ use crate::utils::query::SimulationAuthority;
 pub const LIGHTYEAR_DEBUG_FILE_ENV: &str = "LIGHTYEAR_DEBUG_FILE";
 const LIGHTYEAR_DEBUG_TARGET: &str = "lightyear_debug";
 const LIGHTYEAR_DEBUG_TARGET_MANUAL: &str = "lightyear_debug::manual";
+static DEBUG_FRAME_INDEX: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DebugSamplePoint {
@@ -82,6 +85,7 @@ impl RuntimeDebugPlugin {
 impl Plugin for RuntimeDebugPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.role);
+        app.add_systems(First, advance_debug_frame_index);
         app.add_systems(
             FixedUpdate,
             trace_snakes_fixed_update.after(SimulationSet::Movement),
@@ -94,7 +98,7 @@ impl Plugin for RuntimeDebugPlugin {
             PostUpdate,
             trace_snakes_post_update.after(FrameInterpolationSystems::Interpolate),
         );
-        app.add_systems(Last, trace_snakes_last);
+        app.add_systems(Last, (trace_snakes_last, trace_perf_metrics));
     }
 }
 
@@ -153,6 +157,10 @@ impl DebugJsonLayer {
         let mut root = Map::new();
         root.insert("timestamp".to_string(), Value::from(unix_timestamp_ns()));
         root.insert("process_id".to_string(), Value::from(std::process::id()));
+        root.insert(
+            "frame_index".to_string(),
+            Value::from(DEBUG_FRAME_INDEX.load(Ordering::Relaxed)),
+        );
         root.insert("target".to_string(), Value::from(metadata.target()));
         root.insert("level".to_string(), Value::from(metadata.level().as_str()));
         if let Some(category) = category_from_target(metadata.target()) {
@@ -372,6 +380,118 @@ fn trace_snakes_last(
         snakes,
         players,
     );
+}
+
+fn advance_debug_frame_index() {
+    DEBUG_FRAME_INDEX.fetch_add(1, Ordering::Relaxed);
+}
+
+#[derive(Default)]
+struct PerfMetricWindow {
+    frame_count: u64,
+    elapsed_seconds: f64,
+    frame_delta_total_ms: f64,
+    frame_delta_max_ms: f64,
+}
+
+impl PerfMetricWindow {
+    fn push_frame(&mut self, delta_seconds: f64) {
+        let delta_ms = delta_seconds * 1000.0;
+        self.frame_count += 1;
+        self.elapsed_seconds += delta_seconds;
+        self.frame_delta_total_ms += delta_ms;
+        self.frame_delta_max_ms = self.frame_delta_max_ms.max(delta_ms);
+    }
+
+    fn should_flush(&self) -> bool {
+        self.elapsed_seconds >= 1.0
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn trace_perf_metrics(
+    role: Res<RuntimeDebugRole>,
+    timeline: Res<LocalTimeline>,
+    real_time: Res<Time<Real>>,
+    links: Query<&Link>,
+    mut window: Local<PerfMetricWindow>,
+) {
+    if !manual_trace_enabled() {
+        return;
+    }
+
+    window.push_frame(real_time.delta_secs_f64());
+    if !window.should_flush() {
+        return;
+    }
+
+    let mut link_count = 0_u64;
+    let mut rtt_total_ms = 0.0_f64;
+    let mut rtt_max_ms = 0.0_f64;
+    let mut jitter_total_ms = 0.0_f64;
+    let mut jitter_max_ms = 0.0_f64;
+    let mut recv_buffered = 0_u64;
+    let mut send_buffered = 0_u64;
+    for link in &links {
+        link_count += 1;
+        let rtt_ms = link.stats.rtt.as_secs_f64() * 1000.0;
+        let jitter_ms = link.stats.jitter.as_secs_f64() * 1000.0;
+        rtt_total_ms += rtt_ms;
+        rtt_max_ms = rtt_max_ms.max(rtt_ms);
+        jitter_total_ms += jitter_ms;
+        jitter_max_ms = jitter_max_ms.max(jitter_ms);
+        recv_buffered += link.recv.len() as u64;
+        send_buffered += link.send.len() as u64;
+    }
+
+    let frame_delta_avg_ms = if window.frame_count > 0 {
+        window.frame_delta_total_ms / window.frame_count as f64
+    } else {
+        0.0
+    };
+    let fps = if window.elapsed_seconds > 0.0 {
+        window.frame_count as f64 / window.elapsed_seconds
+    } else {
+        0.0
+    };
+    let link_rtt_avg_ms = if link_count > 0 {
+        rtt_total_ms / link_count as f64
+    } else {
+        0.0
+    };
+    let link_jitter_avg_ms = if link_count > 0 {
+        jitter_total_ms / link_count as f64
+    } else {
+        0.0
+    };
+    let tick = timeline.tick();
+
+    tracing::trace!(
+        target: LIGHTYEAR_DEBUG_TARGET_MANUAL,
+        kind = "perf_frame",
+        sample_point = DebugSamplePoint::Last.as_str(),
+        schedule = "Last",
+        role = role.as_str(),
+        tick = ?tick,
+        tick_id = u64::from(tick.0),
+        frame_count = window.frame_count,
+        elapsed_seconds = window.elapsed_seconds,
+        fps = fps,
+        frame_delta_avg_ms = frame_delta_avg_ms,
+        frame_delta_max_ms = window.frame_delta_max_ms,
+        link_count = link_count,
+        link_rtt_avg_ms = link_rtt_avg_ms,
+        link_rtt_max_ms = rtt_max_ms,
+        link_jitter_avg_ms = link_jitter_avg_ms,
+        link_jitter_max_ms = jitter_max_ms,
+        link_recv_buffered = recv_buffered,
+        link_send_buffered = send_buffered,
+        "lightrider performance sample"
+    );
+    window.reset();
 }
 
 type SnakeTraceItem<'a> = (

@@ -8,6 +8,7 @@ pub mod debug;
 pub mod map;
 pub mod movement;
 pub mod network;
+pub mod spatial;
 pub mod utils;
 
 pub struct SharedPlugin;

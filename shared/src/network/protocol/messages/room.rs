@@ -88,6 +88,9 @@ pub struct PlayerNameUpdate {
     pub name: String,
 }
 
+#[derive(Message, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerSpawnRequest;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,6 +12,7 @@ use shared::config::GameConfig;
 use shared::map::{MapMarker, MapSize};
 use shared::network::bundle::food::FoodBundle;
 use shared::network::protocol::prelude::*;
+use shared::spatial::{FoodPoint, FoodSpatialIndex};
 use tracing::error;
 
 pub struct FoodPlugin;
@@ -81,24 +82,48 @@ fn food_collision(
     mut writer: MessageWriter<FoodCollision>,
 ) {
     let mut eaten_food = EntityHashSet::default();
+    let food_index =
+        FoodSpatialIndex::from_food(food.iter().map(|(entity, position, room)| FoodPoint {
+            entity,
+            room: *room,
+            position: position.0,
+        }));
     for (snake, tail, room) in tails.iter() {
         let collision_point = tail.front().0;
-        for (food_entity, position, food_room) in food.iter() {
-            if food_room != room || eaten_food.contains(&food_entity) {
+        for food in food_index.within_radius(*room, collision_point, config.food.radius) {
+            if eaten_food.contains(&food.entity) {
                 continue;
             }
-            if collision_point.distance(position.0) <= config.food.radius {
-                eaten_food.insert(food_entity);
-                writer.write(FoodCollision {
-                    snake,
-                    food: food_entity,
-                    food_position: position.0,
-                    head_position: collision_point,
-                });
-                break;
-            }
+            eaten_food.insert(food.entity);
+            writer.write(FoodCollision {
+                snake,
+                food: food.entity,
+                food_position: food.position,
+                head_position: collision_point,
+            });
+            break;
         }
     }
+}
+
+#[cfg(test)]
+fn nearest_food_bruteforce(
+    room: RoomId,
+    head: Vec2,
+    radius: f32,
+    eaten_food: &EntityHashSet,
+    food: impl IntoIterator<Item = FoodPoint>,
+) -> Option<FoodPoint> {
+    food.into_iter()
+        .filter(|food| food.room == room)
+        .filter(|food| !eaten_food.contains(&food.entity))
+        .filter(|food| head.distance(food.position) <= radius)
+        .min_by(|left, right| {
+            left.position
+                .distance_squared(head)
+                .total_cmp(&right.position.distance_squared(head))
+                .then_with(|| left.entity.to_bits().cmp(&right.entity.to_bits()))
+        })
 }
 
 fn grow_tail(
@@ -235,6 +260,39 @@ mod tests {
         let food = app.world().entity(food);
         assert!(food.contains::<Replicate>());
         assert!(food.contains::<InterpolationTarget>());
+    }
+
+    #[test]
+    fn indexed_food_query_matches_bruteforce() {
+        let room = RoomId(1);
+        let head = Vec2::ZERO;
+        let near = Entity::from_bits(3);
+        let farther = Entity::from_bits(4);
+        let other_room = Entity::from_bits(5);
+        let food = vec![
+            FoodPoint {
+                entity: farther,
+                room,
+                position: Vec2::new(4.0, 0.0),
+            },
+            FoodPoint {
+                entity: near,
+                room,
+                position: Vec2::new(1.0, 0.0),
+            },
+            FoodPoint {
+                entity: other_room,
+                room: RoomId(2),
+                position: Vec2::ZERO,
+            },
+        ];
+        let index = FoodSpatialIndex::from_food(food.iter().copied());
+        let eaten_food = EntityHashSet::default();
+
+        assert_eq!(
+            index.within_radius(room, head, 5.0).first().copied(),
+            nearest_food_bruteforce(room, head, 5.0, &eaten_food, food)
+        );
     }
 
     #[test]

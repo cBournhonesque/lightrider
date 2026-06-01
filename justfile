@@ -151,6 +151,256 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
 trace-summary dir="logs/debug/latest":
     duckdb -batch -cmd "SET VARIABLE trace_glob = '{{dir}}/*.ndjson';" < tools/debug_trace_summary.sql
 
+# Load-test commands are intentionally separate from trace-local:
+# - `load-local` starts a server, many headless bot clients, OS samplers, and
+#   low-rate Lightyear JSONL tracing for the server plus a small client sample.
+# - `fake-clients` only launches headless bot clients against an already-running
+#   server, useful for testing deployed or manually started servers.
+# Metrics written under logs/load include CPU, RSS/HWM memory, network interface
+# throughput, frame/link trace rows, transport packet rows, and received fragment
+# counts from Lightyear debug traces.
+load-help:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cat <<'EOF'
+    Local full-stack load test:
+      just load-local clients=100 seconds=60 release=true
+      just load-local clients=100 seconds=60 net_interfaces=lo release=true
+
+    Attach fake clients to an existing local or deployed server:
+      just fake-clients count=100 server_addr=127.0.0.1 port=5000 release=true
+      just fake-clients count=100 server_addr=<edgegap-ip> port=<external-port> net_interfaces=eth0 release=true
+
+    Summarize an existing load run:
+      just load-summary dir=logs/load/latest
+
+    Outputs:
+      logs/load/<timestamp>/process_metrics.csv  CPU/RSS/HWM/thread/fd samples
+      logs/load/<timestamp>/network_metrics.csv  per-interface bandwidth samples
+      logs/load/<timestamp>/*.ndjson             sampled Lightyear debug traces
+      logs/load/<timestamp>/load_summary.txt     high-level summary
+    EOF
+
+load-local *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      set -a
+      source secrets/admin.env
+      set +a
+    fi
+    clients="100"
+    seconds="60"
+    config="config/load.ron"
+    port="5000"
+    first_client_id="2001"
+    room="auto"
+    release="true"
+    ramp_per_second="20"
+    trace_clients="2"
+    sample_interval="1"
+    server_trace="true"
+    net_interfaces="lo"
+    args=({{args}})
+    for arg in "${args[@]}"; do
+      case "$arg" in
+        clients=*) clients="${arg#*=}" ;;
+        seconds=*) seconds="${arg#*=}" ;;
+        config=*) config="${arg#*=}" ;;
+        port=*) port="${arg#*=}" ;;
+        first_client_id=*) first_client_id="${arg#*=}" ;;
+        room=*) room="${arg#*=}" ;;
+        release=*) release="${arg#*=}" ;;
+        ramp_per_second=*) ramp_per_second="${arg#*=}" ;;
+        trace_clients=*) trace_clients="${arg#*=}" ;;
+        sample_interval=*) sample_interval="${arg#*=}" ;;
+        server_trace=*) server_trace="${arg#*=}" ;;
+        net_interfaces=*) net_interfaces="${arg#*=}" ;;
+        *) echo "unknown load-local argument: $arg" >&2; exit 2 ;;
+      esac
+    done
+    run_dir="logs/load/$(date +%Y%m%d-%H%M%S)-local-c$clients"
+    mkdir -p "$run_dir"
+    mkdir -p logs/load
+    ln -sfn "$(realpath "$run_dir")" logs/load/latest
+    cargo_args=(-j 2)
+    bin_dir="debug"
+    if [[ "$release" == "true" ]]; then
+      cargo_args+=(--release)
+      bin_dir="release"
+    fi
+    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
+    pids_file="$run_dir/pids.csv"
+    echo "role,name,pid" > "$pids_file"
+    pids=()
+    sampler_pid=""
+    cleanup() {
+      set +e
+      for pid in "${pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+      if [[ -n "$sampler_pid" ]]; then
+        kill "$sampler_pid" 2>/dev/null || true
+      fi
+      wait 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+    LOAD_NET_INTERFACES="$net_interfaces" tools/load_sampler.sh "$run_dir" "$pids_file" "$sample_interval" &
+    sampler_pid="$!"
+    if [[ "$server_trace" == "true" ]]; then
+      RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
+        "target/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
+        > "$run_dir/server.log" 2>&1 &
+    else
+      RUST_LOG="warn" \
+        "target/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
+        > "$run_dir/server.log" 2>&1 &
+    fi
+    server_pid="$!"
+    pids+=("$server_pid")
+    echo "server,server,$server_pid" >> "$pids_file"
+    sleep 2
+    if (( ramp_per_second > 0 )); then
+      sleep_interval="$(awk -v rate="$ramp_per_second" 'BEGIN { printf "%.3f", 1.0 / rate }')"
+    else
+      sleep_interval="0"
+    fi
+    for i in $(seq 0 $((clients - 1))); do
+      id=$((first_client_id + i))
+      if (( i < trace_clients )); then
+        RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
+          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          > "$run_dir/client-$id.log" 2>&1 &
+      else
+        RUST_LOG="warn" \
+          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          > "$run_dir/client-$id.log" 2>&1 &
+      fi
+      client_pid="$!"
+      pids+=("$client_pid")
+      echo "client,client-$id,$client_pid" >> "$pids_file"
+      sleep "$sleep_interval"
+    done
+    sleep "$seconds"
+    cleanup
+    trap - EXIT INT TERM
+    echo "load run: $run_dir"
+    tools/load_summary.py "$run_dir" | tee "$run_dir/load_summary.stdout.txt"
+    if command -v duckdb >/dev/null 2>&1; then
+      duckdb -batch -cmd "SET VARIABLE trace_glob = '$run_dir/*.ndjson';" < tools/debug_trace_summary.sql > "$run_dir/duckdb_summary.txt" 2>&1 || true
+    fi
+
+fake-clients *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    count="100"
+    first_id="2001"
+    config="config/load.ron"
+    server_addr="127.0.0.1"
+    port="5000"
+    room="auto"
+    release="true"
+    ramp_per_second="20"
+    seconds="0"
+    run_dir=""
+    trace_clients="0"
+    sample_interval="1"
+    net_interfaces=""
+    args=({{args}})
+    for arg in "${args[@]}"; do
+      case "$arg" in
+        count=*) count="${arg#*=}" ;;
+        first_id=*) first_id="${arg#*=}" ;;
+        config=*) config="${arg#*=}" ;;
+        server_addr=*) server_addr="${arg#*=}" ;;
+        port=*) port="${arg#*=}" ;;
+        room=*) room="${arg#*=}" ;;
+        release=*) release="${arg#*=}" ;;
+        ramp_per_second=*) ramp_per_second="${arg#*=}" ;;
+        seconds=*) seconds="${arg#*=}" ;;
+        run_dir=*) run_dir="${arg#*=}" ;;
+        trace_clients=*) trace_clients="${arg#*=}" ;;
+        sample_interval=*) sample_interval="${arg#*=}" ;;
+        net_interfaces=*) net_interfaces="${arg#*=}" ;;
+        *) echo "unknown fake-clients argument: $arg" >&2; exit 2 ;;
+      esac
+    done
+    if [[ -z "$run_dir" ]]; then
+      run_dir="logs/load/$(date +%Y%m%d-%H%M%S)-fake-c$count"
+    else
+      run_dir="$run_dir"
+    fi
+    mkdir -p "$run_dir"
+    mkdir -p logs/load
+    ln -sfn "$(realpath "$run_dir")" logs/load/latest
+    cargo_args=(-j 2)
+    bin_dir="debug"
+    if [[ "$release" == "true" ]]; then
+      cargo_args+=(--release)
+      bin_dir="release"
+    fi
+    cargo build "${cargo_args[@]}" -p client --bin lightrider-client
+    pids_file="$run_dir/pids.csv"
+    echo "role,name,pid" > "$pids_file"
+    pids=()
+    sampler_pid=""
+    cleanup() {
+      set +e
+      for pid in "${pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+      if [[ -n "$sampler_pid" ]]; then
+        kill "$sampler_pid" 2>/dev/null || true
+      fi
+      wait 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+    LOAD_NET_INTERFACES="$net_interfaces" tools/load_sampler.sh "$run_dir" "$pids_file" "$sample_interval" &
+    sampler_pid="$!"
+    if (( ramp_per_second > 0 )); then
+      sleep_interval="$(awk -v rate="$ramp_per_second" 'BEGIN { printf "%.3f", 1.0 / rate }')"
+    else
+      sleep_interval="0"
+    fi
+    for i in $(seq 0 $((count - 1))); do
+      id=$((first_id + i))
+      if (( i < trace_clients )); then
+        RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
+          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
+          > "$run_dir/client-$id.log" 2>&1 &
+      else
+        RUST_LOG="warn" \
+          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
+          > "$run_dir/client-$id.log" 2>&1 &
+      fi
+      client_pid="$!"
+      pids+=("$client_pid")
+      echo "client,client-$id,$client_pid" >> "$pids_file"
+      sleep "$sleep_interval"
+    done
+    echo "fake clients running: count=$count run_dir=$run_dir"
+    if (( seconds > 0 )); then
+      sleep "$seconds"
+      cleanup
+      trap - EXIT INT TERM
+      tools/load_summary.py "$run_dir" | tee "$run_dir/load_summary.stdout.txt"
+    else
+      wait
+    fi
+
+load-summary *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="logs/load/latest"
+    args=({{args}})
+    for arg in "${args[@]}"; do
+      case "$arg" in
+        dir=*) dir="${arg#*=}" ;;
+        *) dir="$arg" ;;
+      esac
+    done
+    tools/load_summary.py "$dir"
+
 trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3001" first_bot_id="3002" bot_clients="2" room="auto" release="false":
     #!/usr/bin/env bash
     set -euo pipefail

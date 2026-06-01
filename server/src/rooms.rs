@@ -489,7 +489,6 @@ fn spawn_client_player(
     add_replicated_entity_to_room(commands, assignment.lightyear_room, player_entity);
     add_replicated_entity_to_room(commands, assignment.lightyear_room, head_entity);
     spawn_snake_input_actions(commands, head_entity, client_id, true);
-    spawn_player_input_actions(commands, player_entity, client_id, true);
 }
 
 pub(crate) fn add_replicated_entity_to_room(

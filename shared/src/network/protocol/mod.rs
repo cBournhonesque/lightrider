@@ -6,10 +6,7 @@ use lightyear::prelude::*;
 
 use crate::config::GameConfig;
 
-pub use inputs::{
-    spawn_player_input_actions, spawn_snake_input_actions, MoveSnake, PlayerInput, ServerAction,
-    SnakeInput, SpawnPlayer,
-};
+pub use inputs::{spawn_snake_input_actions, MoveSnake, ServerAction, SnakeInput};
 
 pub mod channels;
 pub mod components;
@@ -50,15 +47,7 @@ impl Plugin for ProtocolPlugin {
                 ..default()
             },
         });
-        app.add_plugins(InputPlugin::<PlayerInput> {
-            config: InputConfig {
-                rebroadcast_inputs: false,
-                packet_redundancy: input_packet_redundancy_ticks,
-                ..default()
-            },
-        });
         app.register_input_action::<MoveSnake>();
-        app.register_input_action::<SpawnPlayer>();
 
         app.register_message::<messages::snake::PlayerDeath>()
             .add_map_entities()
@@ -69,6 +58,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<messages::room::RoomJoinRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<messages::room::PlayerNameUpdate>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<messages::room::PlayerSpawnRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<messages::admin::AdminLoginRequest>()
             .add_direction(NetworkDirection::ClientToServer);

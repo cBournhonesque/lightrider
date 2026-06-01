@@ -9,6 +9,7 @@ use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::movement::SimulationSet;
 use shared::network::protocol::prelude::*;
+use shared::spatial::{FoodPoint, FoodSpatialIndex};
 
 pub(crate) struct PredictedFoodPlugin;
 
@@ -20,13 +21,6 @@ pub(crate) struct ConfirmedFoodPickup {
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 struct RecentlyBoostedFromFood {
     foods: VecDeque<Entity>,
-}
-
-#[derive(Clone, Copy)]
-struct FoodPickupCandidate {
-    entity: Entity,
-    position: Vec2,
-    room: RoomId,
 }
 
 impl Plugin for PredictedFoodPlugin {
@@ -91,22 +85,24 @@ fn predict_food_boosts(
 ) {
     let candidates = food
         .iter()
-        .map(|(entity, position, room)| FoodPickupCandidate {
+        .map(|(entity, position, room)| FoodPoint {
             entity,
             position: position.0,
             room: *room,
         })
         .collect::<Vec<_>>();
+    let food_index = FoodSpatialIndex::from_food(candidates.iter().copied());
 
     for (snake, tail, room, mut food_boost, mut recently_boosted) in &mut snakes {
         recently_boosted.retain_known_food(&candidates);
+        let near_food = food_index.within_radius(*room, tail.front().0, config.food.radius);
         if let Some(food) = predict_food_boost_for_snake(
             &config,
             tail,
             *room,
             &mut food_boost,
             &mut recently_boosted,
-            candidates.iter().copied(),
+            near_food,
         ) {
             trace!(
                 target: "lightyear_debug::manual",
@@ -130,7 +126,7 @@ fn predict_food_boost_for_snake(
     room: RoomId,
     food_boost: &mut FoodBoost,
     recently_boosted: &mut RecentlyBoostedFromFood,
-    foods: impl IntoIterator<Item = FoodPickupCandidate>,
+    foods: impl IntoIterator<Item = FoodPoint>,
 ) -> Option<Entity> {
     let head = tail.front().0;
     let radius = config.food.radius.max(0.0);
@@ -150,7 +146,7 @@ fn predict_food_boost_for_snake(
 }
 
 impl RecentlyBoostedFromFood {
-    fn retain_known_food(&mut self, candidates: &[FoodPickupCandidate]) {
+    fn retain_known_food(&mut self, candidates: &[FoodPoint]) {
         self.foods
             .retain(|boosted| candidates.iter().any(|food| food.entity == *boosted));
     }
@@ -182,7 +178,7 @@ mod tests {
             (Vec2::new(-80.0, 0.0), Direction::Right),
         ]));
         let mut food_boost = FoodBoost::default();
-        let candidate = FoodPickupCandidate {
+        let candidate = FoodPoint {
             entity: food,
             position: Vec2::new(config.food.radius * 0.5, 0.0),
             room: RoomId(7),
@@ -238,7 +234,7 @@ mod tests {
                 RoomId(1),
                 &mut food_boost,
                 &mut recently_boosted,
-                [FoodPickupCandidate {
+                [FoodPoint {
                     entity: Entity::from_bits(100),
                     position: Vec2::ZERO,
                     room: RoomId(2),
@@ -266,7 +262,7 @@ mod tests {
                 RoomId(1),
                 &mut food_boost,
                 &mut recently_boosted,
-                [FoodPickupCandidate {
+                [FoodPoint {
                     entity: Entity::from_bits(101),
                     position: Vec2::new(config.food.radius + 0.01, 0.0),
                     room: RoomId(1),
@@ -285,7 +281,7 @@ mod tests {
         recently_boosted.push(removed);
         recently_boosted.push(kept);
 
-        recently_boosted.retain_known_food(&[FoodPickupCandidate {
+        recently_boosted.retain_known_food(&[FoodPoint {
             entity: kept,
             position: Vec2::ZERO,
             room: RoomId(1),

@@ -6,6 +6,7 @@ use bevy_enhanced_input::prelude::{
 use lightyear::prelude::input::bei::{Action, ActionOf, InputMarker};
 use lightyear::prelude::Controlled;
 
+use crate::network::inputs::AutoRespawnRequests;
 use shared::bot::{direction_to_input, BotController};
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::*;
@@ -27,14 +28,8 @@ impl Plugin for BotClientPlugin {
             decision_interval_ticks: self.decision_interval_ticks,
             mistake_chance_per_decision_percent: self.mistake_chance_per_decision_percent,
         });
-        app.add_systems(
-            Update,
-            (
-                attach_bot_controllers,
-                ensure_move_action_mocks,
-                ensure_spawn_action_mocks,
-            ),
-        );
+        app.insert_resource(AutoRespawnRequests);
+        app.add_systems(Update, (attach_bot_controllers, ensure_move_action_mocks));
         app.add_systems(
             FixedPreUpdate,
             update_move_action_mocks.before(EnhancedInputSystems::Update),
@@ -73,26 +68,6 @@ fn ensure_move_action_mocks(
         commands.entity(action).insert(ActionMock::new(
             TriggerState::Fired,
             Vec2::Y,
-            MockSpan::Manual,
-        ));
-    }
-}
-
-fn ensure_spawn_action_mocks(
-    mut commands: Commands,
-    actions: Query<
-        Entity,
-        (
-            With<Action<SpawnPlayer>>,
-            With<InputMarker<PlayerInput>>,
-            Without<ActionMock>,
-        ),
-    >,
-) {
-    for action in &actions {
-        commands.entity(action).insert(ActionMock::new(
-            TriggerState::Fired,
-            true,
             MockSpan::Manual,
         ));
     }

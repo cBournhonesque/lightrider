@@ -453,6 +453,18 @@ mod tests {
     }
 
     #[test]
+    fn load_config_file_is_sized_for_many_headless_clients() {
+        let config = GameConfig::from_ron_str(include_str!("../../config/load.ron")).unwrap();
+
+        assert!(config.rooms.max_players_per_room >= 100);
+        assert!(!config.bots.enabled);
+        assert!(!config.sound.enabled);
+        assert!(config.debug.lightyear_debug);
+        assert!(!config.debug.json_snapshots);
+        assert!(config.food.max_count >= config.food.target_count);
+    }
+
+    #[test]
     fn food_spawn_target_respects_max_count() {
         let mut food = FoodConfig {
             target_count: 400,
