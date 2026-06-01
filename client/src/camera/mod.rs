@@ -1,4 +1,4 @@
-use crate::collision::death::DeathView;
+use crate::collision::death::{ConfirmedDeath, DeathView};
 use crate::inputs::ToggleCamera;
 use bevy::camera::{Projection, ScalingMode};
 use bevy::prelude::*;
@@ -17,6 +17,14 @@ struct CameraSettings {
     debug_enabled: bool,
 }
 
+#[derive(Resource, Clone, Copy, Debug, Default)]
+struct CameraShake {
+    remaining_seconds: f32,
+    duration_seconds: f32,
+    amplitude: f32,
+    phase: f32,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, States)]
 pub enum CameraState {
     // follow the player
@@ -31,6 +39,7 @@ impl Plugin for CameraPlugin {
         app.insert_resource(CameraSettings {
             debug_enabled: self.debug_enabled,
         });
+        app.init_resource::<CameraShake>();
 
         // state
         app.init_state::<CameraState>();
@@ -43,7 +52,9 @@ impl Plugin for CameraPlugin {
         // we could run during update, because the predicted movement is updated in FixedUpdate
         app.add_systems(
             PostUpdate,
-            follow_camera.after(FrameInterpolationSystems::Interpolate),
+            (trigger_death_camera_shake, follow_camera)
+                .chain()
+                .after(FrameInterpolationSystems::Interpolate),
         );
         app.add_observer(toggle_camera);
     }
@@ -74,6 +85,7 @@ fn follow_camera(
     time: Res<Time>,
     camera_state: Res<State<CameraState>>,
     death_view: Res<DeathView>,
+    mut shake: ResMut<CameraShake>,
     predicted: Query<(&TailPoints, &TailLength), With<Predicted>>,
     tails: Query<&TailPoints>,
     mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera>>,
@@ -82,11 +94,13 @@ fn follow_camera(
     // let lerp = 0.1;
     // let lerp = 1.0;
     if let Ok((mut camera_pos, mut projection)) = camera_query.single_mut() {
+        let mut has_target = false;
         if let Ok((pos, tail_length)) = predicted.single() {
             let head = pos.front().0;
             // *camera_pos = Transform::from_translation(camera_pos.translation.mul_add(Vec3::splat(1.0 - lerp), Vec3::from((head, 0.0)) * lerp));
             camera_pos.translation.x = head.x;
             camera_pos.translation.y = head.y;
+            has_target = true;
             if *camera_state.get() == CameraState::Follow {
                 smooth_camera_scale(
                     &mut projection,
@@ -100,7 +114,27 @@ fn follow_camera(
                 let head = pos.front().0;
                 camera_pos.translation.x = head.x;
                 camera_pos.translation.y = head.y;
+                has_target = true;
             }
+        }
+
+        if has_target {
+            let offset = shake.sample(time.delta_secs());
+            camera_pos.translation.x += offset.x;
+            camera_pos.translation.y += offset.y;
+        } else {
+            shake.decay(time.delta_secs());
+        }
+    }
+}
+
+fn trigger_death_camera_shake(
+    mut deaths: MessageReader<ConfirmedDeath>,
+    mut shake: ResMut<CameraShake>,
+) {
+    for death in deaths.read() {
+        if death.local_player {
+            shake.start(0.22, 7.0);
         }
     }
 }
@@ -173,6 +207,31 @@ fn normal_camera_scale_for_tail(config: &GameConfig, tail_length: &TailLength) -
         .clamp(min_scale, max_scale)
 }
 
+impl CameraShake {
+    fn start(&mut self, duration_seconds: f32, amplitude: f32) {
+        self.remaining_seconds = duration_seconds.max(0.0);
+        self.duration_seconds = duration_seconds.max(f32::EPSILON);
+        self.amplitude = amplitude.max(0.0);
+        self.phase += 1.618_034;
+    }
+
+    fn sample(&mut self, delta_seconds: f32) -> Vec2 {
+        if self.remaining_seconds <= 0.0 || self.amplitude <= 0.0 {
+            return Vec2::ZERO;
+        }
+
+        self.decay(delta_seconds);
+        let progress = 1.0 - (self.remaining_seconds / self.duration_seconds.max(f32::EPSILON));
+        let strength = self.amplitude * (1.0 - progress).powi(2);
+        let phase = self.phase + progress * std::f32::consts::TAU * 14.0;
+        Vec2::new(phase.sin(), (phase * 1.37).cos()) * strength
+    }
+
+    fn decay(&mut self, delta_seconds: f32) {
+        self.remaining_seconds = (self.remaining_seconds - delta_seconds.max(0.0)).max(0.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +268,15 @@ mod tests {
         let smoothed = smoothing_factor(6.0, 1.0 / 60.0);
         assert!(smoothed > 0.0);
         assert!(smoothed < 1.0);
+    }
+
+    #[test]
+    fn death_camera_shake_decays_to_zero() {
+        let mut shake = CameraShake::default();
+        shake.start(0.2, 7.0);
+
+        assert_ne!(shake.sample(1.0 / 60.0), Vec2::ZERO);
+        shake.sample(1.0);
+        assert_eq!(shake.sample(1.0 / 60.0), Vec2::ZERO);
     }
 }

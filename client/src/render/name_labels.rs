@@ -1,16 +1,18 @@
 use std::collections::HashSet;
 
+use bevy::ecs::query::Or;
 use bevy::prelude::*;
 use bevy::sprite::Text2d;
 use bevy::transform::TransformSystems;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
-use shared::network::protocol::prelude::{Player, TailPoints};
+use lightyear::prelude::{Interpolated, Predicted, Replicated};
+use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, TailPoints};
 
 use crate::render::colors::snake_color_for_player;
 
 const LABEL_OFFSET: Vec2 = Vec2::new(14.0, 13.0);
 const LABEL_Z: f32 = 20.0;
-const LABEL_FONT_SIZE: f32 = 9.0;
+const LABEL_FONT_SIZE: f32 = 11.0;
 
 pub(crate) struct NameLabelRenderPlugin;
 
@@ -32,8 +34,11 @@ impl Plugin for NameLabelRenderPlugin {
 
 fn update_name_labels(
     mut commands: Commands,
-    players: Query<(Entity, &Player)>,
-    tails: Query<&TailPoints>,
+    players: Query<(Entity, &Player, &PlayerStatus)>,
+    tails: Query<
+        (Entity, &TailPoints, Option<&HasPlayer>),
+        Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+    >,
     mut labels: Query<(
         Entity,
         &NameLabel,
@@ -45,8 +50,9 @@ fn update_name_labels(
 ) {
     let wanted = players
         .iter()
-        .filter_map(|(player_entity, player)| {
-            let tail = player.snake.and_then(|snake| tails.get(snake).ok())?;
+        .filter(|(_, _, status)| **status == PlayerStatus::Alive)
+        .filter_map(|(player_entity, player, _)| {
+            let tail = tail_for_player(player_entity, player, &tails)?;
             Some((
                 player_entity,
                 player.name.clone(),
@@ -91,6 +97,24 @@ fn update_name_labels(
             Transform::from_translation(label_translation(head)),
         ));
     }
+}
+
+fn tail_for_player<'a>(
+    player_entity: Entity,
+    player: &Player,
+    tails: &'a Query<
+        (Entity, &TailPoints, Option<&HasPlayer>),
+        Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+    >,
+) -> Option<&'a TailPoints> {
+    tails.iter().find_map(|(snake_entity, tail, owner)| {
+        if owner.is_some_and(|owner| owner.0 == player_entity) || player.snake == Some(snake_entity)
+        {
+            Some(tail)
+        } else {
+            None
+        }
+    })
 }
 
 fn label_translation(head: Vec2) -> Vec3 {

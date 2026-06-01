@@ -9,7 +9,7 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use shared::config::GameConfig;
-use shared::network::config::NetcodeIdentity;
+use shared::network::config::{recv_link_conditioner, NetcodeIdentity};
 
 #[derive(Resource, Clone)]
 pub(crate) struct ClientConnectionConfig {
@@ -82,7 +82,7 @@ fn spawn_client(
 
     let mut client = commands.spawn((
         Client::default(),
-        Link::new(None),
+        Link::new(recv_link_conditioner(&game_config.network)),
         LocalAddr(client_addr),
         ReplicationReceiver::default(),
         PredictionManager::default(),

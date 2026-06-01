@@ -38,15 +38,15 @@ fn spawn_asset_arena(
     spawn_background_grid(&mut commands, &config);
 
     let outline_width = config.render.map_outline_width.max(1.0);
-    let core_width = outline_width.clamp(1.0, 1.4);
-    let glow_width = (outline_width * 4.5).max(10.0);
+    let core_width = outline_width.clamp(1.2, 1.8);
+    let glow_width = (outline_width * 5.5).max(13.0);
     let glow_material = materials.add(ColorMaterial {
-        color: Color::linear_rgba(0.02, 0.28, 1.15, 0.045),
+        color: Color::linear_rgba(0.02, 0.45, 2.8, 0.06),
         alpha_mode: AlphaMode2d::Blend,
         ..default()
     });
     let border_material = materials.add(ColorMaterial {
-        color: Color::linear_rgb(0.04, 0.64, 2.35),
+        color: Color::linear_rgb(0.06, 0.92, 4.2),
         alpha_mode: AlphaMode2d::Opaque,
         ..default()
     });

@@ -1,9 +1,15 @@
+use std::time::Duration;
+
 use lightyear::netcode::Key;
+use lightyear::prelude::{LinkConditionerConfig, RecvLinkConditioner};
+
+use crate::config::NetworkConfig;
 
 pub const DEFAULT_PROTOCOL_ID: u64 = 0;
 pub const DEFAULT_PRIVATE_KEY: Key = [0; 32];
 
 pub const SERVER_SEND_HZ: f64 = 32.0;
+pub const NETWORK_CONDITIONER_ENV: &str = "LIGHTRIDER_NETWORK_CONDITIONER";
 
 const PROTOCOL_ID_ENV: &str = "LIGHTRIDER_PROTOCOL_ID";
 const PRIVATE_KEY_ENV: &str = "LIGHTRIDER_PRIVATE_KEY";
@@ -53,6 +59,41 @@ impl NetcodeIdentity {
     pub fn is_dev_default(&self) -> bool {
         self.protocol_id == DEFAULT_PROTOCOL_ID || self.private_key == DEFAULT_PRIVATE_KEY
     }
+}
+
+pub fn recv_link_conditioner(config: &NetworkConfig) -> Option<RecvLinkConditioner> {
+    recv_link_conditioner_config(config).map(RecvLinkConditioner::new)
+}
+
+pub fn recv_link_conditioner_config(config: &NetworkConfig) -> Option<LinkConditionerConfig> {
+    if let Some(preset) = std::env::var(NETWORK_CONDITIONER_ENV)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+    {
+        return match preset.as_str() {
+            "none" | "off" | "false" | "0" => None,
+            "good" => Some(LinkConditionerConfig::good_condition().half()),
+            "average" => Some(LinkConditionerConfig::average_condition().half()),
+            "poor" => Some(LinkConditionerConfig::poor_condition().half()),
+            other => panic!(
+                "invalid {NETWORK_CONDITIONER_ENV} '{other}'; expected none, good, average, or poor"
+            ),
+        };
+    }
+
+    if config.artificial_latency_ms == 0
+        && config.artificial_jitter_ms == 0
+        && config.artificial_loss_percent == 0
+    {
+        return None;
+    }
+
+    Some(LinkConditionerConfig::new(
+        Duration::from_millis(config.artificial_latency_ms),
+        Duration::from_millis(config.artificial_jitter_ms),
+        f32::from(config.artificial_loss_percent.min(100)) / 100.0,
+    ))
 }
 
 pub fn parse_private_key(value: &str) -> Key {
@@ -107,7 +148,9 @@ fn key_from_vec(bytes: Vec<u8>) -> Key {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_private_key;
+    use crate::config::{InputDelayConfig, NetworkConfig};
+
+    use super::{parse_private_key, recv_link_conditioner_config};
 
     #[test]
     fn parses_comma_private_key() {
@@ -124,5 +167,23 @@ mod tests {
             parse_private_key("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         assert_eq!(key[0], 0);
         assert_eq!(key[31], 31);
+    }
+
+    #[test]
+    fn config_network_conditioner_uses_one_way_artificial_values() {
+        let config = NetworkConfig {
+            input_delay: InputDelayConfig::balanced(),
+            input_packet_redundancy_ticks: 3,
+            server_port: 5000,
+            artificial_latency_ms: 12,
+            artificial_jitter_ms: 3,
+            artificial_loss_percent: 4,
+        };
+
+        let conditioner = recv_link_conditioner_config(&config).unwrap();
+
+        assert_eq!(conditioner.incoming_latency.as_millis(), 12);
+        assert_eq!(conditioner.incoming_jitter.as_millis(), 3);
+        assert!((conditioner.incoming_loss - 0.04).abs() < f32::EPSILON);
     }
 }

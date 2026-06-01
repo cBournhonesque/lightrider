@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use lightyear::prelude::Controlled;
 use shared::config::{GameConfig, MovementConfig, SoundConfig};
 use shared::network::protocol::prelude::{
-    DeathReason, Player, PlayerStatus, RoomId, Speed, TailPoints,
+    Acceleration, DeathReason, FoodBoost, Player, PlayerStatus, RoomId, Speed, TailPoints,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -17,6 +17,7 @@ const CRASH_SOUND: &str = "powerline/sounds/crash.ogg";
 const FOOD_GRAB_SOUND: &str = "powerline/sounds/foodgrab.ogg";
 const LINE_LOOP_SOUND: &str = "powerline/sounds/lineloop.ogg";
 const LINE_FAST_LOOP_SOUND: &str = "powerline/sounds/lineloopfast.ogg";
+const ELECTRO_LOOP_SOUND: &str = "powerline/sounds/electroloop.ogg";
 
 pub(crate) struct SoundPlugin;
 
@@ -26,12 +27,14 @@ struct PowerlineSounds {
     food_grab: Handle<AudioSource>,
     line_loop: Handle<AudioSource>,
     line_fast_loop: Handle<AudioSource>,
+    electro_loop: Handle<AudioSource>,
 }
 
 #[derive(Resource, Default)]
 struct LocalSpeedLoopState {
     line_loop: Option<Entity>,
     line_fast_loop: Option<Entity>,
+    electro_loop: Option<Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -43,9 +46,10 @@ struct RemoteSpeedLoopState {
 struct RemoteSpeedLoops {
     line_loop: Option<Entity>,
     line_fast_loop: Option<Entity>,
+    electro_loop: Option<Entity>,
 }
 
-#[derive(Component)]
+#[derive(Component, Default)]
 struct LocalSpeedLoopSound;
 
 #[derive(Component)]
@@ -90,6 +94,7 @@ impl FromWorld for PowerlineSounds {
             food_grab: asset_server.load(FOOD_GRAB_SOUND),
             line_loop: asset_server.load(LINE_LOOP_SOUND),
             line_fast_loop: asset_server.load(LINE_FAST_LOOP_SOUND),
+            electro_loop: asset_server.load(ELECTRO_LOOP_SOUND),
         }
     }
 }
@@ -219,26 +224,52 @@ fn update_local_speed_loops(
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<LocalSpeedLoopState>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
-    speeds: Query<&Speed>,
+    controlled_snakes: Query<
+        (&Speed, &Acceleration, &FoodBoost),
+        (With<Controlled>, With<TailPoints>),
+    >,
+    speeds: Query<(&Speed, Option<&Acceleration>, Option<&FoodBoost>)>,
     mut sinks: Query<&mut AudioSink, With<LocalSpeedLoopSound>>,
     mut playback_settings: Query<&mut PlaybackSettings, With<LocalSpeedLoopSound>>,
 ) {
-    let speed = local_player_speed(&players, &speeds);
-    let (line_volume, fast_volume) = speed_loop_volumes(speed, &config.sound, &config.movement);
+    let state_snapshot = local_player_sound_state(&controlled_snakes, &players, &speeds);
+    let (line_volume, fast_volume) = speed_loop_volumes(
+        state_snapshot.map(|state| state.speed),
+        &config.sound,
+        &config.movement,
+    );
+    let electro_volume = if state_snapshot.is_some_and(|state| {
+        proximity_boost_active(state.acceleration, state.food_boost, &config.movement)
+    }) {
+        config.sound.master_volume * config.sound.electro_loop_volume
+    } else {
+        0.0
+    };
 
-    update_local_speed_loop(
+    update_plain_loop(
         &mut commands,
         &mut state.line_loop,
+        LocalSpeedLoopSound,
         sounds.line_loop.clone(),
         line_volume,
         &mut sinks,
         &mut playback_settings,
     );
-    update_local_speed_loop(
+    update_plain_loop(
         &mut commands,
         &mut state.line_fast_loop,
+        LocalSpeedLoopSound,
         sounds.line_fast_loop.clone(),
         fast_volume,
+        &mut sinks,
+        &mut playback_settings,
+    );
+    update_plain_loop(
+        &mut commands,
+        &mut state.electro_loop,
+        LocalSpeedLoopSound,
+        sounds.electro_loop.clone(),
+        electro_volume,
         &mut sinks,
         &mut playback_settings,
     );
@@ -252,6 +283,8 @@ fn update_remote_speed_loops(
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     tails: Query<&TailPoints>,
     speeds: Query<&Speed>,
+    accelerations: Query<&Acceleration>,
+    food_boosts: Query<&FoodBoost>,
     mut sinks: Query<&mut SpatialAudioSink, With<RemoteSpeedLoopSound>>,
     mut transforms: Query<&mut Transform, With<RemoteSpeedLoopSound>>,
     mut playback_settings: Query<&mut PlaybackSettings, With<RemoteSpeedLoopSound>>,
@@ -277,12 +310,27 @@ fn update_remote_speed_loops(
         let (Ok(tail), Ok(speed)) = (tails.get(snake), speeds.get(snake)) else {
             continue;
         };
+        let proximity_active = accelerations
+            .get(snake)
+            .ok()
+            .zip(food_boosts.get(snake).ok())
+            .is_some_and(|(acceleration, food_boost)| {
+                proximity_boost_active(acceleration.0, food_boost.0, &config.movement)
+            });
 
         seen.insert(player_entity);
         let source_position = tail.front().0;
         let distance = source_position.distance(listener.position);
         let (line_volume, fast_volume) =
             remote_speed_loop_volumes(Some(speed.0), distance, &config.sound, &config.movement);
+        let electro_volume = if proximity_active {
+            config.sound.master_volume
+                * config.sound.electro_loop_volume
+                * config.sound.remote_speed_volume
+                * distance_attenuation(distance, &config.sound)
+        } else {
+            0.0
+        };
         let loops = state.loops.entry(player_entity).or_default();
 
         update_remote_speed_loop(
@@ -309,6 +357,18 @@ fn update_remote_speed_loops(
             &mut transforms,
             &mut playback_settings,
         );
+        update_remote_speed_loop(
+            &mut commands,
+            &mut loops.electro_loop,
+            player_entity,
+            sounds.electro_loop.clone(),
+            source_position,
+            electro_volume,
+            &config.sound,
+            &mut sinks,
+            &mut transforms,
+            &mut playback_settings,
+        );
     }
 
     let stale_players = state
@@ -321,17 +381,19 @@ fn update_remote_speed_loops(
         if let Some(loops) = state.loops.remove(&player) {
             despawn_loop(&mut commands, loops.line_loop);
             despawn_loop(&mut commands, loops.line_fast_loop);
+            despawn_loop(&mut commands, loops.electro_loop);
         }
     }
 }
 
-fn update_local_speed_loop(
+fn update_plain_loop<C: Component>(
     commands: &mut Commands,
     entity: &mut Option<Entity>,
+    marker: C,
     sound: Handle<AudioSource>,
     volume: f32,
-    sinks: &mut Query<&mut AudioSink, With<LocalSpeedLoopSound>>,
-    playback_settings: &mut Query<&mut PlaybackSettings, With<LocalSpeedLoopSound>>,
+    sinks: &mut Query<&mut AudioSink, With<C>>,
+    playback_settings: &mut Query<&mut PlaybackSettings, With<C>>,
 ) {
     if let Some(existing) = *entity {
         if let Ok(mut sink) = sinks.get_mut(existing) {
@@ -352,7 +414,7 @@ fn update_local_speed_loop(
     *entity = Some(
         commands
             .spawn((
-                LocalSpeedLoopSound,
+                marker,
                 AudioPlayer::new(sound),
                 PlaybackSettings::LOOP.with_volume(Volume::Linear(volume)),
             ))
@@ -444,6 +506,7 @@ fn clear_remote_speed_loops(commands: &mut Commands, state: &mut RemoteSpeedLoop
     for (_, loops) in loops {
         despawn_loop(commands, loops.line_loop);
         despawn_loop(commands, loops.line_fast_loop);
+        despawn_loop(commands, loops.electro_loop);
     }
 }
 
@@ -511,12 +574,42 @@ fn local_player_snake(players: &Query<(&Player, &RoomId, Has<Controlled>)>) -> O
         .and_then(|(player, _, _)| player.snake)
 }
 
-fn local_player_speed(
+#[derive(Clone, Copy, Debug)]
+struct LocalSoundState {
+    speed: f32,
+    acceleration: f32,
+    food_boost: f32,
+}
+
+fn local_player_sound_state(
+    controlled_snakes: &Query<
+        (&Speed, &Acceleration, &FoodBoost),
+        (With<Controlled>, With<TailPoints>),
+    >,
     players: &Query<(&Player, &RoomId, Has<Controlled>)>,
-    speeds: &Query<&Speed>,
-) -> Option<f32> {
+    speeds: &Query<(&Speed, Option<&Acceleration>, Option<&FoodBoost>)>,
+) -> Option<LocalSoundState> {
+    if let Some((speed, acceleration, food_boost)) = controlled_snakes.iter().next() {
+        return Some(LocalSoundState {
+            speed: speed.0,
+            acceleration: acceleration.0,
+            food_boost: food_boost.0,
+        });
+    }
+
     let snake = local_player_snake(players)?;
-    speeds.get(snake).ok().map(|speed| speed.0)
+    speeds
+        .get(snake)
+        .ok()
+        .map(|(speed, acceleration, food_boost)| LocalSoundState {
+            speed: speed.0,
+            acceleration: acceleration.map(|value| value.0).unwrap_or(0.0),
+            food_boost: food_boost.map(|value| value.0).unwrap_or(0.0),
+        })
+}
+
+fn proximity_boost_active(acceleration: f32, food_boost: f32, movement: &MovementConfig) -> bool {
+    acceleration - food_boost > movement.base_acceleration + 0.001
 }
 
 fn death_sound_volume(
@@ -685,5 +778,17 @@ mod tests {
         assert!(nearby.0 > far.0);
         assert!(nearby.1 > far.1);
         assert_eq!(far, (0.0, 0.0));
+    }
+
+    #[test]
+    fn proximity_boost_detects_acceleration_after_removing_food_boost() {
+        let movement = MovementConfig::default();
+
+        assert!(!proximity_boost_active(
+            movement.base_acceleration + 0.03,
+            0.03,
+            &movement
+        ));
+        assert!(proximity_boost_active(0.04, 0.01, &movement));
     }
 }

@@ -109,7 +109,7 @@ impl Default for MovementConfig {
         Self {
             tick_rate_hz: 30.0,
             starting_tail_length: 200.0,
-            min_speed: 1.0,
+            min_speed: 0.85,
             max_speed: 4.0,
             base_acceleration: -0.01,
             food_boost_acceleration: 0.03,
@@ -155,7 +155,7 @@ impl Default for RenderConfig {
             map_outline_width: 3.0,
             background_tile_size: 128.0,
             normal_camera_scale: 0.35,
-            normal_camera_growth_per_tail_length: 0.00025,
+            normal_camera_growth_per_tail_length: 0.00015,
             normal_camera_scale_smoothing: 6.0,
             normal_camera_max_scale: 0.62,
             debug_camera_scale: 1.0,
@@ -168,8 +168,10 @@ impl Default for RenderConfig {
 pub struct SoundConfig {
     pub enabled: bool,
     pub master_volume: f32,
+    pub background_volume: f32,
     pub death_volume: f32,
     pub food_volume: f32,
+    pub electro_loop_volume: f32,
     pub spatial_audio: bool,
     pub spatial_scale: f32,
     pub spatial_listener_ear_gap: f32,
@@ -190,8 +192,10 @@ impl Default for SoundConfig {
         Self {
             enabled: true,
             master_volume: 1.0,
+            background_volume: 0.0,
             death_volume: 0.55,
             food_volume: 0.65,
+            electro_loop_volume: 0.85,
             spatial_audio: true,
             spatial_scale: 0.02,
             spatial_listener_ear_gap: 8.0,
@@ -200,7 +204,7 @@ impl Default for SoundConfig {
             remote_death_volume: 1.0,
             remote_food_volume: 0.75,
             remote_speed_volume: 0.6,
-            speed_loop_start_speed: 0.8,
+            speed_loop_start_speed: 1.2,
             speed_loop_min_volume: 0.12,
             speed_loop_max_volume: 1.0,
             speed_fast_loop_start_speed: 3.0,
@@ -408,14 +412,18 @@ mod tests {
         assert_eq!(config.render.tail_width, 1.0);
         assert_eq!(config.render.map_outline_width, 3.0);
         assert_eq!(config.render.normal_camera_scale, 0.35);
-        assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00025);
+        assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00015);
         assert_eq!(config.render.normal_camera_scale_smoothing, 6.0);
         assert_eq!(config.render.normal_camera_max_scale, 0.62);
         assert_eq!(config.render.debug_camera_scale, 1.0);
+        assert_eq!(config.movement.min_speed, 0.85);
         assert!(config.sound.enabled);
+        assert_eq!(config.sound.background_volume, 0.0);
         assert_eq!(config.sound.death_volume, 0.55);
+        assert_eq!(config.sound.electro_loop_volume, 0.85);
         assert_eq!(config.sound.remote_sound_max_distance, 900.0);
         assert_eq!(config.sound.remote_speed_volume, 0.6);
+        assert_eq!(config.sound.speed_loop_start_speed, 1.2);
         assert_eq!(config.sound.speed_loop_max_volume, 1.0);
         assert_eq!(config.food.visual_radius, 3.0);
         assert_eq!(config.food.radius, 45.0);

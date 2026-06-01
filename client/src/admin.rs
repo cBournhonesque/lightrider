@@ -5,6 +5,8 @@ use lightyear::connection::client::Connected;
 use lightyear::prelude::{Client, MessageReceiver, MessageSender, PredictionMetrics};
 use shared::network::protocol::prelude::*;
 
+use crate::render::ui_style;
+
 const ADMIN_PANEL_WIDTH: f32 = 260.0;
 const MAX_PASSWORD_CHARS: usize = 96;
 
@@ -89,31 +91,37 @@ fn spawn_admin_ui(mut commands: Commands) {
                     top: Val::Px(-86.0),
                     ..default()
                 },
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 padding: UiRect::all(Val::Px(10.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.9)),
-            BorderColor::all(Color::srgba(0.55, 0.95, 1.0, 0.45)),
+            ui_style::panel_background(0.72),
+            ui_style::panel_border(),
+            ui_style::panel_shadow(),
             Visibility::Hidden,
         ))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Admin"),
-                TextColor(Color::srgb(0.75, 0.95, 1.0)),
+                ui_style::title_color(),
+                ui_style::text_glow(),
                 title_font.clone(),
             ));
             parent.spawn((
                 AdminPasswordText,
                 Text::new("Password: "),
-                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 body_font.clone(),
             ));
             parent.spawn((
                 AdminStatusText,
                 Text::new("Enter password, then press Enter."),
-                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 body_font.clone(),
             ));
             parent
@@ -136,25 +144,30 @@ fn spawn_admin_ui(mut commands: Commands) {
                 left: Val::Px(12.0),
                 top: Val::Px(58.0),
                 width: Val::Px(ADMIN_PANEL_WIDTH),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 padding: UiRect::all(Val::Px(10.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.78)),
-            BorderColor::all(Color::srgba(0.55, 0.95, 1.0, 0.45)),
+            ui_style::panel_background(0.62),
+            ui_style::panel_border(),
+            ui_style::panel_shadow(),
             Visibility::Hidden,
         ))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Admin"),
-                TextColor(Color::srgb(0.75, 0.95, 1.0)),
+                ui_style::title_color(),
+                ui_style::text_glow(),
                 title_font,
             ));
             parent.spawn((
                 AdminBotText,
                 Text::new("Bots: --"),
-                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 body_font.clone(),
             ));
             parent
@@ -172,7 +185,8 @@ fn spawn_admin_ui(mut commands: Commands) {
             parent.spawn((
                 AdminStatsText,
                 Text::new("Rollbacks: --"),
-                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 body_font,
             ));
         });
@@ -189,15 +203,17 @@ fn admin_button(parent: &mut ChildSpawnerCommands, action: AdminButton, label: &
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 ..default()
             },
             BackgroundColor(admin_button_color(Interaction::None)),
-            BorderColor::all(Color::srgba(0.55, 0.95, 1.0, 0.34)),
+            ui_style::button_border(),
         ))
         .with_children(|button| {
             button.spawn((
                 Text::new(label),
-                TextColor(Color::srgb(0.82, 0.94, 1.0)),
+                ui_style::title_color(),
+                ui_style::text_glow(),
                 TextFont {
                     font_size: 12.0,
                     ..default()
@@ -405,11 +421,7 @@ fn format_admin_stats(metrics: Option<&PredictionMetrics>) -> String {
 }
 
 fn admin_button_color(interaction: Interaction) -> Color {
-    match interaction {
-        Interaction::Pressed => Color::srgba(0.16, 0.64, 0.92, 0.68),
-        Interaction::Hovered => Color::srgba(0.06, 0.18, 0.26, 0.62),
-        Interaction::None => Color::srgba(0.015, 0.018, 0.022, 0.46),
-    }
+    ui_style::button_background(false, interaction)
 }
 
 #[cfg(test)]

@@ -45,7 +45,7 @@ pub fn handle_collision(
     let mut killed_snakes = EntityHashSet::default();
     let mut room_food_counts = room_food_counts(&food);
     for collision_event in reader.read() {
-        if !killed_snakes.insert(collision_event.killed) {
+        if !reserve_collision_death(&mut killed_snakes, collision_event) {
             continue;
         }
         let Ok((killed_player, killed_room, killed_tail)) = snakes.get(collision_event.killed)
@@ -148,6 +148,18 @@ pub fn handle_collision(
                 respawn_delay_seconds(&config, killed_is_bot),
             ));
     }
+}
+
+fn reserve_collision_death(
+    killed_snakes: &mut EntityHashSet,
+    collision_event: &SnakeCollision,
+) -> bool {
+    if collision_event.killer != collision_event.killed
+        && killed_snakes.contains(&collision_event.killer)
+    {
+        return false;
+    }
+    killed_snakes.insert(collision_event.killed)
 }
 
 fn room_food_counts(
@@ -303,5 +315,33 @@ mod tests {
         assert_eq!(death_food_spawn_limit(&config, 8), 2);
         assert_eq!(death_food_spawn_limit(&config, 10), 0);
         assert_eq!(death_food_spawn_limit(&config, 12), 0);
+    }
+
+    #[test]
+    fn reciprocal_same_tick_collisions_do_not_kill_both_snakes() {
+        let mut world = World::new();
+        let first = world.spawn_empty().id();
+        let second = world.spawn_empty().id();
+        let mut killed = EntityHashSet::default();
+
+        assert!(reserve_collision_death(
+            &mut killed,
+            &SnakeCollision {
+                killer: second,
+                killed: first,
+                reason: DeathReason::Collision,
+            },
+        ));
+        assert!(!reserve_collision_death(
+            &mut killed,
+            &SnakeCollision {
+                killer: first,
+                killed: second,
+                reason: DeathReason::Collision,
+            },
+        ));
+
+        assert!(killed.contains(&first));
+        assert!(!killed.contains(&second));
     }
 }

@@ -1,5 +1,7 @@
 use crate::collision::death::DeathView;
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
+use crate::render::colors::snake_color_for_player;
+use crate::render::ui_style;
 use bevy::prelude::*;
 use lightyear::connection::client::Connected;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
@@ -59,7 +61,15 @@ struct MiniMapRoot;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 struct MiniMapTrailSegment {
+    owner: Entity,
     index: usize,
+}
+
+struct DesiredMiniMapTrailSegment {
+    owner: Entity,
+    index: usize,
+    node: Node,
+    color: BackgroundColor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,35 +121,41 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
 
     commands
         .spawn((
-            MiniMapRoot,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),
                 right: Val::Px(12.0),
                 width: Val::Px(278.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 padding: UiRect::all(Val::Px(8.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.72)),
+            ui_style::panel_background(0.54),
+            ui_style::panel_border(),
+            ui_style::panel_shadow(),
         ))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Leaderboard"),
-                TextColor(Color::srgb(0.75, 0.95, 1.0)),
+                ui_style::title_color(),
+                ui_style::text_glow(),
                 title_font.clone(),
             ));
             parent.spawn((
                 LeaderboardText,
                 Text::new(""),
-                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 body_font.clone(),
             ));
         });
 
     commands
         .spawn((
+            MiniMapRoot,
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(12.0),
@@ -147,10 +163,12 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 width: Val::Px(MINIMAP_WIDTH),
                 height: Val::Px(MINIMAP_HEIGHT),
                 border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.72)),
-            BorderColor::all(Color::srgba(0.55, 0.95, 1.0, 0.62)),
+            ui_style::panel_background(0.54),
+            ui_style::panel_border(),
+            ui_style::panel_shadow(),
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -187,21 +205,27 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 padding: UiRect::all(Val::Px(8.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.68)),
+            ui_style::panel_background(0.54),
+            ui_style::panel_border(),
+            ui_style::panel_shadow(),
             Visibility::Hidden,
         ))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Network"),
-                TextColor(Color::srgb(0.75, 0.95, 1.0)),
+                ui_style::title_color(),
+                ui_style::text_glow(),
                 title_font.clone(),
             ));
             parent.spawn((
                 DebugStatsText,
                 Text::new(format_network_debug_stats(None)),
-                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 body_font.clone(),
             ));
         });
@@ -219,15 +243,18 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 ..default()
             },
             BackgroundColor(debug_button_color(false, Interaction::None)),
-            BorderColor::all(Color::srgba(0.55, 0.95, 1.0, 0.32)),
+            ui_style::button_border(),
+            ui_style::panel_shadow(),
         ))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("DEBUG"),
-                TextColor(Color::srgb(0.82, 0.94, 1.0)),
+                ui_style::title_color(),
+                ui_style::text_glow(),
                 TextFont {
                     font_size: 12.0,
                     ..default()
@@ -248,19 +275,24 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                     top: Val::Px(-120.0),
                     ..default()
                 },
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 padding: UiRect::all(Val::Px(12.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.84)),
+            ui_style::panel_background(0.68),
+            ui_style::panel_border(),
+            ui_style::panel_shadow(),
             Visibility::Hidden,
         ))
         .with_children(|parent| {
             parent.spawn((
                 DeathOverlayTitle,
                 Text::new(""),
-                TextColor(Color::srgb(1.0, 0.86, 0.26)),
+                ui_style::title_color(),
+                ui_style::text_glow(),
                 TextFont {
                     font_size: 22.0,
                     ..default()
@@ -269,7 +301,8 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
             parent.spawn((
                 DeathOverlayStatsText,
                 Text::new(""),
-                TextColor(Color::srgb(0.86, 0.9, 0.94)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 body_font.clone(),
             ));
         });
@@ -370,7 +403,14 @@ fn update_minimap(
     mut commands: Commands,
     config: Res<GameConfig>,
     minimap_root: Query<Entity, With<MiniMapRoot>>,
-    players: Query<(&Player, &PlayerScore, &PlayerRank, &RoomId, Has<Controlled>)>,
+    players: Query<(
+        Entity,
+        &Player,
+        &PlayerScore,
+        &PlayerRank,
+        &RoomId,
+        Has<Controlled>,
+    )>,
     predicted_tails: Query<&TailPoints, With<Predicted>>,
     tails: Query<&TailPoints>,
     mut dots: Query<(&MiniMapDot, &mut Node, &mut Visibility), Without<MiniMapTrailSegment>>,
@@ -385,20 +425,20 @@ fn update_minimap(
         Without<MiniMapDot>,
     >,
 ) {
-    let local_player = players.iter().find(|(_, _, _, _, is_local)| *is_local);
-    let local_room = local_player.map(|(_, _, _, room, _)| *room);
+    let local_player = players.iter().find(|(_, _, _, _, _, is_local)| *is_local);
+    let local_room = local_player.map(|(_, _, _, _, room, _)| *room);
     let local_tail = predicted_tails.single().ok().or_else(|| {
         local_player
-            .and_then(|(player, _, _, _, _)| player.snake)
+            .and_then(|(_, player, _, _, _, _)| player.snake)
             .and_then(|snake| tails.get(snake).ok())
     });
     let local_position = local_tail.map(snake_head);
     let leader_position = local_room.and_then(|room| {
         players
             .iter()
-            .filter(|(_, _, _, player_room, _)| **player_room == room)
+            .filter(|(_, _, _, _, player_room, _)| **player_room == room)
             .min_by(compare_player_score)
-            .and_then(|(player, _, _, _, is_local)| {
+            .and_then(|(_, player, _, _, _, is_local)| {
                 if is_local {
                     local_position
                 } else {
@@ -425,8 +465,7 @@ fn update_minimap(
     sync_minimap_trail(
         &mut commands,
         minimap_root.single().ok(),
-        local_tail,
-        &config.arena,
+        desired_minimap_trails(&players, local_room, local_tail, &tails, &config.arena),
         &mut trail_segments,
     );
 }
@@ -434,8 +473,7 @@ fn update_minimap(
 fn sync_minimap_trail(
     commands: &mut Commands,
     minimap_root: Option<Entity>,
-    tail: Option<&TailPoints>,
-    arena: &ArenaConfig,
+    desired: Vec<DesiredMiniMapTrailSegment>,
     trail_segments: &mut Query<
         (
             Entity,
@@ -447,20 +485,18 @@ fn sync_minimap_trail(
         Without<MiniMapDot>,
     >,
 ) {
-    let desired = tail
-        .map(|tail| minimap_trail_nodes(tail, arena))
-        .unwrap_or_default();
     let mut seen = HashSet::with_capacity(desired.len());
 
-    for (index, node) in desired {
-        seen.insert(index);
+    for desired in desired {
+        let key = (desired.owner, desired.index);
+        seen.insert(key);
         let mut updated = false;
         for (_, segment, mut existing_node, mut background, mut visibility) in
             trail_segments.iter_mut()
         {
-            if segment.index == index {
-                *existing_node = node.clone();
-                *background = minimap_trail_color();
+            if segment.owner == desired.owner && segment.index == desired.index {
+                *existing_node = desired.node.clone();
+                *background = desired.color;
                 *visibility = Visibility::Inherited;
                 updated = true;
                 break;
@@ -472,9 +508,12 @@ fn sync_minimap_trail(
             };
             commands.entity(root).with_children(|parent| {
                 parent.spawn((
-                    MiniMapTrailSegment { index },
-                    node,
-                    minimap_trail_color(),
+                    MiniMapTrailSegment {
+                        owner: desired.owner,
+                        index: desired.index,
+                    },
+                    desired.node,
+                    desired.color,
                     ZIndex(-1),
                     Visibility::Inherited,
                 ));
@@ -483,7 +522,7 @@ fn sync_minimap_trail(
     }
 
     for (entity, segment, _, _, mut visibility) in trail_segments.iter_mut() {
-        if !seen.contains(&segment.index) {
+        if !seen.contains(&(segment.owner, segment.index)) {
             *visibility = Visibility::Hidden;
             commands.entity(entity).despawn();
         }
@@ -516,8 +555,22 @@ fn update_death_overlay(
 }
 
 fn compare_player_score(
-    (_, left_score, left_rank, _, _): &(&Player, &PlayerScore, &PlayerRank, &RoomId, bool),
-    (_, right_score, right_rank, _, _): &(&Player, &PlayerScore, &PlayerRank, &RoomId, bool),
+    (_, _, left_score, left_rank, _, _): &(
+        Entity,
+        &Player,
+        &PlayerScore,
+        &PlayerRank,
+        &RoomId,
+        bool,
+    ),
+    (_, _, right_score, right_rank, _, _): &(
+        Entity,
+        &Player,
+        &PlayerScore,
+        &PlayerRank,
+        &RoomId,
+        bool,
+    ),
 ) -> std::cmp::Ordering {
     compare_rank_score(
         left_score.value,
@@ -525,6 +578,53 @@ fn compare_player_score(
         right_score.value,
         right_rank.value,
     )
+}
+
+fn desired_minimap_trails(
+    players: &Query<(
+        Entity,
+        &Player,
+        &PlayerScore,
+        &PlayerRank,
+        &RoomId,
+        Has<Controlled>,
+    )>,
+    local_room: Option<RoomId>,
+    local_tail: Option<&TailPoints>,
+    tails: &Query<&TailPoints>,
+    arena: &ArenaConfig,
+) -> Vec<DesiredMiniMapTrailSegment> {
+    let mut desired = Vec::new();
+    let Some(local_room) = local_room else {
+        return desired;
+    };
+
+    for (player_entity, player, _, _, room, is_local) in players.iter() {
+        if *room != local_room {
+            continue;
+        }
+        let tail = if is_local {
+            local_tail
+        } else {
+            player.snake.and_then(|snake| tails.get(snake).ok())
+        };
+        let Some(tail) = tail else {
+            continue;
+        };
+        let color = minimap_trail_color(player, is_local);
+        desired.extend(
+            minimap_trail_nodes(tail, arena)
+                .into_iter()
+                .map(|(index, node)| DesiredMiniMapTrailSegment {
+                    owner: player_entity,
+                    index,
+                    node,
+                    color,
+                }),
+        );
+    }
+
+    desired
 }
 
 fn player_position(player: &Player, tails: &Query<&TailPoints>) -> Option<Vec2> {
@@ -617,8 +717,10 @@ fn minimap_trail_node(start: Vec2, end: Vec2) -> Option<Node> {
     })
 }
 
-fn minimap_trail_color() -> BackgroundColor {
-    BackgroundColor(Color::srgba(0.16, 0.78, 1.0, 0.72))
+fn minimap_trail_color(player: &Player, is_local: bool) -> BackgroundColor {
+    let mut color = snake_color_for_player(player).label();
+    color.set_alpha(if is_local { 0.78 } else { 0.48 });
+    BackgroundColor(color)
 }
 
 fn select_leaderboard_rows(entries: &mut [LeaderboardEntry]) -> Vec<LeaderboardEntry> {
@@ -689,13 +791,7 @@ struct NetworkDebugStats {
 }
 
 fn debug_button_color(visible: bool, interaction: Interaction) -> Color {
-    match (visible, interaction) {
-        (_, Interaction::Pressed) => Color::srgba(0.16, 0.64, 0.92, 0.62),
-        (true, Interaction::Hovered) => Color::srgba(0.12, 0.48, 0.72, 0.62),
-        (false, Interaction::Hovered) => Color::srgba(0.06, 0.18, 0.26, 0.58),
-        (true, Interaction::None) => Color::srgba(0.08, 0.34, 0.52, 0.58),
-        (false, Interaction::None) => Color::srgba(0.015, 0.018, 0.022, 0.38),
-    }
+    ui_style::button_background(visible, interaction)
 }
 
 fn format_network_debug_stats(stats: Option<NetworkDebugStats>) -> String {

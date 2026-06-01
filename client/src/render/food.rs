@@ -11,6 +11,8 @@ pub(crate) struct FoodRenderPlugin;
 const FOOD_Z: f32 = 2.0;
 const FOOD_PICKUP_ANIMATION_Z: f32 = 6.0;
 const FOOD_PICKUP_ANIMATION_SECONDS: f32 = 0.34;
+const FOOD_PULSE_SPEED: f32 = 3.0;
+const FOOD_PULSE_AMPLITUDE: f32 = 0.045;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct FoodVisual {
@@ -23,6 +25,7 @@ struct FoodPickupAnimation {
     snake: Entity,
     start: Vec2,
     fallback_end: Vec2,
+    color: Color,
 }
 
 impl FoodRenderPlugin {
@@ -61,6 +64,7 @@ fn sync_asset_food_visuals(
     mut commands: Commands,
     config: Res<GameConfig>,
     sheet: Res<PowerlineSpriteSheet>,
+    time: Res<Time>,
     food: Query<(Entity, &Position), With<FoodMarker>>,
     mut visuals: Query<(Entity, &FoodVisual, &mut Transform, &mut Sprite)>,
 ) {
@@ -76,7 +80,8 @@ fn sync_asset_food_visuals(
     for (target, position) in &food {
         seen.insert(target);
         let transform = Transform::from_translation(position.0.extend(FOOD_Z))
-            .with_rotation(food_rotation(target));
+            .with_rotation(food_rotation(target))
+            .with_scale(Vec3::splat(food_pulse_scale(target, time.elapsed_secs())));
         let sprite = sheet.sprite(
             PowerlineFrame::Food,
             Vec2::splat(visual_size),
@@ -115,6 +120,12 @@ fn food_rotation(entity: Entity) -> Quat {
     Quat::from_rotation_z(angle)
 }
 
+fn food_pulse_scale(entity: Entity, elapsed_seconds: f32) -> f32 {
+    let bits = entity.to_bits().wrapping_mul(0xd1b5_4a32_d192_ed03);
+    let phase = ((bits >> 40) as f32 / ((1_u64 << 24) as f32)) * std::f32::consts::TAU;
+    1.0 + (elapsed_seconds * FOOD_PULSE_SPEED + phase).sin() * FOOD_PULSE_AMPLITUDE
+}
+
 fn spawn_confirmed_food_pickup_animations(
     mut commands: Commands,
     config: Res<GameConfig>,
@@ -140,18 +151,16 @@ fn spawn_confirmed_food_pickup_animations(
             .get(pickup.collision.snake)
             .map(|tail| tail.front().0)
             .unwrap_or(pickup.collision.head_position);
+        let color = food_color(pickup.collision.food);
         commands.spawn((
             FoodPickupAnimation {
                 elapsed: 0.0,
                 snake: pickup.collision.snake,
                 start,
                 fallback_end: end,
+                color,
             },
-            sheet.sprite(
-                PowerlineFrame::Food,
-                Vec2::splat(visual_size),
-                food_color(pickup.collision.food),
-            ),
+            sheet.sprite(PowerlineFrame::Food, Vec2::splat(visual_size), color),
             Transform::from_translation(start.extend(FOOD_PICKUP_ANIMATION_Z))
                 .with_rotation(food_rotation(pickup.collision.food)),
         ));
@@ -188,6 +197,28 @@ fn update_food_pickup_animations(
             .extend(FOOD_PICKUP_ANIMATION_Z);
         transform.rotation = Quat::from_rotation_z(t * std::f32::consts::TAU * 1.5);
         transform.scale = Vec3::splat((1.0 - 0.65 * t).max(0.25));
+        sprite.color = animation.color;
         sprite.color.set_alpha(1.0 - 0.35 * t);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn food_pulse_stays_subtle() {
+        let food = Entity::from_bits(42);
+        for sample in 0..120 {
+            let scale = food_pulse_scale(food, sample as f32 / 30.0);
+            assert!(scale >= 1.0 - FOOD_PULSE_AMPLITUDE - f32::EPSILON);
+            assert!(scale <= 1.0 + FOOD_PULSE_AMPLITUDE + f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn food_color_is_stable_for_animation() {
+        let food = Entity::from_bits(123);
+        assert_eq!(food_color(food), food_color(food));
     }
 }

@@ -5,6 +5,8 @@ use lightyear::prelude::input::bei::{
     bindings, Action, ActionOf, EnhancedInputPlugin, InputAction, InputContextAppExt,
 };
 
+use crate::render::ui_style;
+
 #[derive(Component, Debug, PartialEq, Eq, Clone, Copy, Reflect)]
 pub struct LocalInputContext;
 
@@ -60,10 +62,14 @@ fn spawn_shortcut_help(commands: &mut Commands) {
                 left: Val::Px(12.0),
                 top: Val::Px(12.0),
                 width: Val::Px(290.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: ui_style::panel_radius(),
                 padding: UiRect::all(Val::Px(10.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.018, 0.022, 0.86)),
+            ui_style::panel_background(0.68),
+            ui_style::panel_border(),
+            ui_style::panel_shadow(),
             Visibility::Hidden,
         ))
         .with_children(|parent| {
@@ -71,7 +77,8 @@ fn spawn_shortcut_help(commands: &mut Commands) {
                 Text::new(
                     "Shortcuts\nWASD / Arrows: turn\nEnter / Space: respawn\nT: debug camera\n?: toggle this help",
                 ),
-                TextColor(Color::srgb(0.86, 0.93, 1.0)),
+                ui_style::body_color(),
+                ui_style::text_glow(),
                 TextFont {
                     font_size: 14.0,
                     ..default()

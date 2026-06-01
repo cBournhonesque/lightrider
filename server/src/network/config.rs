@@ -2,13 +2,14 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use bevy::prelude::*;
 use lightyear::connection::server::Start;
+use lightyear::core::time::Instant;
 use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::{ClientOf, NetcodeConfig, ServerPlugins, WebTransportServerIo};
 use lightyear::prelude::*;
 use lightyear::webtransport::prelude::Identity;
 
 use shared::config::GameConfig;
-use shared::network::config::NetcodeIdentity;
+use shared::network::config::{recv_link_conditioner, NetcodeIdentity};
 
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct ServerConnectionConfig {
@@ -32,6 +33,7 @@ impl Plugin for ServerConnectionPlugin {
         app.register_required_components::<ClientOf, ReplicationSender>();
         app.insert_resource(self.config);
         app.add_systems(Startup, start_server);
+        app.add_observer(apply_server_link_conditioner);
     }
 }
 
@@ -59,6 +61,28 @@ fn start_server(mut commands: Commands, config: Res<ServerConnectionConfig>) {
         commands.trigger(Start { entity: server });
     } else {
         info!("Deferring WebTransport server start until matchmaker admission is ready");
+    }
+}
+
+fn apply_server_link_conditioner(
+    trigger: On<Add, LinkOf>,
+    config: Res<GameConfig>,
+    mut links: Query<&mut Link>,
+) {
+    let Some(conditioner) = recv_link_conditioner(&config.network) else {
+        return;
+    };
+    let Ok(mut link) = links.get_mut(trigger.entity) else {
+        return;
+    };
+    if link.recv.conditioner.is_some() {
+        return;
+    }
+
+    let queued_packets = link.recv.drain().collect::<Vec<_>>();
+    link.recv.conditioner = Some(conditioner);
+    for packet in queued_packets {
+        link.recv.push(packet, Instant::now());
     }
 }
 

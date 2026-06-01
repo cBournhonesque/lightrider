@@ -12,6 +12,7 @@ mod hud;
 mod leader;
 mod name_labels;
 pub(crate) mod snake;
+pub(crate) mod ui_style;
 
 pub(crate) struct RenderPlugin;
 

@@ -82,6 +82,10 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
       source secrets/admin.env
       set +a
     fi
+    # Local rendered smoke should exercise the same moderate receive-side
+    # conditioner on both peers that Lightyear examples call "average".
+    : "${LIGHTRIDER_NETWORK_CONDITIONER:=average}"
+    export LIGHTRIDER_NETWORK_CONDITIONER
     trap 'jobs -pr | xargs -r kill' EXIT
     cargo_args=(-j 2)
     if [[ "$release_arg" == "true" ]]; then
