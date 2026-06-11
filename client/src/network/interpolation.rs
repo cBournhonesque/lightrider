@@ -65,25 +65,21 @@ fn interpolate_snakes(
     let interpolation_overstep = timeline.overstep().to_f32();
 
     for (mut tail, mut length, tail_history, length_history) in &mut snakes {
-        let Some((start_tick, tail_start)) = tail_history.start() else {
+        let Some(((start_tick, tail_start), tail_end)) =
+            tail_history.interpolation_bounds(interpolation_tick)
+        else {
             continue;
         };
-        if interpolation_tick < start_tick {
-            continue;
-        }
-        let Some((end_tick, tail_end)) = tail_history.end() else {
+        let Some((end_tick, tail_end)) = tail_end else {
             *tail = tail_start.clone();
             continue;
         };
 
-        let length_start = length_history
-            .start()
-            .map(|(_, length)| length)
-            .unwrap_or(&length);
-        let length_end = length_history
-            .end()
-            .map(|(_, length)| length)
-            .unwrap_or(length_start);
+        let current_length = length.as_ref();
+        let (length_start, length_end) = length_history
+            .interpolation_bounds(interpolation_tick)
+            .map(|((_, start), end)| (start, end.map(|(_, length)| length).unwrap_or(start)))
+            .unwrap_or((current_length, current_length));
         let t = interpolation_fraction(
             start_tick,
             end_tick,
@@ -146,6 +142,44 @@ mod tests {
 
         let tail = app.world().entity(entity).get::<TailPoints>().unwrap();
         assert_eq!(tail.front().0, Vec2::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn diff_tail_history_uses_current_interpolation_bounds() {
+        let mut app = App::new();
+        app.add_systems(PostUpdate, interpolate_snakes);
+
+        let mut timeline = InterpolationTimeline::default();
+        timeline.set_now(lightyear::core::time::TickInstant::lit("10.5"));
+        app.world_mut()
+            .spawn((timeline, IsSynced::<InterpolationTimeline>::default()));
+
+        let length = TailLength {
+            current_size: 100.0,
+            target_size: 100.0,
+        };
+        let mut tail_history = ConfirmedHistory::<TailPoints, Option<PatchIndex>>::default();
+        let mut length_history = ConfirmedHistory::<TailLength>::default();
+        for i in 0..=12 {
+            tail_history.push_with_metadata(Tick(i), tail_at(i as f32 * 10.0), Some(u64::from(i)));
+            length_history.push(Tick(i), length.clone());
+        }
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Interpolated,
+                tail_at(0.0),
+                length,
+                tail_history,
+                length_history,
+            ))
+            .id();
+
+        app.update();
+
+        let tail = app.world().entity(entity).get::<TailPoints>().unwrap();
+        assert_eq!(tail.front().0, Vec2::new(105.0, 0.0));
     }
 
     fn tail_at(x: f32) -> TailPoints {
