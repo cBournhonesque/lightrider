@@ -4,7 +4,7 @@
         height: 1600.0,
     ),
     movement: (
-        tick_rate_hz: 30.0,
+        tick_rate_hz: 32.0,
         starting_tail_length: 200.0,
         min_speed: 0.85,
         max_speed: 4.0,
@@ -79,12 +79,16 @@
     ),
     network: (
         server_port: 5000,
-        replication_send_hz: 10,
+        replication_send_hz: 16,
         compression: Disabled,
         input_delay: (
             minimum_input_delay_ticks: 0,
             maximum_input_delay_before_prediction_ticks: 2,
             maximum_predicted_ticks: 8,
+        ),
+        lag_compensation: (
+            enabled: false,
+            max_delay_ticks: 10,
         ),
         input_packet_redundancy_ticks: 3,
         artificial_latency_ms: 0,

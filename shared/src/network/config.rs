@@ -181,7 +181,7 @@ mod tests {
             input_delay: InputDelayConfig::balanced(),
             lag_compensation: LagCompensationConfig::default(),
             input_packet_redundancy_ticks: 3,
-            replication_send_hz: 10,
+            replication_send_hz: 16,
             compression: crate::config::NetworkCompression::Disabled,
             server_port: 5000,
             artificial_latency_ms: 12,

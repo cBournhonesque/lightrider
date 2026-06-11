@@ -200,7 +200,7 @@ fn ceil_duration_ticks(duration: Duration, tick_duration: Duration) -> u16 {
 mod tests {
     use super::*;
 
-    const THIRTY_HZ_TICK: Duration = Duration::from_nanos(1_000_000_000 / 30);
+    const THIRTY_TWO_HZ_TICK: Duration = Duration::from_nanos(1_000_000_000 / 32);
 
     #[test]
     fn default_input_delay_covers_roughly_sixty_ms_then_predicts() {
@@ -216,12 +216,12 @@ mod tests {
         let input_delay = InputDelayConfig::balanced();
         let stats = LinkStats {
             // Effective RTT includes Lightyear's default one-tick jitter margin.
-            rtt: THIRTY_HZ_TICK * 9,
+            rtt: THIRTY_TWO_HZ_TICK * 9,
             jitter: Duration::ZERO,
         };
 
         assert_eq!(
-            required_prediction_ticks(stats, THIRTY_HZ_TICK, &input_delay),
+            required_prediction_ticks(stats, THIRTY_TWO_HZ_TICK, &input_delay),
             8
         );
     }
@@ -230,12 +230,12 @@ mod tests {
     fn prediction_budget_exceeds_after_eight_ticks_beyond_input_delay() {
         let input_delay = InputDelayConfig::balanced();
         let stats = LinkStats {
-            rtt: THIRTY_HZ_TICK * 10,
+            rtt: THIRTY_TWO_HZ_TICK * 10,
             jitter: Duration::ZERO,
         };
 
         assert_eq!(
-            required_prediction_ticks(stats, THIRTY_HZ_TICK, &input_delay),
+            required_prediction_ticks(stats, THIRTY_TWO_HZ_TICK, &input_delay),
             9
         );
     }

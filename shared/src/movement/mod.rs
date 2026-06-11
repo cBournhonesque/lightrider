@@ -200,7 +200,12 @@ pub fn update_tails(
     >,
 ) {
     let movement = &config.movement;
-    let retained_extra_length = lag_compensation_extra_length(&config);
+    let lag_compensation_enabled = config.network.lag_compensation.enabled;
+    let retained_extra_length = if lag_compensation_enabled {
+        lag_compensation_extra_length(&config)
+    } else {
+        0.0
+    };
     let max_history_samples = usize::from(config.network.lag_compensation.max_delay_ticks) + 3;
     for (mut tail, log, mut length, mut speed, acceleration, has_simulation_authority, history) in
         query.iter_mut()
@@ -225,8 +230,10 @@ pub fn update_tails(
             TailPointsOp::SetFrontPosition(next_position),
         );
         let mut history = history;
-        if let Some(history) = history.as_deref_mut() {
-            history.advance_head(moved_distance);
+        if lag_compensation_enabled {
+            if let Some(history) = history.as_deref_mut() {
+                history.advance_head(moved_distance);
+            }
         }
         length.current_size += speed.0;
 
@@ -238,8 +245,10 @@ pub fn update_tails(
             0.0
         };
         shorten_tail_with_retention(tail.as_mut(), length.as_mut(), retained_extra_length);
-        if let (Some(timeline), Some(history)) = (timeline.as_ref(), history.as_deref_mut()) {
-            history.record_sample(timeline.tick(), length.current_size, max_history_samples);
+        if lag_compensation_enabled {
+            if let (Some(timeline), Some(history)) = (timeline.as_ref(), history.as_deref_mut()) {
+                history.record_sample(timeline.tick(), length.current_size, max_history_samples);
+            }
         }
     }
 }

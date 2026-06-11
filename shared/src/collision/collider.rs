@@ -82,52 +82,81 @@ pub(crate) fn snake_friction(
     if max_distance <= 0.0 {
         return;
     }
+    let lag_compensation_enabled = config.network.lag_compensation.enabled;
     let tail_index = TailSpatialIndex::from_tails(
         tails
             .iter()
             .map(|(entity, tail, _, _, room)| (entity, *room, tail)),
     );
-    let tail_lookup = tails
-        .iter()
-        .map(|(entity, tail, length, history, _)| {
-            (
-                entity,
-                FrictionTail {
-                    tail,
-                    length,
-                    history,
-                },
-            )
-        })
-        .collect::<EntityHashMap<_>>();
+    let tail_lookup = lag_compensation_enabled.then(|| {
+        tails
+            .iter()
+            .map(|(entity, tail, length, history, _)| {
+                (
+                    entity,
+                    FrictionTail {
+                        tail,
+                        length,
+                        history,
+                    },
+                )
+            })
+            .collect::<EntityHashMap<_>>()
+    });
     let tick = timeline.as_ref().map(|timeline| timeline.tick());
     for (entity, tail, room, controlled_by) in boosted.iter() {
         let origin = tail.front().0;
         let direction = tail.front().1.delta();
-        let interpolation_delay =
-            controlled_by.and_then(|controlled_by| clients.get(controlled_by.owner).ok().copied());
-        let left_hit = nearest_tail_ray_hit(
-            origin,
-            direction.perp(),
-            max_distance,
-            entity,
-            *room,
-            interpolation_delay,
-            tick,
-            &tail_index,
-            &tail_lookup,
-        );
-        let right_hit = nearest_tail_ray_hit(
-            origin,
-            -direction.perp(),
-            max_distance,
-            entity,
-            *room,
-            interpolation_delay,
-            tick,
-            &tail_index,
-            &tail_lookup,
-        );
+        let interpolation_delay = if tail_lookup.is_some() {
+            controlled_by.and_then(|controlled_by| clients.get(controlled_by.owner).ok().copied())
+        } else {
+            None
+        };
+        let (left_hit, right_hit) = if let Some(tail_lookup) = tail_lookup.as_ref() {
+            (
+                nearest_lag_compensated_tail_ray_hit(
+                    origin,
+                    direction.perp(),
+                    max_distance,
+                    entity,
+                    *room,
+                    interpolation_delay,
+                    tick,
+                    &tail_index,
+                    tail_lookup,
+                ),
+                nearest_lag_compensated_tail_ray_hit(
+                    origin,
+                    -direction.perp(),
+                    max_distance,
+                    entity,
+                    *room,
+                    interpolation_delay,
+                    tick,
+                    &tail_index,
+                    tail_lookup,
+                ),
+            )
+        } else {
+            (
+                nearest_tail_ray_hit(
+                    origin,
+                    direction.perp(),
+                    max_distance,
+                    entity,
+                    *room,
+                    &tail_index,
+                ),
+                nearest_tail_ray_hit(
+                    origin,
+                    -direction.perp(),
+                    max_distance,
+                    entity,
+                    *room,
+                    &tail_index,
+                ),
+            )
+        };
 
         if let Some((distance, other)) = nearest_hit(left_hit, right_hit) {
             writer.write(SnakeFrictionEvent {
@@ -153,6 +182,48 @@ fn nearest_tail_ray_hit(
     max_distance: f32,
     excluded: Entity,
     room: RoomId,
+    tail_index: &TailSpatialIndex,
+) -> Option<(f32, Entity)> {
+    let candidates = if direction.x.abs() >= direction.y.abs() {
+        let end = origin + direction * max_distance;
+        tail_index.vertical_segments_near(room, origin.x.min(end.x), origin.x.max(end.x))
+    } else {
+        let end = origin + direction * max_distance;
+        tail_index.horizontal_segments_near(room, origin.y.min(end.y), origin.y.max(end.y))
+    };
+    nearest_tail_ray_hit_from_segments(origin, direction, max_distance, excluded, candidates)
+}
+
+fn nearest_tail_ray_hit_from_segments<'a>(
+    origin: Vec2,
+    direction: Vec2,
+    max_distance: f32,
+    excluded: Entity,
+    candidates: impl IntoIterator<Item = &'a TailSegment>,
+) -> Option<(f32, Entity)> {
+    let mut nearest: Option<(f32, Entity)> = None;
+    for segment in candidates {
+        if segment.owner == excluded {
+            continue;
+        }
+        let Some(distance) =
+            ray_segment_intersection(origin, direction, max_distance, segment.start, segment.end)
+        else {
+            continue;
+        };
+        if nearest.map_or(true, |(nearest_distance, _)| distance < nearest_distance) {
+            nearest = Some((distance, segment.owner));
+        }
+    }
+    nearest
+}
+
+fn nearest_lag_compensated_tail_ray_hit(
+    origin: Vec2,
+    direction: Vec2,
+    max_distance: f32,
+    excluded: Entity,
+    room: RoomId,
     interpolation_delay: Option<InterpolationDelay>,
     tick: Option<Tick>,
     tail_index: &TailSpatialIndex,
@@ -165,7 +236,7 @@ fn nearest_tail_ray_hit(
         let end = origin + direction * max_distance;
         tail_index.horizontal_segments_near(room, origin.y.min(end.y), origin.y.max(end.y))
     };
-    nearest_tail_ray_hit_from_segments(
+    nearest_lag_compensated_tail_ray_hit_from_segments(
         origin,
         direction,
         max_distance,
@@ -177,7 +248,7 @@ fn nearest_tail_ray_hit(
     )
 }
 
-fn nearest_tail_ray_hit_from_segments<'a>(
+fn nearest_lag_compensated_tail_ray_hit_from_segments<'a>(
     origin: Vec2,
     direction: Vec2,
     max_distance: f32,
@@ -407,31 +478,7 @@ mod tests {
             &room,
             brute_force_query.iter(app.world()),
         );
-        let tail_lookup = query
-            .iter(app.world())
-            .map(|(entity, tail, length, history, _)| {
-                (
-                    entity,
-                    FrictionTail {
-                        tail,
-                        length,
-                        history,
-                    },
-                )
-            })
-            .collect::<EntityHashMap<_>>();
-
-        let indexed = nearest_tail_ray_hit(
-            origin,
-            direction,
-            20.0,
-            snake1,
-            room,
-            None,
-            None,
-            &index,
-            &tail_lookup,
-        );
+        let indexed = nearest_tail_ray_hit(origin, direction, 20.0, snake1, room, &index);
 
         assert_eq!(indexed, brute_force);
         assert_eq!(indexed, Some((8.0, snake2)));
@@ -641,7 +688,7 @@ mod tests {
             delay: PositiveTickDelta::lit("1"),
         };
 
-        let hit = nearest_tail_ray_hit(
+        let hit = nearest_lag_compensated_tail_ray_hit(
             Vec2::new(0.0, 50.0),
             Vec2::X,
             10.0,
@@ -708,7 +755,7 @@ mod tests {
             delay: PositiveTickDelta::lit("1"),
         };
 
-        let hit = nearest_tail_ray_hit(
+        let hit = nearest_lag_compensated_tail_ray_hit(
             Vec2::new(0.0, -50.0),
             Vec2::X,
             10.0,

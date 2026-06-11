@@ -36,6 +36,7 @@ struct CollisionTail<'a> {
 }
 
 pub(crate) fn snake_collisions(
+    config: Res<GameConfig>,
     timeline: Option<Res<LocalTimeline>>,
     tails: Query<(
         Entity,
@@ -49,24 +50,27 @@ pub(crate) fn snake_collisions(
     clients: Query<&InterpolationDelay>,
     mut writer: MessageWriter<SnakeCollision>,
 ) {
+    let lag_compensation_enabled = config.network.lag_compensation.enabled;
     let tail_index = TailSpatialIndex::from_tails(
         tails
             .iter()
             .map(|(entity, tail, room, _, _, _, _)| (entity, *room, tail)),
     );
-    let tail_lookup = tails
-        .iter()
-        .map(|(entity, tail, _, _, length, history, _)| {
-            (
-                entity,
-                CollisionTail {
-                    tail,
-                    length,
-                    history,
-                },
-            )
-        })
-        .collect::<EntityHashMap<_>>();
+    let tail_lookup = lag_compensation_enabled.then(|| {
+        tails
+            .iter()
+            .map(|(entity, tail, _, _, length, history, _)| {
+                (
+                    entity,
+                    CollisionTail {
+                        tail,
+                        length,
+                        history,
+                    },
+                )
+            })
+            .collect::<EntityHashMap<_>>()
+    });
     let tick = timeline.as_ref().map(|timeline| timeline.tick());
     for (entity, tail, room, speed, _length, _history, controlled_by) in tails.iter() {
         let direction = tail.front().1.delta();
@@ -76,20 +80,35 @@ pub(crate) fn snake_collisions(
         }
         let origin =
             tail.front().0 - direction * speed.0.max(0.0) + direction * COLLISION_RAY_EPSILON;
-        let interpolation_delay =
-            controlled_by.and_then(|controlled_by| clients.get(controlled_by.owner).ok().copied());
         trace!(head = ?tail.front().0, direction = ?tail.front().1, "Collision ray cast");
-        if let Some(hit) = nearest_collision(
-            origin,
-            direction,
-            sweep_distance,
-            entity,
-            *room,
-            interpolation_delay,
-            tick,
-            &tail_index,
-            &tail_lookup,
-        ) {
+        let interpolation_delay = if tail_lookup.is_some() {
+            controlled_by.and_then(|controlled_by| clients.get(controlled_by.owner).ok().copied())
+        } else {
+            None
+        };
+        let hit = if let Some(tail_lookup) = tail_lookup.as_ref() {
+            nearest_lag_compensated_collision(
+                origin,
+                direction,
+                sweep_distance,
+                entity,
+                *room,
+                interpolation_delay,
+                tick,
+                &tail_index,
+                tail_lookup,
+            )
+        } else {
+            nearest_collision(
+                origin,
+                direction,
+                sweep_distance,
+                entity,
+                *room,
+                &tail_index,
+            )
+        };
+        if let Some(hit) = hit {
             let killer = hit.entity;
             let reason = if killer == entity {
                 DeathReason::Suicide
@@ -179,6 +198,57 @@ fn nearest_collision(
     max_distance: f32,
     main: Entity,
     room: RoomId,
+    tail_index: &TailSpatialIndex,
+) -> Option<CollisionHit> {
+    let end = origin + direction * max_distance;
+    let candidates = if direction.x.abs() >= direction.y.abs() {
+        tail_index.vertical_segments_near(room, origin.x.min(end.x), origin.x.max(end.x))
+    } else {
+        tail_index.horizontal_segments_near(room, origin.y.min(end.y), origin.y.max(end.y))
+    };
+    nearest_collision_from_segments(origin, direction, max_distance, main, candidates)
+}
+
+fn nearest_collision_from_segments<'a>(
+    origin: Vec2,
+    direction: Vec2,
+    max_distance: f32,
+    main: Entity,
+    candidates: impl IntoIterator<Item = &'a TailSegment>,
+) -> Option<CollisionHit> {
+    let mut nearest: Option<CollisionHit> = None;
+    for segment in candidates {
+        if segment.owner == main && segment.index == 0 {
+            continue;
+        }
+        let Some(distance) =
+            ray_segment_intersection(origin, direction, max_distance, segment.start, segment.end)
+        else {
+            continue;
+        };
+
+        if segment.owner == main && distance <= COLLISION_RAY_EPSILON {
+            continue;
+        }
+        if nearest.map_or(true, |nearest| distance < nearest.distance) {
+            nearest = Some(CollisionHit {
+                entity: segment.owner,
+                distance,
+                segment_index: segment.index,
+                segment_start: segment.start,
+                segment_end: segment.end,
+            });
+        }
+    }
+    nearest
+}
+
+fn nearest_lag_compensated_collision(
+    origin: Vec2,
+    direction: Vec2,
+    max_distance: f32,
+    main: Entity,
+    room: RoomId,
     interpolation_delay: Option<InterpolationDelay>,
     tick: Option<Tick>,
     tail_index: &TailSpatialIndex,
@@ -190,7 +260,7 @@ fn nearest_collision(
     } else {
         tail_index.horizontal_segments_near(room, origin.y.min(end.y), origin.y.max(end.y))
     };
-    nearest_collision_from_segments(
+    nearest_lag_compensated_collision_from_segments(
         origin,
         direction,
         max_distance,
@@ -202,7 +272,7 @@ fn nearest_collision(
     )
 }
 
-fn nearest_collision_from_segments<'a>(
+fn nearest_lag_compensated_collision_from_segments<'a>(
     origin: Vec2,
     direction: Vec2,
     max_distance: f32,
@@ -458,30 +528,7 @@ mod tests {
             &room,
             brute_force_query.iter(app.world()),
         );
-        let tail_lookup = query
-            .iter(app.world())
-            .map(|(entity, tail, _, _, length, history, _)| {
-                (
-                    entity,
-                    CollisionTail {
-                        tail,
-                        length,
-                        history,
-                    },
-                )
-            })
-            .collect::<EntityHashMap<_>>();
-        let indexed = nearest_collision(
-            origin,
-            direction,
-            10.0,
-            snake1,
-            room,
-            None,
-            None,
-            &index,
-            &tail_lookup,
-        );
+        let indexed = nearest_collision(origin, direction, 10.0, snake1, room, &index);
 
         assert_eq!(indexed, brute_force);
         assert_eq!(
@@ -933,7 +980,7 @@ mod tests {
             delay: PositiveTickDelta::lit("1"),
         };
 
-        let hit = nearest_collision(
+        let hit = nearest_lag_compensated_collision(
             Vec2::new(0.0, 50.0),
             Vec2::X,
             10.0,
@@ -1000,7 +1047,7 @@ mod tests {
             delay: PositiveTickDelta::lit("1"),
         };
 
-        let hit = nearest_collision(
+        let hit = nearest_lag_compensated_collision(
             Vec2::new(0.0, -50.0),
             Vec2::X,
             10.0,

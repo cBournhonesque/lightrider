@@ -4,7 +4,7 @@
         height: 600.0,
     ),
     movement: (
-        tick_rate_hz: 30.0,
+        tick_rate_hz: 32.0,
         starting_tail_length: 80.0,
         min_speed: 0.85,
         max_speed: 4.0,
@@ -79,16 +79,19 @@
     ),
     network: (
         server_port: 5000,
-        // Server state snapshots are sent at 10 Hz, matching the original
-        // Powerline interpolation cadence while simulation remains 30 Hz.
-        replication_send_hz: 10,
+        // Server state snapshots are sent at 16 Hz while simulation runs at 32 Hz.
+        replication_send_hz: 16,
         compression: Disabled,
-        // Input delay: cover roughly 60ms at 30Hz with delay first,
+        // Input delay: cover roughly 60ms at 32Hz with delay first,
         // then predict up to 8 additional ticks for remaining latency.
         input_delay: (
             minimum_input_delay_ticks: 0,
             maximum_input_delay_before_prediction_ticks: 2,
             maximum_predicted_ticks: 8,
+        ),
+        lag_compensation: (
+            enabled: false,
+            max_delay_ticks: 10,
         ),
         input_packet_redundancy_ticks: 3,
         artificial_latency_ms: 0,

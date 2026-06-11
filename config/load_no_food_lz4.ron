@@ -17,8 +17,12 @@
     ),
     network: (
         server_port: 5000,
-        replication_send_hz: 10,
+        replication_send_hz: 16,
         compression: Lz4,
+        lag_compensation: (
+            enabled: false,
+            max_delay_ticks: 10,
+        ),
     ),
     debug: (
         lightyear_debug: true,

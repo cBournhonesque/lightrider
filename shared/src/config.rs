@@ -109,7 +109,7 @@ pub struct MovementConfig {
 impl Default for MovementConfig {
     fn default() -> Self {
         Self {
-            tick_rate_hz: 30.0,
+            tick_rate_hz: 32.0,
             starting_tail_length: 200.0,
             min_speed: 0.85,
             max_speed: 4.0,
@@ -347,7 +347,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             server_port: 5000,
-            replication_send_hz: 10,
+            replication_send_hz: 16,
             compression: NetworkCompression::default(),
             input_delay: InputDelayConfig::default(),
             lag_compensation: LagCompensationConfig::default(),
@@ -387,7 +387,7 @@ pub struct LagCompensationConfig {
 impl Default for LagCompensationConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             max_delay_ticks: 10,
         }
     }
@@ -410,7 +410,7 @@ impl Default for InputDelayConfig {
 impl InputDelayConfig {
     /// Lightrider's balanced input-delay preset.
     ///
-    /// At the default 30Hz simulation rate, this covers roughly 60ms with input delay before
+    /// At the default 32Hz simulation rate, this covers roughly 60ms with input delay before
     /// falling back to prediction. Higher latency predicts up to `maximum_predicted_ticks`.
     pub const fn balanced() -> Self {
         Self {
@@ -477,11 +477,11 @@ mod tests {
         assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.fake_clients.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.network.server_port, 5000);
-        assert_eq!(config.network.replication_send_hz, 10);
+        assert_eq!(config.network.replication_send_hz, 16);
         assert_eq!(config.network.compression, NetworkCompression::Disabled);
         assert_eq!(
             config.network.replication_send_interval(),
-            Duration::from_millis(100)
+            Duration::from_nanos(62_500_000)
         );
         assert_eq!(config.network.input_delay, InputDelayConfig::balanced());
         assert_eq!(
@@ -551,10 +551,10 @@ mod tests {
     #[test]
     fn movement_tick_duration_uses_configured_rate() {
         let movement = MovementConfig {
-            tick_rate_hz: 30.0,
+            tick_rate_hz: 32.0,
             ..default()
         };
-        assert!((movement.tick_duration().as_secs_f32() - (1.0 / 30.0)).abs() < f32::EPSILON);
+        assert!((movement.tick_duration().as_secs_f32() - (1.0 / 32.0)).abs() < f32::EPSILON);
 
         let invalid = MovementConfig {
             tick_rate_hz: 0.0,
@@ -569,12 +569,12 @@ mod tests {
     #[test]
     fn replication_send_interval_uses_configured_rate() {
         let network = NetworkConfig {
-            replication_send_hz: 10,
+            replication_send_hz: 16,
             ..default()
         };
         assert_eq!(
             network.replication_send_interval(),
-            Duration::from_millis(100)
+            Duration::from_nanos(62_500_000)
         );
 
         let invalid = NetworkConfig {
