@@ -74,7 +74,7 @@
         mistake_chance_per_decision_percent: 3,
     ),
     respawn: (
-        player_cooldown_seconds: 1.0,
+        player_cooldown_seconds: 3.0,
         bot_cooldown_seconds: 1.0,
     ),
     network: (

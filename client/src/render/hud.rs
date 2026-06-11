@@ -837,15 +837,23 @@ fn format_leaderboard_rows(rows: &[LeaderboardEntry]) -> String {
 
 fn format_death_stats(stats: PlayerDeathStats, respawn_wait_seconds: f32) -> String {
     format!(
-        "Score: {}\nAverage speed: {:.2}\nTime alive: {}\nKills: {}\nTime as leader: {}\nFood eaten: {}\nRespawn in: {:.1}s",
+        "{}\n\nScore: {}\nAverage speed: {:.2}\nTime alive: {}\nKills: {}\nTime as leader: {}\nFood eaten: {}",
+        format_respawn_prompt(respawn_wait_seconds),
         stats.score,
         stats.average_speed,
         format_duration(stats.time_alive_seconds),
         stats.kills,
         format_duration(stats.time_as_leader_seconds),
         stats.food_eaten,
-        respawn_wait_seconds,
     )
+}
+
+fn format_respawn_prompt(respawn_wait_seconds: f32) -> String {
+    if respawn_wait_seconds > 0.0 {
+        format!("Respawn in {}...", respawn_wait_seconds.ceil() as u32)
+    } else {
+        "Press Enter to respawn".to_string()
+    }
 }
 
 fn format_duration(seconds: f32) -> String {
@@ -937,6 +945,24 @@ mod tests {
         assert!(text.contains("Kills: 3"));
         assert!(text.contains("Time as leader: 0:05"));
         assert!(text.contains("Food eaten: 7"));
+        assert!(text.contains("Respawn in 2..."));
+    }
+
+    #[test]
+    fn death_stats_text_prompts_enter_when_respawn_is_ready() {
+        let text = format_death_stats(
+            PlayerDeathStats {
+                average_speed: 1.5,
+                score: 240,
+                time_alive_seconds: 62.0,
+                kills: 3,
+                time_as_leader_seconds: 5.0,
+                food_eaten: 7,
+            },
+            0.0,
+        );
+
+        assert!(text.contains("Press Enter to respawn"));
     }
 
     #[test]

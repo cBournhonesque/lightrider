@@ -323,7 +323,7 @@ pub struct RespawnConfig {
 impl Default for RespawnConfig {
     fn default() -> Self {
         Self {
-            player_cooldown_seconds: 1.0,
+            player_cooldown_seconds: 3.0,
             bot_cooldown_seconds: 1.0,
         }
     }

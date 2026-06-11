@@ -75,7 +75,7 @@ fn spawn_shortcut_help(commands: &mut Commands) {
         .with_children(|parent| {
             parent.spawn((
                 Text::new(
-                    "Shortcuts\nWASD / Arrows: turn\nEnter / Space: respawn\nT: debug camera\n?: toggle this help",
+                    "Shortcuts\nWASD / Arrows: turn\nEnter: respawn\nT: debug camera\n?: toggle this help",
                 ),
                 ui_style::body_color(),
                 ui_style::text_glow(),

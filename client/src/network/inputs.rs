@@ -6,6 +6,7 @@ use lightyear::prelude::{
     Client, Connected, Controlled, InputTimeline, IsSynced, LocalId, MessageSender,
 };
 
+use crate::collision::death::DeathView;
 use shared::network::protocol::prelude::*;
 
 pub struct NetworkInputsPlugin;
@@ -22,6 +23,7 @@ impl Plugin for NetworkInputsPlugin {
 fn send_player_spawn_requests(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
+    death_view: Option<Res<DeathView>>,
     auto_respawn: Option<Res<AutoRespawnRequests>>,
     mut next_auto_request_at: Local<f64>,
     mut clients: Query<
@@ -30,10 +32,11 @@ fn send_player_spawn_requests(
     >,
     players: Query<(&Player, &PlayerStatus), With<Controlled>>,
 ) {
-    let wants_keyboard_respawn =
-        keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space);
+    let respawn_ready = can_respawn_from_death_view(death_view.as_deref(), time.elapsed_secs());
+    let wants_keyboard_respawn = respawn_ready
+        && (keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter));
     let wants_auto_respawn =
-        auto_respawn.is_some() && time.elapsed_secs_f64() >= *next_auto_request_at;
+        respawn_ready && auto_respawn.is_some() && time.elapsed_secs_f64() >= *next_auto_request_at;
     if !wants_keyboard_respawn && !wants_auto_respawn {
         return;
     }
@@ -52,6 +55,12 @@ fn send_player_spawn_requests(
     if wants_auto_respawn {
         *next_auto_request_at = time.elapsed_secs_f64() + 0.25;
     }
+}
+
+fn can_respawn_from_death_view(death_view: Option<&DeathView>, now_seconds: f32) -> bool {
+    death_view.is_none_or(|death_view| {
+        death_view.stats.is_none() || now_seconds >= death_view.respawn_allowed_at_seconds
+    })
 }
 
 fn add_snake_inputs(
@@ -78,5 +87,31 @@ fn add_snake_inputs(
         if !actions.iter().any(|action| action.get() == snake) {
             spawn_snake_input_actions(&mut commands, snake, client_id, false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn death_view(ready_at: f32) -> DeathView {
+        DeathView {
+            respawn_allowed_at_seconds: ready_at,
+            stats: Some(PlayerDeathStats::default()),
+            ..default()
+        }
+    }
+
+    #[test]
+    fn respawn_gate_waits_for_death_view_cooldown() {
+        let view = death_view(3.0);
+
+        assert!(!can_respawn_from_death_view(Some(&view), 2.99));
+        assert!(can_respawn_from_death_view(Some(&view), 3.0));
+    }
+
+    #[test]
+    fn respawn_gate_allows_initial_spawn_without_death_view() {
+        assert!(can_respawn_from_death_view(None, 0.0));
     }
 }
