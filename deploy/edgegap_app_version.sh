@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  tools/edgegap_app_version.sh desired --tag <image-tag> --version <edgegap-version> [--app lightrider]
-  tools/edgegap_app_version.sh show --version <edgegap-version> [--app lightrider]
-  tools/edgegap_app_version.sh diff --tag <image-tag> --version <edgegap-version> [--app lightrider]
-  tools/edgegap_app_version.sh sync --tag <image-tag> --version <edgegap-version> [--app lightrider] [--create-app]
-  tools/edgegap_app_version.sh verify --tag <image-tag> --version <edgegap-version> [--app lightrider]
+  deploy/edgegap_app_version.sh desired --tag <image-tag> --version <edgegap-version> [--app lightrider]
+  deploy/edgegap_app_version.sh show --version <edgegap-version> [--app lightrider]
+  deploy/edgegap_app_version.sh diff --tag <image-tag> --version <edgegap-version> [--app lightrider]
+  deploy/edgegap_app_version.sh sync --tag <image-tag> --version <edgegap-version> [--app lightrider] [--create-app]
+  deploy/edgegap_app_version.sh verify --tag <image-tag> --version <edgegap-version> [--app lightrider]
 
 Commands:
   desired   Print the redacted desired app-version shape. Does not call Edgegap.

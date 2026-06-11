@@ -141,7 +141,7 @@ WORKDIR /app
 COPY --from=nats /nats-server /app/nats-server
 COPY --from=builder /tmp/lightyear_matchmaker_server /app/lightyear_matchmaker_server
 COPY --from=builder /tmp/lightrider-web /usr/share/nginx/html
-COPY lightrider/tools/matchmaker-container-entrypoint.sh /app/matchmaker-container-entrypoint.sh
+COPY lightrider/deploy/matchmaker-container-entrypoint.sh /app/matchmaker-container-entrypoint.sh
 
 EXPOSE 8080/tcp
 EXPOSE 4222/tcp

@@ -106,7 +106,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: lightrider/.edgegap-build/context
-          file: lightrider/.edgegap-build/context/lightrider/Dockerfile.server
+          file: lightrider/.edgegap-build/context/lightrider/deploy/Dockerfile.server
           push: true
           tags: ${{ env.SERVER_IMAGE }}
           labels: |
@@ -126,7 +126,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: lightrider/.edgegap-build/context
-          file: lightrider/.edgegap-build/context/lightrider/Dockerfile.matchmaker
+          file: lightrider/.edgegap-build/context/lightrider/deploy/Dockerfile.matchmaker
           push: true
           tags: ${{ env.MATCHMAKER_IMAGE }}
           labels: |

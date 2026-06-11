@@ -343,7 +343,7 @@ just edgegap-app-sync "$tag" "$tag" lightrider
 just edgegap-app-verify "$tag" "$tag" lightrider
 ```
 
-Use `EDGEGAP_NATS_INSECURE=1` only for temporary no-TLS NATS testing. With NATS TLS, remove it and provide the TLS-related env values expected by `tools/edgegap_app_version.sh`.
+Use `EDGEGAP_NATS_INSECURE=1` only for temporary no-TLS NATS testing. With NATS TLS, remove it and provide the TLS-related env values expected by `deploy/edgegap_app_version.sh`.
 
 The app-version sync defaults `EDGEGAP_FORCE_CACHE=false` because the current Edgegap organization has no enabled image-cache quota. Set `EDGEGAP_FORCE_CACHE=true` only after Edgegap cache capacity is available.
 
@@ -829,7 +829,7 @@ MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 just mat
 
 Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup. The template also rotates an empty or default `NATS_PASSWORD=lightrider` into a random password because production startup refuses default `lightrider`/`lightrider` NATS credentials.
 
-The remote script is [tools/setup_web_server_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/tools/setup_web_server_host.sh). The installed systemd service is `lightrider-matchmaker`.
+The remote script is [deploy/setup_web_server_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/deploy/setup_web_server_host.sh). The installed systemd service is `lightrider-matchmaker`.
 
 After install:
 
@@ -937,7 +937,7 @@ The matchmaker container's own NATS clients normally connect to `127.0.0.1:4222`
 MATCHMAKER_NATS_HOST=<nats-domain>:4222
 ```
 
-For Edgegap game-server app versions, sync the app without `EDGEGAP_NATS_INSECURE=1` and provide a public DNS `NATS_HOST`. If the cert is publicly trusted, no CA override is needed. If it is self-signed, provide trust with `NATS_CA` or `NATS_CA_CONTENTS` through `tools/edgegap_app_version.sh`.
+For Edgegap game-server app versions, sync the app without `EDGEGAP_NATS_INSECURE=1` and provide a public DNS `NATS_HOST`. If the cert is publicly trusted, no CA override is needed. If it is self-signed, provide trust with `NATS_CA` or `NATS_CA_CONTENTS` through `deploy/edgegap_app_version.sh`.
 
 With `BEVYGAP_REQUIRE_SECURE_NATS=1`, the matchmaker/control container refuses `NATS_INSECURE` and refuses default `lightrider/lightrider` NATS credentials. `NATS_INSECURE` is parsed as a truthy flag, so `NATS_INSECURE=0` and `NATS_INSECURE=false` do not disable TLS.
 

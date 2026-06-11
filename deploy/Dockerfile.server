@@ -99,7 +99,7 @@ RUN apt-get update && \
 WORKDIR /app
 COPY --from=builder /tmp/lightrider-server /app/lightrider-server
 COPY lightrider/config/default.ron /app/config/default.ron
-COPY lightrider/tools/server-container-entrypoint.sh /app/server-container-entrypoint.sh
+COPY lightrider/deploy/server-container-entrypoint.sh /app/server-container-entrypoint.sh
 
 EXPOSE 7777/udp
 
