@@ -11,6 +11,8 @@ use crate::utils::query::Simulated;
 
 pub struct MovementPlugin;
 
+pub type TailPointsDiffLog = DiffLog<TailPoints>;
+
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum SimulationSet {
     // move snakes
@@ -56,17 +58,7 @@ pub fn turn_head_from_input(
     let Ok((mut tail, log)) = query.get_mut(trigger.context) else {
         return;
     };
-    if is_perpendicular_turn(tail.front().1, direction) {
-        let position = tail.front().0;
-        apply_tail_op(
-            tail.as_mut(),
-            log,
-            TailPointsOp::SetFrontDirectionAndPush {
-                position,
-                direction,
-            },
-        );
-    }
+    let _ = turn_tail_with_log(tail.as_mut(), log, direction);
 }
 
 pub fn direction_from_input(input: Vec2) -> Option<Direction> {
@@ -87,10 +79,27 @@ pub fn direction_from_input(input: Vec2) -> Option<Direction> {
 }
 
 pub fn turn_tail(tail: &mut TailPoints, requested: Direction) {
+    let _ = turn_tail_with_log(tail, None, requested);
+}
+
+pub fn turn_tail_with_log<'a>(
+    tail: &mut TailPoints,
+    log: Option<Mut<'a, DiffLog<TailPoints>>>,
+    requested: Direction,
+) -> Option<Mut<'a, DiffLog<TailPoints>>> {
     let current = tail.front().1;
     if is_perpendicular_turn(current, requested) {
-        tail.set_front_direction_and_push(requested);
+        let position = tail.front().0;
+        return apply_tail_op(
+            tail,
+            log,
+            TailPointsOp::SetFrontDirectionAndPush {
+                position,
+                direction: requested,
+            },
+        );
     }
+    log
 }
 
 pub fn is_perpendicular_turn(current: Direction, requested: Direction) -> bool {
@@ -411,7 +420,7 @@ mod tests {
                 .get::<DiffLog<TailPoints>>()
                 .unwrap()
                 .current_cursor(),
-            2
+            None
         );
     }
 
@@ -442,7 +451,7 @@ mod tests {
                 .get::<DiffLog<TailPoints>>()
                 .unwrap()
                 .current_cursor(),
-            2
+            None
         );
     }
 

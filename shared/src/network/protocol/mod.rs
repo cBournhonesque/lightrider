@@ -15,6 +15,8 @@ pub mod inputs;
 pub mod messages;
 
 pub mod prelude {
+    pub use bevy_replicon::prelude::PatchIndex;
+
     // components
     pub use super::components::common::*;
     pub use super::components::food::*;

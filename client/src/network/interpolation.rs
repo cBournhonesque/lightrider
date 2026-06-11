@@ -55,7 +55,7 @@ fn interpolate_snakes(
         (
             &mut TailPoints,
             &mut TailLength,
-            &ConfirmedHistory<TailPoints>,
+            &ConfirmedHistory<TailPoints, Option<PatchIndex>>,
             &ConfirmedHistory<TailLength>,
         ),
         With<Interpolated>,
@@ -103,4 +103,55 @@ fn interpolation_fraction(start: Tick, end: Tick, current: Tick, overstep: f32) 
         return 1.0;
     }
     (((current - start) as f32 + overstep) / (end - start) as f32).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn diff_tail_history_updates_live_interpolated_tail() {
+        let mut app = App::new();
+        app.add_systems(PostUpdate, interpolate_snakes);
+        app.world_mut().spawn((
+            InterpolationTimeline::default(),
+            IsSynced::<InterpolationTimeline>::default(),
+        ));
+
+        let length = TailLength {
+            current_size: 100.0,
+            target_size: 100.0,
+        };
+        let mut tail_history = ConfirmedHistory::<TailPoints, Option<PatchIndex>>::default();
+        tail_history.push_with_metadata(Tick(0), tail_at(10.0), Some(0));
+        tail_history.push_with_metadata(Tick(2), tail_at(20.0), Some(1));
+
+        let mut length_history = ConfirmedHistory::<TailLength>::default();
+        length_history.push(Tick(0), length.clone());
+        length_history.push(Tick(2), length.clone());
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Interpolated,
+                tail_at(0.0),
+                length,
+                tail_history,
+                length_history,
+            ))
+            .id();
+
+        app.update();
+
+        let tail = app.world().entity(entity).get::<TailPoints>().unwrap();
+        assert_eq!(tail.front().0, Vec2::new(10.0, 0.0));
+    }
+
+    fn tail_at(x: f32) -> TailPoints {
+        TailPoints::new(VecDeque::from([
+            (Vec2::new(x, 0.0), Direction::Right),
+            (Vec2::new(x - 100.0, 0.0), Direction::Right),
+        ]))
+    }
 }
