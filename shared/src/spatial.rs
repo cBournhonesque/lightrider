@@ -319,7 +319,7 @@ mod tests {
     use super::*;
 
     fn tail(points: impl IntoIterator<Item = (Vec2, Direction)>) -> TailPoints {
-        TailPoints(VecDeque::from_iter(points))
+        TailPoints::new(VecDeque::from_iter(points))
     }
 
     #[test]

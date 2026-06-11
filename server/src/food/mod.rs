@@ -304,7 +304,7 @@ mod tests {
         app.add_plugins(FoodPlugin);
         // snake: vertical, pointing up
         let snake = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points = TailPoints(VecDeque::from([
+        let points = TailPoints::new(VecDeque::from([
             (Vec2::new(0.0, 200.0), Direction::Up),
             (Vec2::new(0.0, 0.0), Direction::Up),
         ]));

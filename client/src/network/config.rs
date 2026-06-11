@@ -9,7 +9,7 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use shared::config::GameConfig;
-use shared::network::config::{recv_link_conditioner, NetcodeIdentity};
+use shared::network::config::{recv_link_conditioner, transport_compression, NetcodeIdentity};
 
 #[derive(Resource, Clone)]
 pub(crate) struct ClientConnectionConfig {
@@ -69,6 +69,7 @@ impl Plugin for ClientConnectionPlugin {
         app.add_plugins(ClientPlugins { tick_duration });
         app.insert_resource(self.config.clone());
         app.add_systems(Startup, spawn_client);
+        app.add_observer(apply_transport_compression);
     }
 }
 
@@ -131,6 +132,17 @@ fn spawn_client(
         }
     }
     Ok(())
+}
+
+fn apply_transport_compression(
+    trigger: On<Add, Transport>,
+    config: Res<GameConfig>,
+    mut transports: Query<&mut Transport>,
+) {
+    let Ok(mut transport) = transports.get_mut(trigger.entity) else {
+        return;
+    };
+    transport.set_compression(transport_compression(&config.network));
 }
 
 pub(crate) fn normalize_certificate_digest(digest: &str) -> String {

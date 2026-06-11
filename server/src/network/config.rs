@@ -9,7 +9,7 @@ use lightyear::prelude::*;
 use lightyear::webtransport::prelude::Identity;
 
 use shared::config::GameConfig;
-use shared::network::config::{recv_link_conditioner, NetcodeIdentity};
+use shared::network::config::{recv_link_conditioner, transport_compression, NetcodeIdentity};
 
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct ServerConnectionConfig {
@@ -29,11 +29,18 @@ impl Plugin for ServerConnectionPlugin {
             .resource::<GameConfig>()
             .movement
             .tick_duration();
+        let replication_send_interval = app
+            .world()
+            .resource::<GameConfig>()
+            .network
+            .replication_send_interval();
         app.add_plugins(ServerPlugins { tick_duration });
+        app.insert_resource(ReplicationMetadata::new(replication_send_interval));
         app.register_required_components::<ClientOf, ReplicationSender>();
         app.insert_resource(self.config);
         app.add_systems(Startup, start_server);
         app.add_observer(apply_server_link_conditioner);
+        app.add_observer(apply_transport_compression);
     }
 }
 
@@ -84,6 +91,17 @@ fn apply_server_link_conditioner(
     for packet in queued_packets {
         link.recv.push(packet, Instant::now());
     }
+}
+
+fn apply_transport_compression(
+    trigger: On<Add, Transport>,
+    config: Res<GameConfig>,
+    mut transports: Query<&mut Transport>,
+) {
+    let Ok(mut transport) = transports.get_mut(trigger.entity) else {
+        return;
+    };
+    transport.set_compression(transport_compression(&config.network));
 }
 
 fn webtransport_identity() -> Identity {

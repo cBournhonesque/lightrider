@@ -147,8 +147,17 @@ def summarize_traces(run_dir: Path) -> list[str]:
     transport_bytes: Counter[tuple[str, str]] = Counter()
     transport_send_bytes: Counter[str] = Counter()
     transport_recv_bytes: Counter[str] = Counter()
+    channel_recv_bytes: Counter[tuple[str, str]] = Counter()
+    channel_recv_counts: Counter[tuple[str, str]] = Counter()
+    message_send_bytes: Counter[tuple[str, str, str]] = Counter()
+    message_send_counts: Counter[tuple[str, str, str]] = Counter()
     fragment_counts: Counter[tuple[str, str]] = Counter()
     fragment_frames: Counter[tuple[str, str, int]] = Counter()
+    fragment_bytes: Counter[tuple[str, str]] = Counter()
+    compression_counts: Counter[tuple[str, str]] = Counter()
+    compression_bytes: Counter[tuple[str, str]] = Counter()
+    compression_original_bytes: Counter[tuple[str, str]] = Counter()
+    compression_compressed_bytes: Counter[tuple[str, str]] = Counter()
     rollback_count = 0
     rollback_delta_total = 0.0
     rollback_delta_max = 0.0
@@ -179,6 +188,13 @@ def summarize_traces(run_dir: Path) -> list[str]:
                             "send_buffered": field_number(event, "link_send_buffered") or 0.0,
                         }
                     )
+                if target == "lightyear_debug::message" and kind == "message_send":
+                    channel = str(event.get("fields", {}).get("channel", "<unknown>"))
+                    message_name = str(event.get("fields", {}).get("message_name", "<unknown>"))
+                    byte_count = int(field_number(event, "bytes") or 0.0)
+                    key = (process_id, channel, message_name)
+                    message_send_bytes[key] += byte_count
+                    message_send_counts[key] += 1
                 if target == "lightyear_debug::transport":
                     timestamp = event.get("timestamp")
                     if isinstance(timestamp, int):
@@ -192,9 +208,27 @@ def summarize_traces(run_dir: Path) -> list[str]:
                         transport_send_bytes[process_id] += int(byte_count)
                     elif kind == "packet_recv":
                         transport_recv_bytes[process_id] += int(byte_count)
+                    if kind == "channel_recv_message":
+                        channel = str(event.get("fields", {}).get("channel", "<unknown>"))
+                        key = (process_id, channel)
+                        channel_recv_bytes[key] += int(byte_count)
+                        channel_recv_counts[key] += 1
+                    if kind == "packet_compression":
+                        outcome = str(event.get("fields", {}).get("outcome", "<unknown>"))
+                        key = (process_id, outcome)
+                        compression_counts[key] += 1
+                        compression_bytes[key] += int(byte_count)
+                        compression_original_bytes[key] += int(
+                            field_number(event, "original_len") or 0.0
+                        )
+                        compression_compressed_bytes[key] += int(
+                            field_number(event, "compressed_len") or 0.0
+                        )
                     packet_type = str(event.get("fields", {}).get("packet_type", ""))
                     if "fragment" in kind.lower() or "DataFragment" in packet_type:
+                        channel = str(event.get("fields", {}).get("channel", "<unknown>"))
                         fragment_counts[(process_id, kind)] += 1
+                        fragment_bytes[(process_id, channel)] += int(byte_count)
                         frame = int(
                             field_number(event, "frame_index")
                             or field_number(event, "local_tick")
@@ -255,6 +289,95 @@ def summarize_traces(run_dir: Path) -> list[str]:
     else:
         lines.append("  No packet_send/packet_recv rows found.")
 
+    lines.append("Trace packet compression outcomes:")
+    if compression_counts:
+        for process_id in sorted({pid for pid, _outcome in compression_counts}):
+            role = role_by_process.get(process_id, "unknown")
+            lines.append(f"  {role} pid={process_id}:")
+            total_rows = sum(
+                count
+                for (pid, _outcome), count in compression_counts.items()
+                if pid == process_id
+            )
+            total_original = sum(
+                original
+                for (pid, outcome), original in compression_original_bytes.items()
+                if pid == process_id
+                and compression_compressed_bytes[(pid, outcome)] > 0
+            )
+            total_compressed = sum(
+                compressed
+                for (pid, _outcome), compressed in compression_compressed_bytes.items()
+                if pid == process_id and compressed > 0
+            )
+            for (pid, outcome), count in compression_counts.most_common():
+                if pid != process_id:
+                    continue
+                packet_bytes = compression_bytes[(pid, outcome)]
+                original = compression_original_bytes[(pid, outcome)]
+                compressed = compression_compressed_bytes[(pid, outcome)]
+                share = count / total_rows * 100.0 if total_rows else 0.0
+                compressed_text = fmt_kib(compressed) if compressed else "-"
+                saved_text = fmt_kib(max(0, original - compressed)) if compressed else "-"
+                lines.append(
+                    f"    {outcome}: rows={count} share={share:.1f}% "
+                    f"packet_bytes={fmt_kib(packet_bytes)} "
+                    f"original={fmt_kib(original)} compressed={compressed_text} "
+                    f"saved={saved_text}"
+                )
+            if total_original and total_compressed:
+                total_saved = max(0, total_original - total_compressed)
+                lines.append(
+                    f"    total: original={fmt_kib(total_original)} "
+                    f"compressed={fmt_kib(total_compressed)} saved={fmt_kib(total_saved)}"
+                )
+    else:
+        lines.append("  No packet_compression rows found; rerun with updated Lightyear tracing.")
+
+    lines.append("Trace channel byte breakdown:")
+    if channel_recv_bytes or message_send_bytes:
+        for process_id in sorted(
+            set(pid for pid, _channel in channel_recv_bytes)
+            | set(pid for pid, _channel, _message in message_send_bytes)
+        ):
+            role = role_by_process.get(process_id, "unknown")
+            lines.append(f"  {role} pid={process_id}:")
+
+            received_total = sum(
+                bytes_
+                for (pid, _channel), bytes_ in channel_recv_bytes.items()
+                if pid == process_id
+            )
+            if received_total:
+                lines.append("    received channels:")
+                for (pid, channel), bytes_ in channel_recv_bytes.most_common():
+                    if pid != process_id:
+                        continue
+                    rows = channel_recv_counts[(pid, channel)]
+                    share = bytes_ / received_total * 100.0
+                    lines.append(
+                        f"      {channel}: {fmt_kib(bytes_)} rows={rows} share={share:.1f}%"
+                    )
+
+            sent_total = sum(
+                bytes_
+                for (pid, _channel, _message), bytes_ in message_send_bytes.items()
+                if pid == process_id
+            )
+            if sent_total:
+                lines.append("    serialized sends:")
+                for (pid, channel, message_name), bytes_ in message_send_bytes.most_common():
+                    if pid != process_id:
+                        continue
+                    rows = message_send_counts[(pid, channel, message_name)]
+                    share = bytes_ / sent_total * 100.0
+                    lines.append(
+                        f"      {channel} | {message_name}: "
+                        f"{fmt_kib(bytes_)} rows={rows} share={share:.1f}%"
+                    )
+    else:
+        lines.append("  No channel/message rows found.")
+
     lines.append("Packet fragment metrics from trace rows:")
     if fragment_counts:
         for (process_id, kind), count in sorted(fragment_counts.items()):
@@ -266,6 +389,10 @@ def summarize_traces(run_dir: Path) -> list[str]:
             lines.append(
                 f"  pid={process_id} {kind}: fragments={count} max_fragments_per_frame={max_per_frame}"
             )
+        lines.append("Packet fragment bytes by decoded channel:")
+        for (process_id, channel), bytes_ in fragment_bytes.most_common():
+            role = role_by_process.get(process_id, "unknown")
+            lines.append(f"  {role} pid={process_id} {channel}: {fmt_kib(bytes_)}")
     else:
         lines.append("  No packet fragment rows found in traced processes.")
 

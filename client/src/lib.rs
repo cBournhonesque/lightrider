@@ -25,6 +25,7 @@ mod collision;
 mod debug;
 mod food;
 mod inputs;
+mod leaderboard;
 #[cfg(feature = "lightyear-matchmaker")]
 mod matchmaker;
 mod menu;
@@ -245,6 +246,7 @@ pub fn app(cli: Cli) -> App {
     app.add_plugins(RuntimeDebugPlugin::client());
     app.add_plugins(collision::CollisionPlugin);
     app.add_plugins(food::PredictedFoodPlugin);
+    app.add_plugins(leaderboard::ClientLeaderboardPlugin);
     app.add_plugins(rooms::ClientRoomsPlugin {
         mode: cli.room,
         name: player_name,

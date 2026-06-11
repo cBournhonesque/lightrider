@@ -79,6 +79,10 @@
     ),
     network: (
         server_port: 5000,
+        // Server state snapshots are sent at 10 Hz, matching the original
+        // Powerline interpolation cadence while simulation remains 30 Hz.
+        replication_send_hz: 10,
+        compression: Disabled,
         // Lightyear balanced input delay: cover low latency with input delay first,
         // then bound prediction for the remaining latency.
         input_delay: (

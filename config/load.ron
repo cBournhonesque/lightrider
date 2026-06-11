@@ -79,6 +79,8 @@
     ),
     network: (
         server_port: 5000,
+        replication_send_hz: 10,
+        compression: Disabled,
         input_delay: (
             minimum_input_delay_ticks: 0,
             maximum_input_delay_before_prediction_ticks: 3,

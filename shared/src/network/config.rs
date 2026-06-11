@@ -1,14 +1,13 @@
 use std::time::Duration;
 
 use lightyear::netcode::Key;
-use lightyear::prelude::{LinkConditionerConfig, RecvLinkConditioner};
+use lightyear::prelude::{CompressionConfig, LinkConditionerConfig, RecvLinkConditioner};
 
-use crate::config::NetworkConfig;
+use crate::config::{NetworkCompression, NetworkConfig};
 
 pub const DEFAULT_PROTOCOL_ID: u64 = 0;
 pub const DEFAULT_PRIVATE_KEY: Key = [0; 32];
 
-pub const SERVER_SEND_HZ: f64 = 32.0;
 pub const NETWORK_CONDITIONER_ENV: &str = "LIGHTRIDER_NETWORK_CONDITIONER";
 
 const PROTOCOL_ID_ENV: &str = "LIGHTRIDER_PROTOCOL_ID";
@@ -63,6 +62,13 @@ impl NetcodeIdentity {
 
 pub fn recv_link_conditioner(config: &NetworkConfig) -> Option<RecvLinkConditioner> {
     recv_link_conditioner_config(config).map(RecvLinkConditioner::new)
+}
+
+pub fn transport_compression(config: &NetworkConfig) -> CompressionConfig {
+    match config.compression {
+        NetworkCompression::Disabled => CompressionConfig::DISABLED,
+        NetworkCompression::Lz4 => CompressionConfig::LZ4,
+    }
 }
 
 pub fn recv_link_conditioner_config(config: &NetworkConfig) -> Option<LinkConditionerConfig> {
@@ -174,6 +180,8 @@ mod tests {
         let config = NetworkConfig {
             input_delay: InputDelayConfig::balanced(),
             input_packet_redundancy_ticks: 3,
+            replication_send_hz: 10,
+            compression: crate::config::NetworkCompression::Disabled,
             server_port: 5000,
             artificial_latency_ms: 12,
             artificial_jitter_ms: 3,

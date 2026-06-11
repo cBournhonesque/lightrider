@@ -18,6 +18,7 @@ path = "src/bin/main.rs"
 
 [features]
 default = []
+profile-chrome = ["bevy/trace_chrome", "bevy/detailed_trace"]
 lightyear-matchmaker = [
     "dep:lightyear_matchmaker_bevy_server",
     "dep:lightyear_matchmaker_core",

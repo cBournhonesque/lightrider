@@ -116,6 +116,7 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
       cargo_args+=(--release)
       bin_dir="release"
     fi
+    target_dir="${CARGO_TARGET_DIR:-target}"
     cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
     pids=()
     cleanup() {
@@ -126,14 +127,14 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
     }
     trap cleanup EXIT
     RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
-      "target/$bin_dir/lightrider-server" --headless --port {{port}} --config {{config}} \
+      "$target_dir/$bin_dir/lightrider-server" --headless --port {{port}} --config {{config}} \
       > "$run_dir/server.log" 2>&1 &
     pids+=("$!")
     sleep 2
     for i in $(seq 0 $(({{clients}} - 1))); do
       id=$(({{first_client_id}} + i))
       RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
-        "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
+        "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
         > "$run_dir/client-$id.log" 2>&1 &
       pids+=("$!")
       sleep 1
@@ -174,11 +175,16 @@ load-help:
     Summarize an existing load run:
       just load-summary dir=logs/load/latest
 
+    Chrome-trace server profiling with agent-readable summaries:
+      just profile-chrome clients=50 seconds=20 release=true
+      just profile-chrome clients=10 seconds=10 release=false incremental=true
+
     Outputs:
       logs/load/<timestamp>/process_metrics.csv  CPU/RSS/HWM/thread/fd samples
       logs/load/<timestamp>/network_metrics.csv  per-interface bandwidth samples
       logs/load/<timestamp>/*.ndjson             sampled Lightyear debug traces
       logs/load/<timestamp>/load_summary.txt     high-level summary
+      logs/profile/<timestamp>/chrome/profile_summary.md
     EOF
 
 load-local *args:
@@ -229,6 +235,7 @@ load-local *args:
       cargo_args+=(--release)
       bin_dir="release"
     fi
+    target_dir="${CARGO_TARGET_DIR:-target}"
     cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
     pids_file="$run_dir/pids.csv"
     echo "role,name,pid" > "$pids_file"
@@ -249,11 +256,11 @@ load-local *args:
     sampler_pid="$!"
     if [[ "$server_trace" == "true" ]]; then
       RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
-        "target/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
+        "$target_dir/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
         > "$run_dir/server.log" 2>&1 &
     else
       RUST_LOG="warn" \
-        "target/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
+        "$target_dir/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
         > "$run_dir/server.log" 2>&1 &
     fi
     server_pid="$!"
@@ -269,11 +276,11 @@ load-local *args:
       id=$((first_client_id + i))
       if (( i < trace_clients )); then
         RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
-          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       else
         RUST_LOG="warn" \
-          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       fi
       client_pid="$!"
@@ -339,6 +346,7 @@ fake-clients *args:
       cargo_args+=(--release)
       bin_dir="release"
     fi
+    target_dir="${CARGO_TARGET_DIR:-target}"
     cargo build "${cargo_args[@]}" -p client --bin lightrider-client
     pids_file="$run_dir/pids.csv"
     echo "role,name,pid" > "$pids_file"
@@ -366,11 +374,11 @@ fake-clients *args:
       id=$((first_id + i))
       if (( i < trace_clients )); then
         RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
-          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       else
         RUST_LOG="warn" \
-          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       fi
       client_pid="$!"
@@ -401,6 +409,136 @@ load-summary *args:
     done
     tools/load_summary.py "$dir"
 
+profile-chrome *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -f secrets/admin.env ]]; then
+      set -a
+      source secrets/admin.env
+      set +a
+    fi
+    clients="50"
+    seconds="20"
+    config="config/load.ron"
+    port="5000"
+    first_client_id="4001"
+    room="auto"
+    release="true"
+    ramp_per_second="20"
+    sample_interval="1"
+    net_interfaces="lo"
+    rust_log="warn,bevy_ecs=trace,bevy_app=trace"
+    incremental="false"
+    args=({{args}})
+    for arg in "${args[@]}"; do
+      case "$arg" in
+        clients=*) clients="${arg#*=}" ;;
+        seconds=*) seconds="${arg#*=}" ;;
+        config=*) config="${arg#*=}" ;;
+        port=*) port="${arg#*=}" ;;
+        first_client_id=*) first_client_id="${arg#*=}" ;;
+        room=*) room="${arg#*=}" ;;
+        release=*) release="${arg#*=}" ;;
+        ramp_per_second=*) ramp_per_second="${arg#*=}" ;;
+        sample_interval=*) sample_interval="${arg#*=}" ;;
+        net_interfaces=*) net_interfaces="${arg#*=}" ;;
+        rust_log=*) rust_log="${arg#*=}" ;;
+        incremental=*) incremental="${arg#*=}" ;;
+        *) echo "unknown profile-chrome argument: $arg" >&2; exit 2 ;;
+      esac
+    done
+    run_dir="logs/profile/$(date +%Y%m%d-%H%M%S)-chrome-c$clients"
+    mkdir -p "$run_dir"
+    mkdir -p logs/profile
+    ln -sfn "$(realpath "$run_dir")" logs/profile/latest
+    cargo_args=(-j 2)
+    bin_dir="debug"
+    if [[ "$release" == "true" ]]; then
+      cargo_args+=(--release)
+      bin_dir="release"
+    fi
+    cargo_incremental="0"
+    if [[ "$incremental" == "true" ]]; then
+      cargo_incremental="1"
+    fi
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    CARGO_INCREMENTAL="$cargo_incremental" cargo build "${cargo_args[@]}" -p server --features profile-chrome --bin lightrider-server
+    CARGO_INCREMENTAL="$cargo_incremental" cargo build "${cargo_args[@]}" -p client --bin lightrider-client
+    pids_file="$run_dir/pids.csv"
+    echo "role,name,pid" > "$pids_file"
+    client_pids=()
+    server_pid=""
+    sampler_pid=""
+    cleanup() {
+      set +e
+      for pid in "${client_pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+      if [[ -n "$server_pid" ]]; then
+        kill "$server_pid" 2>/dev/null || true
+      fi
+      if [[ -n "$sampler_pid" ]]; then
+        kill "$sampler_pid" 2>/dev/null || true
+      fi
+      wait 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+    LOAD_NET_INTERFACES="$net_interfaces" tools/load_sampler.sh "$run_dir" "$pids_file" "$sample_interval" &
+    sampler_pid="$!"
+    trace_path="$run_dir/server.trace.json"
+    server_runtime="$(awk -v clients="$clients" -v rate="$ramp_per_second" -v seconds="$seconds" 'BEGIN { ramp = rate > 0 ? clients / rate : 0; printf "%.3f", seconds + ramp + 5.0 }')"
+    TRACE_CHROME="$trace_path" RUST_LOG="$rust_log" \
+      "$target_dir/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" --run-seconds "$server_runtime" \
+      > "$run_dir/server.log" 2>&1 &
+    server_pid="$!"
+    echo "server,server,$server_pid" >> "$pids_file"
+    sleep 2
+    if (( ramp_per_second > 0 )); then
+      sleep_interval="$(awk -v rate="$ramp_per_second" 'BEGIN { printf "%.3f", 1.0 / rate }')"
+    else
+      sleep_interval="0"
+    fi
+    if (( clients > 0 )); then
+      for i in $(seq 0 $((clients - 1))); do
+        id=$((first_client_id + i))
+        RUST_LOG="warn" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          > "$run_dir/client-$id.log" 2>&1 &
+        client_pid="$!"
+        client_pids+=("$client_pid")
+        echo "client,client-$id,$client_pid" >> "$pids_file"
+        sleep "$sleep_interval"
+      done
+    fi
+    sleep "$seconds"
+    for pid in "${client_pids[@]}"; do
+      kill "$pid" 2>/dev/null || true
+    done
+    if ((${#client_pids[@]} > 0)); then
+      wait "${client_pids[@]}" 2>/dev/null || true
+    fi
+    client_pids=()
+    server_status=0
+    if [[ -n "$server_pid" ]]; then
+      wait "$server_pid" || server_status=$?
+      server_pid=""
+    fi
+    if [[ -n "$sampler_pid" ]]; then
+      kill "$sampler_pid" 2>/dev/null || true
+      wait "$sampler_pid" 2>/dev/null || true
+      sampler_pid=""
+    fi
+    trap - EXIT INT TERM
+    echo "profile run: $run_dir"
+    tools/load_summary.py "$run_dir" | tee "$run_dir/load_summary.stdout.txt"
+    if [[ -s "$trace_path" ]]; then
+      tools/chrome_trace_summary.py "$trace_path" "$run_dir/chrome" | tee "$run_dir/chrome_summary.stdout.txt"
+    else
+      echo "Chrome trace was not written: $trace_path" >&2
+      server_status=1
+    fi
+    exit "$server_status"
+
 trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3001" first_bot_id="3002" bot_clients="2" room="auto" release="false":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -418,6 +556,7 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
       cargo_args+=(--release)
       bin_dir="release"
     fi
+    target_dir="${CARGO_TARGET_DIR:-target}"
     cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
     pids=()
     cleanup() {
@@ -428,12 +567,12 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
     }
     trap cleanup EXIT
     RUST_LOG="info,lightyear_debug=trace,server::food=warn" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
-      "target/$bin_dir/lightrider-server" --headless --port {{port}} --config {{config}} \
+      "$target_dir/$bin_dir/lightrider-server" --headless --port {{port}} --config {{config}} \
       > "$run_dir/server.log" 2>&1 &
     pids+=("$!")
     sleep 2
     RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-player-{{player_id}}.ndjson" \
-      "target/$bin_dir/lightrider-client" --headless --mode player --client-id {{player_id}} --server-port {{port}} --config {{config}} --room {{room}} \
+      "$target_dir/$bin_dir/lightrider-client" --headless --mode player --client-id {{player_id}} --server-port {{port}} --config {{config}} --room {{room}} \
       > "$run_dir/client-player-{{player_id}}.log" 2>&1 &
     pids+=("$!")
     sleep 1
@@ -441,7 +580,7 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
       for i in $(seq 0 $(({{bot_clients}} - 1))); do
         id=$(({{first_bot_id}} + i))
         RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-bot-$id.ndjson" \
-          "target/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{port}} --config {{config}} --room {{room}} \
           > "$run_dir/client-bot-$id.log" 2>&1 &
         pids+=("$!")
         sleep 1

@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use std::collections::HashSet;
 
+use crate::leaderboard::LeaderboardState;
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::*;
@@ -33,8 +34,9 @@ impl Plugin for LeaderRenderPlugin {
 fn sync_leader_crowns(
     mut commands: Commands,
     config: Res<GameConfig>,
+    leaderboard_state: Res<LeaderboardState>,
     sheet: Res<PowerlineSpriteSheet>,
-    players: Query<(Entity, &Player, &PlayerRank, &PlayerStatus, &RoomId)>,
+    players: Query<(Entity, &Player, &RoomId)>,
     tails: Query<&TailPoints>,
     mut visuals: Query<(Entity, &LeaderCrownVisual, &mut Transform, &mut Sprite)>,
 ) {
@@ -45,7 +47,7 @@ fn sync_leader_crowns(
         return;
     }
 
-    let desired = desired_leader_crowns(&config, &sheet, &players, &tails);
+    let desired = desired_leader_crowns(&config, &leaderboard_state, &sheet, &players, &tails);
     let mut seen = HashSet::with_capacity(desired.len());
 
     for desired in desired {
@@ -79,8 +81,9 @@ fn sync_leader_crowns(
 
 fn desired_leader_crowns(
     config: &GameConfig,
+    leaderboard_state: &LeaderboardState,
     sheet: &PowerlineSpriteSheet,
-    players: &Query<(Entity, &Player, &PlayerRank, &PlayerStatus, &RoomId)>,
+    players: &Query<(Entity, &Player, &RoomId)>,
     tails: &Query<&TailPoints>,
 ) -> Vec<DesiredLeaderCrown> {
     let crown_size = Vec2::new(
@@ -90,8 +93,19 @@ fn desired_leader_crowns(
     let crown_offset = Vec2::Y * config.render.head_size.max(1.0) * 1.55;
     let mut crowns = Vec::new();
 
-    for (player_entity, player, rank, status, _) in players.iter() {
-        if rank.value != 1 || *status != PlayerStatus::Alive {
+    let Some(snapshot) = leaderboard_state.latest() else {
+        return crowns;
+    };
+
+    for entry in snapshot
+        .entries
+        .iter()
+        .filter(|entry| entry.rank == 1 && entry.status == PlayerStatus::Alive)
+    {
+        let Ok((player_entity, player, room)) = players.get(entry.player) else {
+            continue;
+        };
+        if *room != snapshot.room {
             continue;
         }
         let Some(snake) = player.snake else {

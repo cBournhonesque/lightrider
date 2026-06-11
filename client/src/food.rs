@@ -173,7 +173,7 @@ mod tests {
         let config = GameConfig::default();
         let food = Entity::from_bits(42);
         let mut recently_boosted = RecentlyBoostedFromFood::default();
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::ZERO, Direction::Right),
             (Vec2::new(-80.0, 0.0), Direction::Right),
         ]));
@@ -221,7 +221,7 @@ mod tests {
     fn predicted_food_boost_ignores_other_rooms() {
         let config = GameConfig::default();
         let mut recently_boosted = RecentlyBoostedFromFood::default();
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::ZERO, Direction::Right),
             (Vec2::new(-80.0, 0.0), Direction::Right),
         ]));
@@ -249,7 +249,7 @@ mod tests {
     fn predicted_food_boost_uses_server_pickup_radius() {
         let config = GameConfig::default();
         let mut recently_boosted = RecentlyBoostedFromFood::default();
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::ZERO, Direction::Right),
             (Vec2::new(-80.0, 0.0), Direction::Right),
         ]));

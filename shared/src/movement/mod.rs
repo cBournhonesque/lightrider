@@ -1,6 +1,7 @@
 use crate::collision::collider::{snake_friction, SnakeFrictionEvent};
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
+use bevy_replicon::prelude::{DiffLog, Diffable as RepliconDiffable};
 use lightyear::prelude::input::bei::Fire;
 
 use crate::config::GameConfig;
@@ -47,16 +48,24 @@ impl Plugin for MovementPlugin {
 // 1. turn heads according to input
 pub fn turn_head_from_input(
     trigger: On<Fire<MoveSnake>>,
-    mut query: Query<&mut TailPoints, Simulated>,
+    mut query: Query<(&mut TailPoints, Option<&mut DiffLog<TailPoints>>), Simulated>,
 ) {
     let Some(direction) = direction_from_input(trigger.value) else {
         return;
     };
-    let Ok(mut tail) = query.get_mut(trigger.context) else {
+    let Ok((mut tail, log)) = query.get_mut(trigger.context) else {
         return;
     };
     if is_perpendicular_turn(tail.front().1, direction) {
-        turn_tail(&mut tail, direction);
+        let position = tail.front().0;
+        apply_tail_op(
+            tail.as_mut(),
+            log,
+            TailPointsOp::SetFrontDirectionAndPush {
+                position,
+                direction,
+            },
+        );
     }
 }
 
@@ -80,9 +89,7 @@ pub fn direction_from_input(input: Vec2) -> Option<Direction> {
 pub fn turn_tail(tail: &mut TailPoints, requested: Direction) {
     let current = tail.front().1;
     if is_perpendicular_turn(current, requested) {
-        tail.front_mut().1 = requested;
-        let head = tail.front().clone();
-        tail.0.push_front(head);
+        tail.set_front_direction_and_push(requested);
     }
 }
 
@@ -168,10 +175,19 @@ pub fn boost_acceleration(
 // 5. update the back of the tails: shorten tail
 pub fn update_tails(
     config: Res<GameConfig>,
-    mut query: Query<(&mut TailPoints, &mut TailLength, &mut Speed, &Acceleration), Simulated>,
+    mut query: Query<
+        (
+            &mut TailPoints,
+            Option<&mut DiffLog<TailPoints>>,
+            &mut TailLength,
+            &mut Speed,
+            &Acceleration,
+        ),
+        Simulated,
+    >,
 ) {
     let movement = &config.movement;
-    for (mut tail, mut length, mut speed, acceleration) in query.iter_mut() {
+    for (mut tail, log, mut length, mut speed, acceleration) in query.iter_mut() {
         // 4. update acceleration and speed
         // update velocity
         // do not update speed if we are at min speed and acceleration is negative
@@ -184,15 +200,31 @@ pub fn update_tails(
         }
 
         // update position
-        tail.0
-            .front_mut()
-            .map(|(pos, dir)| *pos += dir.delta() * speed.0);
+        let next_position = tail.front().0 + tail.front().1.delta() * speed.0;
+        let mut log = apply_tail_op(
+            tail.as_mut(),
+            log,
+            TailPointsOp::SetFrontPosition(next_position),
+        );
         length.current_size += speed.0;
 
         // 5. update the back of the tails: shorten tail
         // NOTE: it's ok to activate change detection here because we already updated the snake anyway
-        shorten_tail(tail.as_mut(), length.as_mut());
+        shorten_tail_with_log(tail.as_mut(), log.as_deref_mut(), length.as_mut());
     }
+}
+
+fn apply_tail_op<'a>(
+    tail: &mut TailPoints,
+    mut log: Option<Mut<'a, DiffLog<TailPoints>>>,
+    op: TailPointsOp,
+) -> Option<Mut<'a, DiffLog<TailPoints>>> {
+    RepliconDiffable::apply_patch(tail, &op)
+        .expect("tail diff patches should be valid for live TailPoints");
+    if let Some(log) = log.as_mut() {
+        log.record(op);
+    }
+    log
 }
 
 /// Shorten the tail to match the target size
@@ -208,6 +240,24 @@ pub fn shorten_tail(tail: &mut TailPoints, tail_length: &mut TailLength) {
     tail_length.current_size = tail_length.target_size;
 }
 
+fn shorten_tail_with_log(
+    tail: &mut TailPoints,
+    log: Option<&mut DiffLog<TailPoints>>,
+    tail_length: &mut TailLength,
+) {
+    if tail_length.target_size >= tail_length.current_size {
+        return;
+    }
+
+    let shorten_amount = tail_length.current_size - tail_length.target_size;
+    RepliconDiffable::apply_patch(tail, &TailPointsOp::ShortenBy(shorten_amount))
+        .expect("tail shorten diff patch should be valid for live TailPoints");
+    if let Some(log) = log {
+        log.record(TailPointsOp::ShortenBy(shorten_amount));
+    }
+    tail_length.current_size = tail_length.target_size;
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -215,12 +265,12 @@ mod tests {
     use super::*;
     use crate::network::bundle::snake::SnakeBundle;
     use crate::utils::query::SimulationAuthority;
-    use lightyear::prelude::{Interpolated, Replicated};
+    use lightyear::prelude::{Interpolated, Predicted, Replicated};
 
     fn create_snake(app: &mut App) -> Entity {
         app.world_mut()
             .spawn((
-                TailPoints(VecDeque::from(vec![
+                TailPoints::new(VecDeque::from(vec![
                     (Vec2::new(50.0, 100.0), Direction::Right),
                     (Vec2::new(0.0, 100.0), Direction::Right),
                     (Vec2::new(0.0, 0.0), Direction::Up),
@@ -264,7 +314,7 @@ mod tests {
 
     #[test]
     fn turn_tail_rejects_same_axis_turns() {
-        let mut tail = TailPoints(VecDeque::from(vec![
+        let mut tail = TailPoints::new(VecDeque::from(vec![
             (Vec2::ZERO, Direction::Up),
             (Vec2::new(0.0, -10.0), Direction::Up),
         ]));
@@ -336,6 +386,67 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_snake_tail_records_diff_mutations() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<GameConfig>();
+        app.add_plugins(MovementPlugin);
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeBundle::default(),
+                DiffLog::<TailPoints>::default(),
+                Replicated,
+                Interpolated,
+                SimulationAuthority,
+            ))
+            .id();
+
+        run_fixed_update(&mut app);
+
+        assert_eq!(
+            app.world()
+                .entity(snake)
+                .get::<DiffLog<TailPoints>>()
+                .unwrap()
+                .current_cursor(),
+            2
+        );
+    }
+
+    #[test]
+    fn predicted_snake_tail_records_local_diff_mutations() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<GameConfig>();
+        app.add_plugins(MovementPlugin);
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeBundle::default(),
+                DiffLog::<TailPoints>::default(),
+                Predicted,
+            ))
+            .id();
+        let before = head_position(&app, snake);
+
+        run_fixed_update(&mut app);
+
+        let after = head_position(&app, snake);
+        assert_ne!(after, before);
+        assert_eq!(
+            app.world()
+                .entity(snake)
+                .get::<DiffLog<TailPoints>>()
+                .unwrap()
+                .current_cursor(),
+            2
+        );
+    }
+
+    #[test]
     fn replicated_interpolated_remote_snake_does_not_move_without_authority() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -377,7 +488,7 @@ mod tests {
         // check that the tail has been shortened
         assert_eq!(
             app.world().entity(snake).get::<TailPoints>().unwrap(),
-            &TailPoints(VecDeque::from(vec![
+            &TailPoints::new(VecDeque::from(vec![
                 (Vec2::new(50.0, 100.0), Direction::Right),
                 (Vec2::new(0.0, 100.0), Direction::Right),
                 (Vec2::new(0.0, 20.0), Direction::Up),
@@ -403,7 +514,7 @@ mod tests {
         // check that the last point got removed
         assert_eq!(
             app.world().entity(snake).get::<TailPoints>().unwrap(),
-            &TailPoints(VecDeque::from(vec![
+            &TailPoints::new(VecDeque::from(vec![
                 (Vec2::new(50.0, 100.0), Direction::Right),
                 (Vec2::new(0.0, 100.0), Direction::Right),
             ]))
@@ -428,7 +539,7 @@ mod tests {
         // check that it works even with one segment
         assert_eq!(
             app.world().entity(snake).get::<TailPoints>().unwrap(),
-            &TailPoints(VecDeque::from(vec![
+            &TailPoints::new(VecDeque::from(vec![
                 (Vec2::new(50.0, 100.0), Direction::Right),
                 (Vec2::new(20.0, 100.0), Direction::Right),
             ]))

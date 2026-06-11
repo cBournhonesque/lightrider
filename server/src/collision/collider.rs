@@ -254,7 +254,7 @@ mod tests {
         app.world_mut().entity_mut(snake1).insert((
             room,
             Speed(10.0),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 0.0), Direction::Right),
                 (Vec2::new(-100.0, 0.0), Direction::Right),
             ])),
@@ -263,7 +263,7 @@ mod tests {
         app.world_mut().entity_mut(snake2).insert((
             room,
             Speed(10.0),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(5.0, 50.0), Direction::Up),
                 (Vec2::new(5.0, -50.0), Direction::Up),
             ])),
@@ -272,7 +272,7 @@ mod tests {
         app.world_mut().entity_mut(other_room_snake).insert((
             RoomId(2),
             Speed(10.0),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(2.0, 50.0), Direction::Up),
                 (Vec2::new(2.0, -50.0), Direction::Up),
             ])),
@@ -321,13 +321,13 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut()
             .entity_mut(snake1)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 1.0), Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])));
         // snake2: horizontal across the snake1 movement sweep
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints(VecDeque::from([
+        let points2 = TailPoints::new(VecDeque::from([
             (Vec2::new(50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
             (Vec2::new(-50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
         ]));
@@ -359,13 +359,13 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut()
             .entity_mut(snake1)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 1.0), Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])));
         // snake2: [0, 0] -> [100, 0]
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints(VecDeque::from([
+        let points2 = TailPoints::new(VecDeque::from([
             (Vec2::new(100.0, COLLISION_DISTANCE / 2.0), Direction::Right),
             (Vec2::new(0.0, COLLISION_DISTANCE / 2.0), Direction::Right),
         ]));
@@ -398,7 +398,7 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: [0, 0] -> [100, 0]
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints(VecDeque::from([
+        let points2 = TailPoints::new(VecDeque::from([
             (Vec2::new(0.0, 50.0), Direction::Up),
             (Vec2::new(0.0, -50.0), Direction::Up),
         ]));
@@ -426,7 +426,7 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: [0, 0] -> [100, 0]
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints(VecDeque::from([
+        let points2 = TailPoints::new(VecDeque::from([
             (Vec2::new(100.0, 10.0), Direction::Right),
             (Vec2::new(0.0, 10.0), Direction::Right),
         ]));
@@ -453,7 +453,7 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut().entity_mut(snake1).insert((
             Speed(4.0),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 4.0), Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])),
@@ -461,7 +461,7 @@ mod tests {
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut()
             .entity_mut(snake2)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(100.0, 2.0), Direction::Right),
                 (Vec2::new(6.0, 2.0), Direction::Right),
             ])));
@@ -488,7 +488,7 @@ mod tests {
         let snake = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut().entity_mut(snake).insert((
             Speed(0.85),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 0.85), Direction::Up),
                 (Vec2::ZERO, Direction::Up),
                 (Vec2::new(-100.0, 0.0), Direction::Right),
@@ -518,7 +518,7 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut().entity_mut(snake1).insert((
             Speed(0.85),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 0.85), Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])),
@@ -526,7 +526,7 @@ mod tests {
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut()
             .entity_mut(snake2)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(50.0, 0.4), Direction::Right),
                 (Vec2::new(-50.0, 0.4), Direction::Right),
             ])));
@@ -554,7 +554,7 @@ mod tests {
         app.add_plugins(shared::collision::CollisionPlugin);
         app.add_plugins(ColliderPlugin);
         let snake = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points = TailPoints(VecDeque::from([
+        let points = TailPoints::new(VecDeque::from([
             (Vec2::new(-COLLISION_DISTANCE / 2.0, 50.0), Direction::Left),
             (Vec2::new(10.0, 50.0), Direction::Left),
             (Vec2::new(10.0, 100.0), Direction::Down),
@@ -595,7 +595,7 @@ mod tests {
         let snake = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut()
             .entity_mut(snake)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(60.0, 0.0), Direction::Right),
                 (Vec2::new(0.0, 0.0), Direction::Right),
             ])));
@@ -627,7 +627,7 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut().entity_mut(snake1).insert((
             Speed(4.0),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 4.0), Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])),
@@ -635,7 +635,7 @@ mod tests {
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut()
             .entity_mut(snake2)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(50.0, 2.0), Direction::Right),
                 (Vec2::new(-50.0, 2.0), Direction::Right),
             ])));
@@ -667,12 +667,12 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut()
             .entity_mut(snake1)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 1.0), Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])));
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints(VecDeque::from([
+        let points2 = TailPoints::new(VecDeque::from([
             (Vec2::new(50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
             (Vec2::new(-50.0, COLLISION_DISTANCE / 2.0), Direction::Right),
         ]));

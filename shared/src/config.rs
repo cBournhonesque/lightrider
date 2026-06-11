@@ -20,6 +20,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<FakeClientConfig>();
         app.register_type::<RespawnConfig>();
         app.register_type::<NetworkConfig>();
+        app.register_type::<NetworkCompression>();
         app.register_type::<InputDelayConfig>();
         app.register_type::<DebugConfig>();
     }
@@ -331,6 +332,8 @@ impl Default for RespawnConfig {
 #[serde(default)]
 pub struct NetworkConfig {
     pub server_port: u16,
+    pub replication_send_hz: u16,
+    pub compression: NetworkCompression,
     pub input_delay: InputDelayConfig,
     pub input_packet_redundancy_ticks: u16,
     pub artificial_latency_ms: u64,
@@ -342,6 +345,8 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             server_port: 5000,
+            replication_send_hz: 10,
+            compression: NetworkCompression::default(),
             input_delay: InputDelayConfig::default(),
             input_packet_redundancy_ticks: 3,
             artificial_latency_ms: 0,
@@ -349,6 +354,24 @@ impl Default for NetworkConfig {
             artificial_loss_percent: 0,
         }
     }
+}
+
+impl NetworkConfig {
+    pub fn replication_send_interval(&self) -> Duration {
+        let send_hz = if self.replication_send_hz > 0 {
+            self.replication_send_hz
+        } else {
+            Self::default().replication_send_hz
+        };
+        Duration::from_nanos(1_000_000_000 / u64::from(send_hz))
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+pub enum NetworkCompression {
+    #[default]
+    Disabled,
+    Lz4,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Reflect)]
@@ -435,6 +458,12 @@ mod tests {
         assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.fake_clients.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.network.server_port, 5000);
+        assert_eq!(config.network.replication_send_hz, 10);
+        assert_eq!(config.network.compression, NetworkCompression::Disabled);
+        assert_eq!(
+            config.network.replication_send_interval(),
+            Duration::from_millis(100)
+        );
         assert_eq!(config.network.input_delay, InputDelayConfig::balanced());
         assert_eq!(config.network.input_packet_redundancy_ticks, 3);
     }
@@ -462,6 +491,21 @@ mod tests {
         assert!(config.debug.lightyear_debug);
         assert!(!config.debug.json_snapshots);
         assert!(config.food.max_count >= config.food.target_count);
+    }
+
+    #[test]
+    fn no_food_load_config_disables_food_without_trace_snapshots() {
+        let config =
+            GameConfig::from_ron_str(include_str!("../../config/load_no_food.ron")).unwrap();
+
+        assert!(config.rooms.max_players_per_room >= 100);
+        assert!(!config.bots.enabled);
+        assert!(!config.sound.enabled);
+        assert!(config.debug.lightyear_debug);
+        assert!(!config.debug.json_snapshots);
+        assert_eq!(config.food.target_count, 0);
+        assert_eq!(config.food.max_count, 0);
+        assert_eq!(config.food.death_food_max, 0);
     }
 
     #[test]
@@ -497,5 +541,36 @@ mod tests {
             invalid.tick_duration(),
             MovementConfig::default().tick_duration()
         );
+    }
+
+    #[test]
+    fn replication_send_interval_uses_configured_rate() {
+        let network = NetworkConfig {
+            replication_send_hz: 10,
+            ..default()
+        };
+        assert_eq!(
+            network.replication_send_interval(),
+            Duration::from_millis(100)
+        );
+
+        let invalid = NetworkConfig {
+            replication_send_hz: 0,
+            ..default()
+        };
+        assert_eq!(
+            invalid.replication_send_interval(),
+            NetworkConfig::default().replication_send_interval()
+        );
+    }
+
+    #[test]
+    fn load_no_food_lz4_config_enables_transport_compression() {
+        let config =
+            GameConfig::from_ron_str(include_str!("../../config/load_no_food_lz4.ron")).unwrap();
+
+        assert_eq!(config.network.compression, NetworkCompression::Lz4);
+        assert_eq!(config.food.target_count, 0);
+        assert_eq!(config.food.max_count, 0);
     }
 }

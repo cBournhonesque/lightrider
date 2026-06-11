@@ -1,0 +1,27 @@
+(
+    food: (
+        target_count: 0,
+        max_count: 0,
+        death_food_max: 0,
+    ),
+    rooms: (
+        max_rooms: 8,
+        max_players_per_room: 120,
+    ),
+    bots: (
+        enabled: false,
+        target_count_per_room: 0,
+    ),
+    sound: (
+        enabled: false,
+    ),
+    network: (
+        server_port: 5000,
+        replication_send_hz: 10,
+        compression: Lz4,
+    ),
+    debug: (
+        lightyear_debug: true,
+        json_snapshots: false,
+    ),
+)

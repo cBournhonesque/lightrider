@@ -44,7 +44,7 @@ impl SnakeBundle {
         position: Vec2,
         direction: Direction,
     ) -> Self {
-        let tail_points = TailPoints(VecDeque::from([
+        let tail_points = TailPoints::new(VecDeque::from([
             (position, direction),
             (
                 position - direction.delta() * config.starting_tail_length,

@@ -4,9 +4,10 @@ use std::vec::Vec;
 use bevy::ecs::entity::{EntityMapper, MapEntities};
 use bevy::math::curve::{Curve, Ease, FunctionCurve, Interval};
 use bevy::prelude::*;
+use bevy_replicon::prelude::Diffable as RepliconDiffable;
 use derive_more::{Add, Mul};
 use itertools::Itertools;
-use lightyear::prelude::Diffable;
+use lightyear::prelude::Diffable as LightyearDiffable;
 use parry2d::math::Point;
 use serde::{Deserialize, Serialize};
 
@@ -44,16 +45,37 @@ pub struct TailLength {
     pub target_size: f32,
 }
 
-#[derive(Component, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
+#[derive(Component, Deserialize, Serialize, Clone, Debug, Reflect)]
 // tail inflection points, from front (head point) to back (tail end point)
 pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
+
+impl TailPoints {
+    pub fn new(points: VecDeque<(Vec2, Direction)>) -> Self {
+        Self(points)
+    }
+}
+
+impl PartialEq for TailPoints {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub enum TailPointsOp {
+    SetFrontDirectionAndPush {
+        position: Vec2,
+        direction: Direction,
+    },
+    SetFrontPosition(Vec2),
+    ShortenBy(f32),
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TailPointsCorrection {
     offsets: Vec<Vec2>,
 }
 
-// TODO: replace this with Parent in bevy 0.13
 #[derive(Component, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
 pub struct HasPlayer(pub Entity);
 
@@ -122,6 +144,41 @@ impl TailPoints {
             self.0.push_back((new_point, drained.1));
         }
     }
+
+    pub fn set_front_position(&mut self, position: Vec2) {
+        self.front_mut().0 = position;
+    }
+
+    pub fn set_front_direction_and_push(&mut self, direction: Direction) {
+        self.front_mut().1 = direction;
+        let head = *self.front();
+        self.0.push_front(head);
+    }
+}
+
+impl RepliconDiffable for TailPoints {
+    type Patch = TailPointsOp;
+
+    const HISTORY_LEN: usize = 512;
+
+    fn apply_patch(&mut self, patch: &Self::Patch) -> Result<()> {
+        match *patch {
+            TailPointsOp::SetFrontDirectionAndPush {
+                position,
+                direction,
+            } => {
+                self.set_front_position(position);
+                self.set_front_direction_and_push(direction);
+            }
+            TailPointsOp::SetFrontPosition(position) => {
+                self.set_front_position(position);
+            }
+            TailPointsOp::ShortenBy(amount) => {
+                self.shorten_by(amount);
+            }
+        }
+        Ok(())
+    }
 }
 
 pub fn interpolate_tail_length(start: TailLength, end: TailLength, t: f32) -> TailLength {
@@ -158,7 +215,7 @@ impl Ease for TailLength {
     }
 }
 
-impl Diffable for TailLength {
+impl LightyearDiffable for TailLength {
     fn base_value() -> Self {
         Self::default()
     }
@@ -225,9 +282,9 @@ impl Ease for TailPointsCorrection {
     }
 }
 
-impl Diffable<TailPointsCorrection> for TailPoints {
+impl LightyearDiffable<TailPointsCorrection> for TailPoints {
     fn base_value() -> Self {
-        TailPoints(VecDeque::new())
+        TailPoints::new(VecDeque::new())
     }
 
     fn diff(&self, new: &Self) -> TailPointsCorrection {
@@ -329,9 +386,9 @@ pub fn interpolate_tail_points_with_length(
     for (i, (from, to)) in end_tail.pairs_front_to_back().enumerate() {
         if point_on_axis_aligned_segment(from.0, to.0, start_head) {
             tail_diff_length += to.0.distance(start_head);
-            if start_head == from.0 && tail.front().1 != from.1 {
+            if tail.front().1 != from.1 {
                 tail.front_mut().1 = from.1;
-                tail.0.push_front(from.clone());
+                tail.0.push_front((start_head, from.1));
             }
             pos_distance_to_move = t * tail_diff_length;
             segment_idx = Some(i);
@@ -409,9 +466,14 @@ pub struct FoodBoost(pub f32);
 mod tests {
     use super::*;
 
+    fn tail_is_axis_aligned(tail: &TailPoints) -> bool {
+        tail.pairs_front_to_back()
+            .all(|(start, end)| start.0.x == end.0.x || start.0.y == end.0.y)
+    }
+
     #[test]
     fn test_tail_pairs() {
-        let tail = TailPoints(VecDeque::from(vec![
+        let tail = TailPoints::new(VecDeque::from(vec![
             (Vec2::new(0.0, 0.0), Direction::Right),
             (Vec2::new(0.0, 1.0), Direction::Down),
             (Vec2::new(-2.0, 1.0), Direction::Right),
@@ -445,12 +507,72 @@ mod tests {
     }
 
     #[test]
+    fn turn_patch_uses_authoritative_corner_position() {
+        let mut tail = TailPoints::new(VecDeque::from([
+            (Vec2::ZERO, Direction::Right),
+            (Vec2::new(-100.0, 0.0), Direction::Right),
+        ]));
+
+        RepliconDiffable::apply_patch(
+            &mut tail,
+            &TailPointsOp::SetFrontDirectionAndPush {
+                position: Vec2::new(25.0, 0.0),
+                direction: Direction::Up,
+            },
+        )
+        .unwrap();
+        RepliconDiffable::apply_patch(
+            &mut tail,
+            &TailPointsOp::SetFrontPosition(Vec2::new(25.0, 10.0)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            tail.0,
+            VecDeque::from([
+                (Vec2::new(25.0, 10.0), Direction::Up),
+                (Vec2::new(25.0, 0.0), Direction::Up),
+                (Vec2::new(-100.0, 0.0), Direction::Right),
+            ])
+        );
+    }
+
+    #[test]
+    fn interpolate_inserts_corner_when_start_head_is_inside_new_direction_segment() {
+        let start = TailPoints::new(VecDeque::from([
+            (Vec2::new(10.0, 0.0), Direction::Up),
+            (Vec2::new(10.0, -100.0), Direction::Up),
+        ]));
+        let end = TailPoints::new(VecDeque::from([
+            (Vec2::new(50.0, 0.0), Direction::Right),
+            (Vec2::new(0.0, 0.0), Direction::Right),
+            (Vec2::new(0.0, -50.0), Direction::Up),
+        ]));
+        let length = TailLength {
+            current_size: 100.0,
+            target_size: 100.0,
+        };
+
+        let (tail, _) = interpolate_tail_points_with_length(&start, &end, &length, &length, 0.5);
+
+        assert!(tail_is_axis_aligned(&tail));
+        assert_eq!(
+            tail.0,
+            VecDeque::from([
+                (Vec2::new(30.0, 0.0), Direction::Right),
+                (Vec2::new(10.0, 0.0), Direction::Right),
+                (Vec2::new(10.0, -80.0), Direction::Up),
+            ])
+        );
+    }
+
+    #[test]
     fn interpolate_single_segment() {
-        let start = TailPoints(VecDeque::from([
+        let start = TailPoints::new(VecDeque::from([
             (Vec2::new(0.0, 0.0), Direction::Up),
             (Vec2::new(0.0, -100.0), Direction::Up),
         ]));
-        let end = TailPoints(VecDeque::from([
+        let end = TailPoints::new(VecDeque::from([
             (Vec2::new(0.0, 20.0), Direction::Up),
             (Vec2::new(0.0, -80.0), Direction::Up),
         ]));
@@ -472,11 +594,11 @@ mod tests {
 
     #[test]
     fn interpolate_turn_big_move() {
-        let start = TailPoints(VecDeque::from([
+        let start = TailPoints::new(VecDeque::from([
             (Vec2::new(0.0, 0.0), Direction::Up),
             (Vec2::new(0.0, -120.0), Direction::Up),
         ]));
-        let end = TailPoints(VecDeque::from([
+        let end = TailPoints::new(VecDeque::from([
             (Vec2::new(50.0, 50.0), Direction::Right),
             (Vec2::new(0.0, 50.0), Direction::Right),
             (Vec2::new(0.0, -20.0), Direction::Up),
@@ -500,12 +622,12 @@ mod tests {
 
     #[test]
     fn interpolate_turn_small_move() {
-        let start = TailPoints(VecDeque::from([
+        let start = TailPoints::new(VecDeque::from([
             (Vec2::new(40.0, 50.0), Direction::Right),
             (Vec2::new(0.0, 50.0), Direction::Right),
             (Vec2::new(0.0, -10.0), Direction::Up),
         ]));
-        let end = TailPoints(VecDeque::from([
+        let end = TailPoints::new(VecDeque::from([
             (Vec2::new(50.0, 50.0), Direction::Right),
             (Vec2::new(0.0, 50.0), Direction::Right),
             (Vec2::new(0.0, 0.0), Direction::Up),
@@ -529,11 +651,11 @@ mod tests {
 
     #[test]
     fn interpolate_on_turn_point() {
-        let start = TailPoints(VecDeque::from([
+        let start = TailPoints::new(VecDeque::from([
             (Vec2::new(0.0, 0.0), Direction::Up),
             (Vec2::new(0.0, -100.0), Direction::Up),
         ]));
-        let end = TailPoints(VecDeque::from([
+        let end = TailPoints::new(VecDeque::from([
             (Vec2::new(50.0, 50.0), Direction::Right),
             (Vec2::new(0.0, 50.0), Direction::Right),
             (Vec2::new(0.0, 0.0), Direction::Up),
@@ -556,11 +678,11 @@ mod tests {
 
     #[test]
     fn interpolate_immediate_turn() {
-        let start = TailPoints(VecDeque::from([
+        let start = TailPoints::new(VecDeque::from([
             (Vec2::new(0.0, 0.0), Direction::Up),
             (Vec2::new(0.0, -100.0), Direction::Up),
         ]));
-        let end = TailPoints(VecDeque::from([
+        let end = TailPoints::new(VecDeque::from([
             (Vec2::new(50.0, 50.0), Direction::Right),
             (Vec2::new(50.0, 0.0), Direction::Up),
             (Vec2::new(0.0, 0.0), Direction::Right),
@@ -624,11 +746,11 @@ mod tests {
 
     #[test]
     fn tail_points_correction_applies_and_decays_offsets() {
-        let corrected = TailPoints(VecDeque::from([
+        let corrected = TailPoints::new(VecDeque::from([
             (Vec2::new(10.0, 20.0), Direction::Right),
             (Vec2::new(0.0, 20.0), Direction::Right),
         ]));
-        let visual = TailPoints(VecDeque::from([
+        let visual = TailPoints::new(VecDeque::from([
             (Vec2::new(12.0, 20.0), Direction::Right),
             (Vec2::new(2.0, 20.0), Direction::Right),
         ]));
@@ -654,19 +776,19 @@ mod tests {
 
     #[test]
     fn rollback_checks_tolerate_tiny_snake_float_drift() {
-        let confirmed_tail = TailPoints(VecDeque::from([
+        let confirmed_tail = TailPoints::new(VecDeque::from([
             (Vec2::new(10.0, 20.0), Direction::Right),
             (Vec2::new(0.0, 20.0), Direction::Right),
         ]));
-        let close_tail = TailPoints(VecDeque::from([
+        let close_tail = TailPoints::new(VecDeque::from([
             (Vec2::new(10.2, 20.0), Direction::Right),
             (Vec2::new(0.2, 20.0), Direction::Right),
         ]));
-        let far_tail = TailPoints(VecDeque::from([
+        let far_tail = TailPoints::new(VecDeque::from([
             (Vec2::new(10.75, 20.0), Direction::Right),
             (Vec2::new(0.2, 20.0), Direction::Right),
         ]));
-        let wrong_direction = TailPoints(VecDeque::from([
+        let wrong_direction = TailPoints::new(VecDeque::from([
             (Vec2::new(10.2, 20.0), Direction::Up),
             (Vec2::new(0.2, 20.0), Direction::Right),
         ]));

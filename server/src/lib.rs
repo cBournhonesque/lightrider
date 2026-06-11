@@ -1,3 +1,4 @@
+use bevy::app::AppExit;
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
@@ -14,6 +15,7 @@ mod bots;
 pub(crate) mod collision;
 mod debug;
 mod food;
+mod leaderboard;
 #[cfg(feature = "lightyear-matchmaker")]
 mod matchmaker;
 mod network;
@@ -42,7 +44,16 @@ pub struct Cli {
 
     #[arg(long)]
     config: Option<PathBuf>,
+
+    /// Gracefully stop the server after this many seconds.
+    ///
+    /// This is mainly used by profiling recipes so trace writers can flush.
+    #[arg(long)]
+    run_seconds: Option<f64>,
 }
+
+#[derive(Resource)]
+struct ExitAfterSeconds(Duration);
 
 pub async fn app(cli: Cli) -> App {
     let mut app = App::new();
@@ -63,6 +74,10 @@ pub async fn app(cli: Cli) -> App {
         ));
     } else {
         app.add_plugins(DefaultPlugins.set(log_plugin));
+    }
+    if let Some(seconds) = cli.run_seconds.filter(|seconds| *seconds > 0.0) {
+        app.insert_resource(ExitAfterSeconds(Duration::from_secs_f64(seconds)));
+        app.add_systems(Update, exit_after_run_seconds);
     }
 
     // networking
@@ -102,9 +117,24 @@ pub async fn app(cli: Cli) -> App {
     // food
     app.add_plugins(FoodPlugin);
 
+    // leaderboard
+    app.add_plugins(leaderboard::ServerLeaderboardPlugin);
+
     // stats
     app.add_plugins(stats::ServerStatsPlugin);
     app
+}
+
+fn exit_after_run_seconds(
+    time: Res<Time<Real>>,
+    limit: Res<ExitAfterSeconds>,
+    mut elapsed: Local<Duration>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    *elapsed += time.delta();
+    if *elapsed >= limit.0 {
+        exit.write(AppExit::Success);
+    }
 }
 
 fn load_config(path: Option<&std::path::Path>) -> GameConfig {

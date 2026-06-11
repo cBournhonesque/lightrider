@@ -288,7 +288,7 @@ mod tests {
     use super::*;
 
     fn tail(position: Vec2, direction: Direction) -> TailPoints {
-        TailPoints(VecDeque::from([
+        TailPoints::new(VecDeque::from([
             (position, direction),
             (position - direction.delta() * 100.0, direction),
         ]))
@@ -365,7 +365,7 @@ mod tests {
             width: 500.0,
             height: 500.0,
         };
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::new(10.0, 0.0), Direction::Right),
             (Vec2::ZERO, Direction::Right),
             (Vec2::new(0.0, -100.0), Direction::Up),
@@ -381,7 +381,7 @@ mod tests {
             width: 500.0,
             height: 500.0,
         };
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::ZERO, Direction::Up),
             (Vec2::new(0.0, -50.0), Direction::Up),
             (Vec2::new(50.0, -50.0), Direction::Left),
@@ -400,7 +400,7 @@ mod tests {
             height: 500.0,
         };
         let own_tail = tail(Vec2::ZERO, Direction::Up);
-        let obstacle_tail = TailPoints(VecDeque::from([
+        let obstacle_tail = TailPoints::new(VecDeque::from([
             (Vec2::new(50.0, 20.0), Direction::Right),
             (Vec2::new(-50.0, 20.0), Direction::Right),
         ]));
@@ -418,7 +418,7 @@ mod tests {
             width: 500.0,
             height: 500.0,
         };
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::ZERO, Direction::Up),
             (Vec2::new(0.0, -200.0), Direction::Up),
         ]));

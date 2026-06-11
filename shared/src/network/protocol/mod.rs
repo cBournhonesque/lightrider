@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_replicon::prelude::AppRuleExt as RepliconAppRuleExt;
 use lightyear::input::config::InputConfig;
 use lightyear::prelude::input::bei::InputPlugin;
 use lightyear::prelude::input::InputRegistryExt;
@@ -22,12 +23,13 @@ pub mod prelude {
     // messages
     pub use super::messages::admin::*;
     pub use super::messages::food::*;
+    pub use super::messages::leaderboard::*;
     pub use super::messages::room::*;
     pub use super::messages::snake::*;
     // inputs
     pub use super::inputs::*;
     // channels
-    pub use super::channels::GameChannel;
+    pub use super::channels::{GameChannel, LeaderboardChannel};
 }
 
 pub struct ProtocolPlugin;
@@ -67,20 +69,31 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<messages::admin::AdminResponse>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<messages::leaderboard::LeaderboardSnapshot>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ServerToClient);
 
         app.add_channel::<channels::GameChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);
+        app.add_channel::<channels::LeaderboardChannel>(ChannelSettings {
+            mode: ChannelMode::SequencedUnreliable,
+            ..default()
+        })
+        .add_direction(NetworkDirection::ServerToClient);
 
         // Tail visual-correction functions exist but are intentionally not registered yet.
         // Keep predicted visual correction disabled until the smoothing behavior is validated.
-        app.register_component::<components::snake::TailPoints>()
-            .add_prediction()
+        register_tail_points_diff(app);
+        app.non_networked_component::<components::snake::TailPoints>()
+            .add_prediction_diff()
             .add_should_rollback(components::snake::tail_points_should_rollback)
-            .register_interpolation_fn(components::snake::interpolate_tail_points)
-            .add_custom_interpolation();
+            // Install the diff interpolation writer before registering the interpolation fn,
+            // otherwise the generic history writer will try to deserialize patch payloads.
+            .add_custom_interpolation_diff()
+            .register_interpolation_fn(components::snake::interpolate_tail_points);
         app.register_component::<components::snake::TailLength>()
             .add_prediction()
             .add_should_rollback(components::snake::tail_length_should_rollback)
@@ -102,12 +115,23 @@ impl Plugin for ProtocolPlugin {
 
         app.register_component::<components::player::Player>();
         app.register_component::<components::player::PlayerScore>();
-        app.register_component::<components::player::PlayerStats>();
-        app.register_component::<components::player::PlayerRank>();
         app.register_component::<components::player::PlayerStatus>();
         app.register_component::<components::food::FoodMarker>();
         app.register_component::<components::common::Position>()
             .add_interpolation_with(components::common::interpolate_position);
         app.register_component::<components::common::RoomId>();
     }
+}
+
+fn register_tail_points_diff(app: &mut App) {
+    app.world_mut()
+        .init_resource::<lightyear::prelude::ComponentRegistry>();
+    app.world_mut().resource_scope(
+        |world, mut registry: Mut<lightyear::prelude::ComponentRegistry>| {
+            if !registry.is_registered::<components::snake::TailPoints>() {
+                registry.register_component::<components::snake::TailPoints>(world);
+            }
+        },
+    );
+    app.replicate_diff::<components::snake::TailPoints>();
 }

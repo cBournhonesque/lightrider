@@ -15,7 +15,7 @@
         boost_distance: 20.0,
     ),
     render: (
-        use_assets: true,
+        use_assets: false,
         tail_width: 1.0,
         head_size: 6.0,
         map_outline_width: 3.0,
@@ -27,13 +27,13 @@
         debug_camera_scale: 1.0,
     ),
     sound: (
-        enabled: true,
+        enabled: false,
         master_volume: 1.0,
         background_volume: 0.0,
         death_volume: 0.55,
         food_volume: 0.65,
         electro_loop_volume: 0.85,
-        spatial_audio: true,
+        spatial_audio: false,
         spatial_scale: 0.02,
         spatial_listener_ear_gap: 8.0,
         remote_sound_full_volume_distance: 120.0,
@@ -50,16 +50,16 @@
     food: (
         target_count: 0,
         max_count: 0,
-        spawn_interval_seconds: 0.05,
+        spawn_interval_seconds: 0.02,
         visual_radius: 3.0,
         radius: 45.0,
         tail_growth: 20.0,
-        death_food_spacing: 18.0,
+        death_food_spacing: 20.0,
         death_food_max: 0,
     ),
     rooms: (
-        max_rooms: 16,
-        max_players_per_room: 50,
+        max_rooms: 8,
+        max_players_per_room: 120,
     ),
     bots: (
         enabled: false,
@@ -93,8 +93,8 @@
     ),
     debug: (
         lightyear_debug: true,
-        json_snapshots: true,
-        snake_trace_sample_interval_ticks: 1,
+        json_snapshots: false,
+        snake_trace_sample_interval_ticks: 30,
         invariant_checks: true,
     ),
 )

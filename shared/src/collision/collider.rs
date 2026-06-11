@@ -206,7 +206,7 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut().entity_mut(snake1).insert((
             room,
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(0.0, 0.0), Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])),
@@ -214,7 +214,7 @@ mod tests {
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut().entity_mut(snake2).insert((
             room,
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(8.0, 50.0), Direction::Up),
                 (Vec2::new(8.0, -50.0), Direction::Up),
             ])),
@@ -222,7 +222,7 @@ mod tests {
         let other_room_snake = app.world_mut().spawn(SnakeBundle::default()).id();
         app.world_mut().entity_mut(other_room_snake).insert((
             RoomId(2),
-            TailPoints(VecDeque::from([
+            TailPoints::new(VecDeque::from([
                 (Vec2::new(2.0, 50.0), Direction::Up),
                 (Vec2::new(2.0, -50.0), Direction::Up),
             ])),
@@ -261,7 +261,7 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: vertical on the left of snake1
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints(VecDeque::from([
+        let points2 = TailPoints::new(VecDeque::from([
             (Vec2::new(-MAX_FRICTION_DISTANCE / 1.5, 0.0), Direction::Up),
             (
                 Vec2::new(-MAX_FRICTION_DISTANCE / 1.5, -100.0),
@@ -271,7 +271,7 @@ mod tests {
         app.world_mut().entity_mut(snake2).insert(points2);
         // snake3: vertical on the right of snake1, closer than snake 2
         let snake3 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points3 = TailPoints(VecDeque::from([
+        let points3 = TailPoints::new(VecDeque::from([
             (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 0.0), Direction::Up),
             (
                 Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),
@@ -330,7 +330,7 @@ mod tests {
 
         let _snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints(VecDeque::from([
+        let points2 = TailPoints::new(VecDeque::from([
             (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 0.0), Direction::Up),
             (
                 Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),
@@ -366,7 +366,7 @@ mod tests {
             .id();
         app.world_mut()
             .entity_mut(predicted)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::ZERO, Direction::Up),
                 (Vec2::new(0.0, -100.0), Direction::Up),
             ])));
@@ -376,7 +376,7 @@ mod tests {
             .id();
         app.world_mut()
             .entity_mut(remote)
-            .insert(TailPoints(VecDeque::from([
+            .insert(TailPoints::new(VecDeque::from([
                 (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 100.0), Direction::Up),
                 (
                     Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),

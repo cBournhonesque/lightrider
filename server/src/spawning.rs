@@ -131,7 +131,7 @@ mod tests {
         use std::collections::VecDeque;
 
         let config = GameConfig::default();
-        let obstacle = TailPoints(VecDeque::from([
+        let obstacle = TailPoints::new(VecDeque::from([
             (Vec2::new(-50.0, -100.0), Direction::Right),
             (Vec2::new(50.0, -100.0), Direction::Right),
         ]));
@@ -147,7 +147,7 @@ mod tests {
         use std::collections::VecDeque;
 
         let config = GameConfig::default();
-        let obstacle = TailPoints(VecDeque::from([
+        let obstacle = TailPoints::new(VecDeque::from([
             (Vec2::new(-50.0, 500.0), Direction::Right),
             (Vec2::new(50.0, 500.0), Direction::Right),
         ]));

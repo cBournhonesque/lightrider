@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn death_food_samples_tail_segments_without_exceeding_limit() {
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::new(100.0, 0.0), Direction::Right),
             (Vec2::ZERO, Direction::Right),
         ]));
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn death_food_limit_is_distributed_across_full_tail() {
-        let tail = TailPoints(VecDeque::from([
+        let tail = TailPoints::new(VecDeque::from([
             (Vec2::new(300.0, 0.0), Direction::Right),
             (Vec2::ZERO, Direction::Right),
         ]));

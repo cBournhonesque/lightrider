@@ -1,4 +1,5 @@
 use crate::collision::death::DeathView;
+use crate::leaderboard::LeaderboardState;
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
 use crate::render::colors::snake_color_for_player;
 use crate::render::ui_style;
@@ -8,7 +9,7 @@ use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Client, Controlled, Link, Predicted};
 use shared::config::{ArenaConfig, GameConfig};
 use shared::network::protocol::prelude::{
-    Player, PlayerDeathStats, PlayerRank, PlayerScore, PlayerStatus, RoomId, TailPoints,
+    Player, PlayerDeathStats, PlayerStatus, RoomId, TailPoints,
 };
 use std::{collections::HashSet, time::Duration};
 
@@ -360,39 +361,36 @@ fn update_debug_stats(
 }
 
 fn update_leaderboard(
-    players: Query<(
-        Entity,
-        &Player,
-        &PlayerScore,
-        &PlayerRank,
-        &PlayerStatus,
-        &RoomId,
-        Has<Controlled>,
-    )>,
+    leaderboard_state: Res<LeaderboardState>,
+    players: Query<(Entity, &RoomId, Has<Controlled>), With<Player>>,
     mut leaderboard: Query<&mut Text, With<LeaderboardText>>,
 ) {
     let Ok(mut text) = leaderboard.single_mut() else {
         return;
     };
 
-    let local_room = players
+    let local_player = players.iter().find(|(_, _, is_local)| *is_local);
+    let local_room = local_player.map(|(_, room, _)| *room);
+    let local_entity = local_player.map(|(entity, _, _)| entity);
+    let Some(snapshot) = leaderboard_state
+        .latest()
+        .filter(|snapshot| local_room.is_none_or(|room| snapshot.room == room))
+    else {
+        text.0 = format_leaderboard_rows(&[]);
+        return;
+    };
+
+    let mut entries = snapshot
+        .entries
         .iter()
-        .find_map(|(_, _, _, _, _, room, is_local)| is_local.then_some(*room));
-    let mut entries = players
-        .iter()
-        .filter(|(_, _, _, _, _, room, _)| {
-            local_room.map_or(true, |local_room| *room == &local_room)
+        .map(|entry| LeaderboardEntry {
+            id: entry.player.to_bits(),
+            name: entry.name.clone(),
+            score: entry.score,
+            rank: entry.rank,
+            status: entry.status,
+            is_local: local_entity == Some(entry.player),
         })
-        .map(
-            |(entity, player, score, rank, status, _, is_local)| LeaderboardEntry {
-                id: entity.to_bits(),
-                name: player.name.clone(),
-                score: score.value,
-                rank: rank.value,
-                status: *status,
-                is_local,
-            },
-        )
         .collect::<Vec<_>>();
 
     let rows = select_leaderboard_rows(&mut entries);
@@ -402,15 +400,9 @@ fn update_leaderboard(
 fn update_minimap(
     mut commands: Commands,
     config: Res<GameConfig>,
+    leaderboard_state: Res<LeaderboardState>,
     minimap_root: Query<Entity, With<MiniMapRoot>>,
-    players: Query<(
-        Entity,
-        &Player,
-        &PlayerScore,
-        &PlayerRank,
-        &RoomId,
-        Has<Controlled>,
-    )>,
+    players: Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
     predicted_tails: Query<&TailPoints, With<Predicted>>,
     tails: Query<&TailPoints>,
     mut dots: Query<(&MiniMapDot, &mut Node, &mut Visibility), Without<MiniMapTrailSegment>>,
@@ -425,26 +417,36 @@ fn update_minimap(
         Without<MiniMapDot>,
     >,
 ) {
-    let local_player = players.iter().find(|(_, _, _, _, _, is_local)| *is_local);
-    let local_room = local_player.map(|(_, _, _, _, room, _)| *room);
+    let local_player = players.iter().find(|(_, _, _, is_local)| *is_local);
+    let local_entity = local_player.map(|(entity, _, _, _)| entity);
+    let local_room = local_player.map(|(_, _, room, _)| *room);
     let local_tail = predicted_tails.single().ok().or_else(|| {
         local_player
-            .and_then(|(_, player, _, _, _, _)| player.snake)
+            .and_then(|(_, player, _, _)| player.snake)
             .and_then(|snake| tails.get(snake).ok())
     });
     let local_position = local_tail.map(snake_head);
-    let leader_position = local_room.and_then(|room| {
-        players
-            .iter()
-            .filter(|(_, _, _, _, player_room, _)| **player_room == room)
-            .min_by(compare_player_score)
-            .and_then(|(_, player, _, _, _, is_local)| {
-                if is_local {
-                    local_position
-                } else {
-                    player_position(player, &tails)
-                }
+    let leader_entity = local_room.and_then(|room| {
+        leaderboard_state
+            .latest()
+            .filter(|snapshot| snapshot.room == room)
+            .and_then(|snapshot| {
+                snapshot
+                    .entries
+                    .iter()
+                    .find(|entry| entry.rank == 1 && entry.status == PlayerStatus::Alive)
+                    .map(|entry| entry.player)
             })
+    });
+    let leader_position = leader_entity.and_then(|leader_entity| {
+        if local_entity == Some(leader_entity) {
+            local_position
+        } else {
+            players
+                .get(leader_entity)
+                .ok()
+                .and_then(|(_, player, _, _)| player_position(player, &tails))
+        }
     });
 
     for (dot, mut node, mut visibility) in &mut dots {
@@ -554,41 +556,8 @@ fn update_death_overlay(
     }
 }
 
-fn compare_player_score(
-    (_, _, left_score, left_rank, _, _): &(
-        Entity,
-        &Player,
-        &PlayerScore,
-        &PlayerRank,
-        &RoomId,
-        bool,
-    ),
-    (_, _, right_score, right_rank, _, _): &(
-        Entity,
-        &Player,
-        &PlayerScore,
-        &PlayerRank,
-        &RoomId,
-        bool,
-    ),
-) -> std::cmp::Ordering {
-    compare_rank_score(
-        left_score.value,
-        left_rank.value,
-        right_score.value,
-        right_rank.value,
-    )
-}
-
 fn desired_minimap_trails(
-    players: &Query<(
-        Entity,
-        &Player,
-        &PlayerScore,
-        &PlayerRank,
-        &RoomId,
-        Has<Controlled>,
-    )>,
+    players: &Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
     local_room: Option<RoomId>,
     local_tail: Option<&TailPoints>,
     tails: &Query<&TailPoints>,
@@ -599,7 +568,7 @@ fn desired_minimap_trails(
         return desired;
     };
 
-    for (player_entity, player, _, _, room, is_local) in players.iter() {
+    for (player_entity, player, room, is_local) in players.iter() {
         if *room != local_room {
             continue;
         }
