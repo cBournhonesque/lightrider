@@ -9,7 +9,7 @@ use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Client, Controlled, Link, Predicted};
 use shared::config::{ArenaConfig, GameConfig};
 use shared::network::protocol::prelude::{
-    Player, PlayerDeathStats, PlayerStatus, RoomId, TailPoints,
+    Player, PlayerDeathStats, PlayerStatus, RoomId, TailLength, TailPoints,
 };
 use std::{collections::HashSet, time::Duration};
 
@@ -403,8 +403,8 @@ fn update_minimap(
     leaderboard_state: Res<LeaderboardState>,
     minimap_root: Query<Entity, With<MiniMapRoot>>,
     players: Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
-    predicted_tails: Query<&TailPoints, With<Predicted>>,
-    tails: Query<&TailPoints>,
+    predicted_tails: Query<(&TailPoints, Option<&TailLength>), With<Predicted>>,
+    tails: Query<(&TailPoints, Option<&TailLength>)>,
     mut dots: Query<(&MiniMapDot, &mut Node, &mut Visibility), Without<MiniMapTrailSegment>>,
     mut trail_segments: Query<
         (
@@ -420,12 +420,17 @@ fn update_minimap(
     let local_player = players.iter().find(|(_, _, _, is_local)| *is_local);
     let local_entity = local_player.map(|(entity, _, _, _)| entity);
     let local_room = local_player.map(|(_, _, room, _)| *room);
-    let local_tail = predicted_tails.single().ok().or_else(|| {
-        local_player
-            .and_then(|(_, player, _, _)| player.snake)
-            .and_then(|snake| tails.get(snake).ok())
-    });
-    let local_position = local_tail.map(snake_head);
+    let local_tail = predicted_tails
+        .single()
+        .ok()
+        .map(|(tail, length)| visible_tail(tail, length))
+        .or_else(|| {
+            local_player
+                .and_then(|(_, player, _, _)| player.snake)
+                .and_then(|snake| tails.get(snake).ok())
+                .map(|(tail, length)| visible_tail(tail, length))
+        });
+    let local_position = local_tail.as_ref().map(snake_head);
     let leader_entity = local_room.and_then(|room| {
         leaderboard_state
             .latest()
@@ -467,7 +472,13 @@ fn update_minimap(
     sync_minimap_trail(
         &mut commands,
         minimap_root.single().ok(),
-        desired_minimap_trails(&players, local_room, local_tail, &tails, &config.arena),
+        desired_minimap_trails(
+            &players,
+            local_room,
+            local_tail.as_ref(),
+            &tails,
+            &config.arena,
+        ),
         &mut trail_segments,
     );
 }
@@ -560,7 +571,7 @@ fn desired_minimap_trails(
     players: &Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
     local_room: Option<RoomId>,
     local_tail: Option<&TailPoints>,
-    tails: &Query<&TailPoints>,
+    tails: &Query<(&TailPoints, Option<&TailLength>)>,
     arena: &ArenaConfig,
 ) -> Vec<DesiredMiniMapTrailSegment> {
     let mut desired = Vec::new();
@@ -573,16 +584,19 @@ fn desired_minimap_trails(
             continue;
         }
         let tail = if is_local {
-            local_tail
+            local_tail.cloned()
         } else {
-            player.snake.and_then(|snake| tails.get(snake).ok())
+            player
+                .snake
+                .and_then(|snake| tails.get(snake).ok())
+                .map(|(tail, length)| visible_tail(tail, length))
         };
         let Some(tail) = tail else {
             continue;
         };
         let color = minimap_trail_color(player, is_local);
         desired.extend(
-            minimap_trail_nodes(tail, arena)
+            minimap_trail_nodes(&tail, arena)
                 .into_iter()
                 .map(|(index, node)| DesiredMiniMapTrailSegment {
                     owner: player_entity,
@@ -596,15 +610,22 @@ fn desired_minimap_trails(
     desired
 }
 
-fn player_position(player: &Player, tails: &Query<&TailPoints>) -> Option<Vec2> {
-    player
-        .snake
-        .and_then(|snake| tails.get(snake).ok())
-        .map(snake_head)
+fn player_position(
+    player: &Player,
+    tails: &Query<(&TailPoints, Option<&TailLength>)>,
+) -> Option<Vec2> {
+    let (tail, length) = player.snake.and_then(|snake| tails.get(snake).ok())?;
+    Some(snake_head(&visible_tail(tail, length)))
 }
 
 fn snake_head(tail: &TailPoints) -> Vec2 {
     tail.front().0
+}
+
+fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
+    length
+        .map(|length| tail.clipped_to_length(length.current_size))
+        .unwrap_or_else(|| tail.clone())
 }
 
 #[cfg(test)]

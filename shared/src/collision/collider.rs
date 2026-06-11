@@ -1,10 +1,11 @@
+use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::query::Or;
 use bevy::prelude::*;
-use lightyear::prelude::Interpolated;
+use lightyear::prelude::{ControlledBy, Interpolated, InterpolationDelay, LocalTimeline, Tick};
 
 use crate::config::GameConfig;
 use crate::movement::SimulationSet;
-use crate::network::protocol::prelude::{RoomId, TailPoints};
+use crate::network::protocol::prelude::{RoomId, TailLength, TailPathHistory, TailPoints};
 use crate::spatial::{TailSegment, TailSpatialIndex};
 use crate::utils::geometry::ray_segment_intersection;
 use crate::utils::query::Simulated;
@@ -50,13 +51,31 @@ pub struct SnakeFrictionEvent {
 
 pub const MAX_FRICTION_DISTANCE: f32 = 20.0;
 
+#[derive(Clone, Copy)]
+struct FrictionTail<'a> {
+    tail: &'a TailPoints,
+    length: Option<&'a TailLength>,
+    history: Option<&'a TailPathHistory>,
+}
+
 /// Friction is computed both on the client and the server because it influences movement.
 pub(crate) fn snake_friction(
     // Only predicted/client-local or server-authoritative snakes receive boost events, but
     // interpolated remote tails are still valid obstacles for client-side prediction.
     config: Res<GameConfig>,
-    boosted: Query<(Entity, &TailPoints, &RoomId), Simulated>,
-    tails: Query<(Entity, &TailPoints, &RoomId), Or<(Simulated, With<Interpolated>)>>,
+    timeline: Option<Res<LocalTimeline>>,
+    clients: Query<&InterpolationDelay>,
+    boosted: Query<(Entity, &TailPoints, &RoomId, Option<&ControlledBy>), Simulated>,
+    tails: Query<
+        (
+            Entity,
+            &TailPoints,
+            Option<&TailLength>,
+            Option<&TailPathHistory>,
+            &RoomId,
+        ),
+        Or<(Simulated, With<Interpolated>)>,
+    >,
     mut writer: MessageWriter<SnakeFrictionEvent>,
 ) {
     let max_distance = config.movement.boost_distance;
@@ -66,18 +85,37 @@ pub(crate) fn snake_friction(
     let tail_index = TailSpatialIndex::from_tails(
         tails
             .iter()
-            .map(|(entity, tail, room)| (entity, *room, tail)),
+            .map(|(entity, tail, _, _, room)| (entity, *room, tail)),
     );
-    for (entity, tail, room) in boosted.iter() {
+    let tail_lookup = tails
+        .iter()
+        .map(|(entity, tail, length, history, _)| {
+            (
+                entity,
+                FrictionTail {
+                    tail,
+                    length,
+                    history,
+                },
+            )
+        })
+        .collect::<EntityHashMap<_>>();
+    let tick = timeline.as_ref().map(|timeline| timeline.tick());
+    for (entity, tail, room, controlled_by) in boosted.iter() {
         let origin = tail.front().0;
         let direction = tail.front().1.delta();
+        let interpolation_delay =
+            controlled_by.and_then(|controlled_by| clients.get(controlled_by.owner).ok().copied());
         let left_hit = nearest_tail_ray_hit(
             origin,
             direction.perp(),
             max_distance,
             entity,
             *room,
+            interpolation_delay,
+            tick,
             &tail_index,
+            &tail_lookup,
         );
         let right_hit = nearest_tail_ray_hit(
             origin,
@@ -85,7 +123,10 @@ pub(crate) fn snake_friction(
             max_distance,
             entity,
             *room,
+            interpolation_delay,
+            tick,
             &tail_index,
+            &tail_lookup,
         );
 
         if let Some((distance, other)) = nearest_hit(left_hit, right_hit) {
@@ -112,7 +153,10 @@ fn nearest_tail_ray_hit(
     max_distance: f32,
     excluded: Entity,
     room: RoomId,
+    interpolation_delay: Option<InterpolationDelay>,
+    tick: Option<Tick>,
     tail_index: &TailSpatialIndex,
+    tails: &EntityHashMap<FrictionTail<'_>>,
 ) -> Option<(f32, Entity)> {
     let candidates = if direction.x.abs() >= direction.y.abs() {
         let end = origin + direction * max_distance;
@@ -121,7 +165,16 @@ fn nearest_tail_ray_hit(
         let end = origin + direction * max_distance;
         tail_index.horizontal_segments_near(room, origin.y.min(end.y), origin.y.max(end.y))
     };
-    nearest_tail_ray_hit_from_segments(origin, direction, max_distance, excluded, candidates)
+    nearest_tail_ray_hit_from_segments(
+        origin,
+        direction,
+        max_distance,
+        excluded,
+        interpolation_delay,
+        tick,
+        tails,
+        candidates,
+    )
 }
 
 fn nearest_tail_ray_hit_from_segments<'a>(
@@ -129,6 +182,9 @@ fn nearest_tail_ray_hit_from_segments<'a>(
     direction: Vec2,
     max_distance: f32,
     excluded: Entity,
+    interpolation_delay: Option<InterpolationDelay>,
+    tick: Option<Tick>,
+    tails: &EntityHashMap<FrictionTail<'_>>,
     candidates: impl IntoIterator<Item = &'a TailSegment>,
 ) -> Option<(f32, Entity)> {
     let mut nearest: Option<(f32, Entity)> = None;
@@ -136,8 +192,25 @@ fn nearest_tail_ray_hit_from_segments<'a>(
         if segment.owner == excluded {
             continue;
         }
+        let Some(candidate_tail) = tails.get(&segment.owner) else {
+            continue;
+        };
+        let window = tail_collision_window(
+            segment.owner,
+            excluded,
+            candidate_tail.length,
+            candidate_tail.history,
+            candidate_tail.tail,
+            interpolation_delay,
+            tick,
+        );
+        let Some((segment_start, segment_end)) =
+            clipped_segment_for_window(candidate_tail.tail, segment.index, window)
+        else {
+            continue;
+        };
         let Some(distance) =
-            ray_segment_intersection(origin, direction, max_distance, segment.start, segment.end)
+            ray_segment_intersection(origin, direction, max_distance, segment_start, segment_end)
         else {
             continue;
         };
@@ -146,6 +219,88 @@ fn nearest_tail_ray_hit_from_segments<'a>(
         }
     }
     nearest
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TailCollisionWindow {
+    start: f32,
+    end: f32,
+}
+
+fn tail_collision_window(
+    owner: Entity,
+    main: Entity,
+    length: Option<&TailLength>,
+    history: Option<&TailPathHistory>,
+    tail: &TailPoints,
+    interpolation_delay: Option<InterpolationDelay>,
+    tick: Option<Tick>,
+) -> TailCollisionWindow {
+    let current_length = length
+        .map(|length| length.current_size)
+        .unwrap_or_else(|| tail.total_length())
+        .max(0.0);
+    if owner == main {
+        return TailCollisionWindow {
+            start: 0.0,
+            end: current_length,
+        };
+    }
+
+    let Some((history, interpolation_delay, tick)) = history
+        .zip(interpolation_delay)
+        .zip(tick)
+        .map(|((h, d), t)| (h, d, t))
+    else {
+        return TailCollisionWindow {
+            start: 0.0,
+            end: current_length,
+        };
+    };
+    let (visual_tick, overstep) = interpolation_delay.tick_and_overstep(tick);
+    let Some(sample) = history.sample_at(visual_tick, overstep) else {
+        return TailCollisionWindow {
+            start: 0.0,
+            end: current_length,
+        };
+    };
+    let head_offset = (history.head_distance - sample.head_distance).max(0.0);
+    TailCollisionWindow {
+        start: head_offset,
+        end: head_offset + sample.length.max(0.0),
+    }
+}
+
+fn clipped_segment_for_window(
+    tail: &TailPoints,
+    segment_index: usize,
+    window: TailCollisionWindow,
+) -> Option<(Vec2, Vec2)> {
+    let mut near_distance = 0.0;
+    for (index, (far, near)) in tail.pairs_front_to_back().enumerate() {
+        let segment_length = far.0.distance(near.0);
+        if segment_length <= f32::EPSILON {
+            continue;
+        }
+
+        let far_distance = near_distance + segment_length;
+        if index == segment_index {
+            let overlap_start = near_distance.max(window.start);
+            let overlap_end = far_distance.min(window.end);
+            if overlap_end <= overlap_start + f32::EPSILON {
+                return None;
+            }
+
+            let direction = (far.0 - near.0) / segment_length;
+            let clipped_near = near.0 + direction * (overlap_start - near_distance);
+            let clipped_far = near.0 + direction * (overlap_end - near_distance);
+            return Some((clipped_far, clipped_near));
+        }
+
+        near_distance = far_distance;
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -186,6 +341,7 @@ mod tests {
     use std::collections::VecDeque;
 
     use bevy::prelude::*;
+    use lightyear::core::time::PositiveTickDelta;
     use lightyear::prelude::{Interpolated, Predicted, Replicated};
 
     use crate::network::bundle::snake::SnakeBundle;
@@ -228,23 +384,53 @@ mod tests {
             ])),
         ));
 
-        let mut query = app.world_mut().query::<(Entity, &TailPoints, &RoomId)>();
+        let mut query = app.world_mut().query::<(
+            Entity,
+            &TailPoints,
+            Option<&TailLength>,
+            Option<&TailPathHistory>,
+            &RoomId,
+        )>();
         let index = TailSpatialIndex::from_tails(
             query
                 .iter(app.world())
-                .map(|(entity, tail, room)| (entity, *room, tail)),
+                .map(|(entity, tail, _, _, room)| (entity, *room, tail)),
         );
-
         let origin = Vec2::ZERO;
         let direction = Vec2::X;
-        let indexed = nearest_tail_ray_hit(origin, direction, 20.0, snake1, room, &index);
+        let mut brute_force_query = app.world_mut().query::<(Entity, &TailPoints, &RoomId)>();
         let brute_force = nearest_tail_ray_hit_bruteforce(
             origin,
             direction,
             20.0,
             snake1,
             &room,
-            query.iter(app.world()),
+            brute_force_query.iter(app.world()),
+        );
+        let tail_lookup = query
+            .iter(app.world())
+            .map(|(entity, tail, length, history, _)| {
+                (
+                    entity,
+                    FrictionTail {
+                        tail,
+                        length,
+                        history,
+                    },
+                )
+            })
+            .collect::<EntityHashMap<_>>();
+
+        let indexed = nearest_tail_ray_hit(
+            origin,
+            direction,
+            20.0,
+            snake1,
+            room,
+            None,
+            None,
+            &index,
+            &tail_lookup,
         );
 
         assert_eq!(indexed, brute_force);
@@ -401,5 +587,139 @@ mod tests {
                 distance: MAX_FRICTION_DISTANCE / 2.0,
             }]
         );
+    }
+
+    #[test]
+    fn lag_compensated_friction_ignores_retained_segment_outside_visual_window() {
+        let room = RoomId(1);
+        let victim = Entity::from_bits(1);
+        let remote = Entity::from_bits(2);
+        let victim_tail = TailPoints::new(VecDeque::from([
+            (Vec2::new(0.0, 50.0), Direction::Right),
+            (Vec2::new(-10.0, 50.0), Direction::Right),
+        ]));
+        let victim_length = TailLength {
+            current_size: 10.0,
+            target_size: 10.0,
+        };
+        let remote_tail = TailPoints::new(VecDeque::from([
+            (Vec2::new(5.0, 100.0), Direction::Up),
+            (Vec2::new(5.0, 0.0), Direction::Up),
+            (Vec2::new(5.0, -100.0), Direction::Up),
+        ]));
+        let remote_length = TailLength {
+            current_size: 100.0,
+            target_size: 100.0,
+        };
+        let mut remote_history = TailPathHistory::default();
+        remote_history.record_sample(Tick(9), 100.0, 4);
+        remote_history.advance_head(100.0);
+        remote_history.record_sample(Tick(10), 100.0, 4);
+        let index = TailSpatialIndex::from_tails([
+            (victim, room, &victim_tail),
+            (remote, room, &remote_tail),
+        ]);
+        let tails = EntityHashMap::from_iter([
+            (
+                victim,
+                FrictionTail {
+                    tail: &victim_tail,
+                    length: Some(&victim_length),
+                    history: None,
+                },
+            ),
+            (
+                remote,
+                FrictionTail {
+                    tail: &remote_tail,
+                    length: Some(&remote_length),
+                    history: Some(&remote_history),
+                },
+            ),
+        ]);
+        let delay = InterpolationDelay {
+            delay: PositiveTickDelta::lit("1"),
+        };
+
+        let hit = nearest_tail_ray_hit(
+            Vec2::new(0.0, 50.0),
+            Vec2::X,
+            10.0,
+            victim,
+            room,
+            Some(delay),
+            Some(Tick(10)),
+            &index,
+            &tails,
+        );
+
+        assert_eq!(hit, None);
+    }
+
+    #[test]
+    fn lag_compensated_friction_hits_segment_inside_visual_window() {
+        let room = RoomId(1);
+        let victim = Entity::from_bits(1);
+        let remote = Entity::from_bits(2);
+        let victim_tail = TailPoints::new(VecDeque::from([
+            (Vec2::new(0.0, -50.0), Direction::Right),
+            (Vec2::new(-10.0, -50.0), Direction::Right),
+        ]));
+        let victim_length = TailLength {
+            current_size: 10.0,
+            target_size: 10.0,
+        };
+        let remote_tail = TailPoints::new(VecDeque::from([
+            (Vec2::new(5.0, 100.0), Direction::Up),
+            (Vec2::new(5.0, 0.0), Direction::Up),
+            (Vec2::new(5.0, -100.0), Direction::Up),
+        ]));
+        let remote_length = TailLength {
+            current_size: 100.0,
+            target_size: 100.0,
+        };
+        let mut remote_history = TailPathHistory::default();
+        remote_history.record_sample(Tick(9), 100.0, 4);
+        remote_history.advance_head(100.0);
+        remote_history.record_sample(Tick(10), 100.0, 4);
+        let index = TailSpatialIndex::from_tails([
+            (victim, room, &victim_tail),
+            (remote, room, &remote_tail),
+        ]);
+        let tails = EntityHashMap::from_iter([
+            (
+                victim,
+                FrictionTail {
+                    tail: &victim_tail,
+                    length: Some(&victim_length),
+                    history: None,
+                },
+            ),
+            (
+                remote,
+                FrictionTail {
+                    tail: &remote_tail,
+                    length: Some(&remote_length),
+                    history: Some(&remote_history),
+                },
+            ),
+        ]);
+        let delay = InterpolationDelay {
+            delay: PositiveTickDelta::lit("1"),
+        };
+
+        let hit = nearest_tail_ray_hit(
+            Vec2::new(0.0, -50.0),
+            Vec2::X,
+            10.0,
+            victim,
+            room,
+            Some(delay),
+            Some(Tick(10)),
+            &index,
+            &tails,
+        );
+
+        assert_eq!(hit, Some((5.0, remote)));
     }
 }

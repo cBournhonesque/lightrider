@@ -82,7 +82,7 @@ fn maintain_bots(
     targets: Res<BotTargetOverrides>,
     time: Res<Time>,
     mut ids: ResMut<BotIdAllocator>,
-    tails: Query<(&TailPoints, &RoomId)>,
+    tails: Query<(&TailPoints, Option<&TailLength>, &RoomId)>,
     mut bot_queries: ParamSet<(
         Query<(Entity, &Player, &RoomId), (With<Player>, With<BotMarker>)>,
         Query<
@@ -131,9 +131,10 @@ fn maintain_bots(
         for _ in existing.len()..target {
             let obstacle_tails = tails
                 .iter()
-                .filter(|(_, tail_room)| **tail_room == room.game_room)
-                .map(|(tail, _)| tail);
-            spawn_bot(&mut commands, &config, *room, &mut ids, obstacle_tails);
+                .filter(|(_, _, tail_room)| **tail_room == room.game_room)
+                .map(|(tail, length, _)| visible_tail(tail, length))
+                .collect::<Vec<_>>();
+            spawn_bot(&mut commands, &config, *room, &mut ids, &obstacle_tails);
         }
     }
 
@@ -159,15 +160,16 @@ fn maintain_bots(
         };
         let obstacle_tails = tails
             .iter()
-            .filter(|(_, tail_room)| **tail_room == *room)
-            .map(|(tail, _)| tail);
+            .filter(|(_, _, tail_room)| **tail_room == *room)
+            .map(|(tail, length, _)| visible_tail(tail, length))
+            .collect::<Vec<_>>();
         let snake = spawn_bot_snake(
             &mut commands,
             &config,
             *room,
             lightyear_room,
             player.id,
-            obstacle_tails,
+            &obstacle_tails,
         );
         commands.entity(snake).insert(HasPlayer(player_entity));
         commands.entity(player_entity).remove::<RespawnReadyAt>();
@@ -245,12 +247,13 @@ fn spawn_bot_snake<'a>(
 fn drive_bots(
     config: Res<GameConfig>,
     mut queries: ParamSet<(
-        Query<(Entity, &TailPoints, &RoomId)>,
+        Query<(Entity, &TailPoints, Option<&TailLength>, &RoomId)>,
         Query<
             (
                 Entity,
                 &RoomId,
                 &mut TailPoints,
+                &TailLength,
                 Option<&mut TailPointsDiffLog>,
                 &mut BotController,
             ),
@@ -261,21 +264,29 @@ fn drive_bots(
     let tail_snapshots = queries
         .p0()
         .iter()
-        .map(|(entity, tail, room)| (entity, *room, tail.clone()))
+        .map(|(entity, tail, length, room)| (entity, *room, visible_tail(tail, length)))
         .collect::<Vec<_>>();
 
     let mut bot_query = queries.p1();
-    for (entity, room, mut tail, log, mut controller) in bot_query.iter_mut() {
+    for (entity, room, mut tail, length, log, mut controller) in bot_query.iter_mut() {
         let obstacle_tails = tail_snapshots
             .iter()
             .filter(|(other_entity, other_room, _)| *other_entity != entity && other_room == room)
             .map(|(_, _, tail)| tail)
             .collect::<Vec<_>>();
-        let direction = controller.choose_direction_avoiding(&tail, &config.arena, &obstacle_tails);
+        let visible_tail = tail.clipped_to_length(length.current_size);
+        let direction =
+            controller.choose_direction_avoiding(&visible_tail, &config.arena, &obstacle_tails);
         if is_perpendicular_turn(tail.front().1, direction) {
             let _ = turn_tail_with_log(tail.as_mut(), log, direction);
         }
     }
+}
+
+fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
+    length
+        .map(|length| tail.clipped_to_length(length.current_size))
+        .unwrap_or_else(|| tail.clone())
 }
 
 #[cfg(test)]

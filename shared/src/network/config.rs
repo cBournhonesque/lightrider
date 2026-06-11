@@ -154,7 +154,7 @@ fn key_from_vec(bytes: Vec<u8>) -> Key {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{InputDelayConfig, NetworkConfig};
+    use crate::config::{InputDelayConfig, LagCompensationConfig, NetworkConfig};
 
     use super::{parse_private_key, recv_link_conditioner_config};
 
@@ -179,6 +179,7 @@ mod tests {
     fn config_network_conditioner_uses_one_way_artificial_values() {
         let config = NetworkConfig {
             input_delay: InputDelayConfig::balanced(),
+            lag_compensation: LagCompensationConfig::default(),
             input_packet_redundancy_ticks: 3,
             replication_send_hz: 10,
             compression: crate::config::NetworkCompression::Disabled,

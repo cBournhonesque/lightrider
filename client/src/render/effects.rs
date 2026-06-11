@@ -75,6 +75,7 @@ fn sync_boost_marker(
         (
             Entity,
             &TailPoints,
+            Option<&TailLength>,
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
@@ -272,6 +273,7 @@ fn nearest_controlled_boost_contact(
         (
             Entity,
             &TailPoints,
+            Option<&TailLength>,
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
@@ -286,7 +288,7 @@ fn nearest_controlled_boost_contact(
     }
 
     let mut nearest = None;
-    for (entity, tail, room, speed, _, controlled) in snakes {
+    for (entity, tail, _, room, speed, _, controlled) in snakes {
         if !controlled {
             continue;
         }
@@ -351,6 +353,7 @@ fn nearest_tail_ray_hit(
         (
             Entity,
             &TailPoints,
+            Option<&TailLength>,
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
@@ -361,10 +364,11 @@ fn nearest_tail_ray_hit(
     spark_active: bool,
 ) -> Option<BoostContact> {
     let mut nearest = None;
-    for (other_entity, other_tail, other_room, _, _, _) in snakes {
+    for (other_entity, other_tail, other_length, other_room, _, _, _) in snakes {
         if other_entity == excluded || other_room != room {
             continue;
         }
+        let other_tail = visible_tail(other_tail, other_length);
         for (segment_start, segment_end) in other_tail.pairs_front_to_back() {
             let segment = segment_end.0 - segment_start.0;
             let segment_length = segment.length();
@@ -401,6 +405,12 @@ fn nearest_tail_ray_hit(
     nearest
 }
 
+fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
+    length
+        .map(|length| tail.clipped_to_length(length.current_size))
+        .unwrap_or_else(|| tail.clone())
+}
+
 fn top_speed_marker_threshold(config: &GameConfig) -> f32 {
     let min_speed = config.movement.min_speed;
     let max_speed = config.movement.max_speed.max(min_speed);
@@ -413,6 +423,7 @@ fn snake_entity_color(
         (
             Entity,
             &TailPoints,
+            Option<&TailLength>,
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
@@ -424,7 +435,7 @@ fn snake_entity_color(
 ) -> SnakePaletteColor {
     snakes
         .iter()
-        .find_map(|(entity, _, _, _, has_player, _)| {
+        .find_map(|(entity, _, _, _, _, has_player, _)| {
             (entity == snake_entity).then(|| {
                 has_player
                     .and_then(|has_player| players.get(has_player.0).ok())

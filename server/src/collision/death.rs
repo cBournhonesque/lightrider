@@ -37,7 +37,7 @@ pub fn handle_collision(
         Query<(&mut Player, &mut PlayerStatus, Has<BotMarker>)>,
     )>,
     clients: Query<(&RemoteId, &ClientRoom), With<ClientOf>>,
-    snakes: Query<(&HasPlayer, &RoomId, &TailPoints)>,
+    snakes: Query<(&HasPlayer, &RoomId, &TailPoints, &TailLength)>,
     food: Query<&RoomId, With<FoodMarker>>,
     mut commands: Commands,
 ) {
@@ -48,12 +48,13 @@ pub fn handle_collision(
         if !reserve_collision_death(&mut killed_snakes, collision_event) {
             continue;
         }
-        let Ok((killed_player, killed_room, killed_tail)) = snakes.get(collision_event.killed)
+        let Ok((killed_player, killed_room, killed_tail, killed_length)) =
+            snakes.get(collision_event.killed)
         else {
             error!("snake does not have HasPlayer component");
             continue;
         };
-        let Ok((killer_player, killer_room, _)) = snakes.get(collision_event.killer) else {
+        let Ok((killer_player, killer_room, _, _)) = snakes.get(collision_event.killer) else {
             error!("snake does not have HasPlayer component");
             continue;
         };
@@ -126,7 +127,7 @@ pub fn handle_collision(
             &rooms,
             &config,
             *killed_room,
-            killed_tail,
+            &killed_tail.clipped_to_length(killed_length.current_size),
             &mut room_food_counts,
         );
         let killed_is_bot = {

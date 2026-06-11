@@ -18,6 +18,7 @@ pub struct SnakeBundle {
     pub speed: Speed,
     pub acceleration: Acceleration,
     pub tail_points: TailPoints,
+    pub tail_path_history: TailPathHistory,
     pub food_boost: FoodBoost,
     pub input: SnakeInput,
     pub room: RoomId,
@@ -53,6 +54,7 @@ impl SnakeBundle {
         ]));
         Self {
             tail_points,
+            tail_path_history: TailPathHistory::default(),
             tail_length: TailLength {
                 current_size: config.starting_tail_length,
                 target_size: config.starting_tail_length,

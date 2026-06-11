@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::Diffable as RepliconDiffable;
 use derive_more::{Add, Mul};
 use itertools::Itertools;
-use lightyear::prelude::Diffable as LightyearDiffable;
+use lightyear::prelude::{Diffable as LightyearDiffable, Tick};
 use parry2d::math::Point;
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +45,19 @@ pub struct TailLength {
     pub target_size: f32,
 }
 
+#[derive(Component, Clone, Debug, Default)]
+pub struct TailPathHistory {
+    pub head_distance: f32,
+    samples: VecDeque<TailPathSample>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TailPathSample {
+    pub tick: Tick,
+    pub head_distance: f32,
+    pub length: f32,
+}
+
 #[derive(Component, Deserialize, Serialize, Clone, Debug, Reflect)]
 // tail inflection points, from front (head point) to back (tail end point)
 pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
@@ -52,6 +65,57 @@ pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
 impl TailPoints {
     pub fn new(points: VecDeque<(Vec2, Direction)>) -> Self {
         Self(points)
+    }
+}
+
+impl TailPathHistory {
+    pub fn advance_head(&mut self, distance: f32) {
+        self.head_distance += distance.max(0.0);
+    }
+
+    pub fn record_sample(&mut self, tick: Tick, length: f32, max_samples: usize) {
+        let sample = TailPathSample {
+            tick,
+            head_distance: self.head_distance,
+            length: length.max(0.0),
+        };
+        if let Some(last) = self.samples.back_mut().filter(|last| last.tick == tick) {
+            *last = sample;
+        } else {
+            self.samples.push_back(sample);
+        }
+
+        let max_samples = max_samples.max(1);
+        let excess = self.samples.len().saturating_sub(max_samples);
+        if excess > 0 {
+            self.samples.drain(..excess);
+        }
+    }
+
+    pub fn sample_at(&self, tick: Tick, overstep: f32) -> Option<TailPathSample> {
+        let first = *self.samples.front()?;
+        if tick <= first.tick {
+            return Some(first);
+        }
+
+        let last = *self.samples.back()?;
+        if tick >= last.tick {
+            return Some(last);
+        }
+
+        let start_index = self.samples.iter().position(|sample| sample.tick >= tick)?;
+        let start = self.samples.get(start_index).copied()?;
+        if start.tick != tick || overstep <= f32::EPSILON {
+            return Some(start);
+        }
+
+        let end = self.samples.get(start_index + 1).copied().unwrap_or(start);
+        let t = overstep.clamp(0.0, 1.0);
+        Some(TailPathSample {
+            tick: start.tick,
+            head_distance: start.head_distance + (end.head_distance - start.head_distance) * t,
+            length: start.length + (end.length - start.length) * t,
+        })
     }
 }
 
@@ -68,7 +132,6 @@ pub enum TailPointsOp {
         direction: Direction,
     },
     SetFrontPosition(Vec2),
-    ShortenBy(f32),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -115,8 +178,21 @@ impl TailPoints {
             .sum()
     }
 
+    pub fn clipped_to_length(&self, length: f32) -> Self {
+        let mut clipped = self.clone();
+        let excess = clipped.total_length() - length.max(0.0);
+        if excess > 0.0 {
+            clipped.shorten_by(excess);
+        }
+        clipped
+    }
+
     /// Shorten the tail by a certain amount
     pub fn shorten_by(&mut self, mut shorten_amount: f32) {
+        if shorten_amount <= 0.0 || self.0.len() < 2 {
+            return;
+        }
+
         // iterate from the tail to the front
         let mut drop_point = 0;
         let mut new_point = None;
@@ -172,9 +248,6 @@ impl RepliconDiffable for TailPoints {
             }
             TailPointsOp::SetFrontPosition(position) => {
                 self.set_front_position(position);
-            }
-            TailPointsOp::ShortenBy(amount) => {
-                self.shorten_by(amount);
             }
         }
         Ok(())

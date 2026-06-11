@@ -46,6 +46,12 @@ impl Plugin for ProtocolPlugin {
             .input_packet_redundancy_ticks;
         app.add_plugins(InputPlugin::<SnakeInput> {
             config: InputConfig {
+                lag_compensation: app
+                    .world()
+                    .resource::<GameConfig>()
+                    .network
+                    .lag_compensation
+                    .enabled,
                 rebroadcast_inputs: false,
                 packet_redundancy: input_packet_redundancy_ticks,
                 ..default()

@@ -83,12 +83,12 @@
         // Powerline interpolation cadence while simulation remains 30 Hz.
         replication_send_hz: 10,
         compression: Disabled,
-        // Lightyear balanced input delay: cover low latency with input delay first,
-        // then bound prediction for the remaining latency.
+        // Input delay: cover roughly 60ms at 30Hz with delay first,
+        // then predict up to 8 additional ticks for remaining latency.
         input_delay: (
             minimum_input_delay_ticks: 0,
-            maximum_input_delay_before_prediction_ticks: 3,
-            maximum_predicted_ticks: 7,
+            maximum_input_delay_before_prediction_ticks: 2,
+            maximum_predicted_ticks: 8,
         ),
         input_packet_redundancy_ticks: 3,
         artificial_latency_ms: 0,

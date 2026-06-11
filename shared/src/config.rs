@@ -22,6 +22,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<NetworkConfig>();
         app.register_type::<NetworkCompression>();
         app.register_type::<InputDelayConfig>();
+        app.register_type::<LagCompensationConfig>();
         app.register_type::<DebugConfig>();
     }
 }
@@ -335,6 +336,7 @@ pub struct NetworkConfig {
     pub replication_send_hz: u16,
     pub compression: NetworkCompression,
     pub input_delay: InputDelayConfig,
+    pub lag_compensation: LagCompensationConfig,
     pub input_packet_redundancy_ticks: u16,
     pub artificial_latency_ms: u64,
     pub artificial_jitter_ms: u64,
@@ -348,6 +350,7 @@ impl Default for NetworkConfig {
             replication_send_hz: 10,
             compression: NetworkCompression::default(),
             input_delay: InputDelayConfig::default(),
+            lag_compensation: LagCompensationConfig::default(),
             input_packet_redundancy_ticks: 3,
             artificial_latency_ms: 0,
             artificial_jitter_ms: 0,
@@ -376,6 +379,22 @@ pub enum NetworkCompression {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Reflect)]
 #[serde(default)]
+pub struct LagCompensationConfig {
+    pub enabled: bool,
+    pub max_delay_ticks: u16,
+}
+
+impl Default for LagCompensationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_delay_ticks: 10,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Reflect)]
+#[serde(default)]
 pub struct InputDelayConfig {
     pub minimum_input_delay_ticks: u16,
     pub maximum_input_delay_before_prediction_ticks: u16,
@@ -389,15 +408,15 @@ impl Default for InputDelayConfig {
 }
 
 impl InputDelayConfig {
-    /// Lightyear's balanced input-delay preset.
+    /// Lightrider's balanced input-delay preset.
     ///
-    /// Low latency is covered with a small amount of input delay before falling back to
-    /// prediction. Higher latency still predicts, but bounded by `maximum_predicted_ticks`.
+    /// At the default 30Hz simulation rate, this covers roughly 60ms with input delay before
+    /// falling back to prediction. Higher latency predicts up to `maximum_predicted_ticks`.
     pub const fn balanced() -> Self {
         Self {
             minimum_input_delay_ticks: 0,
-            maximum_input_delay_before_prediction_ticks: 3,
-            maximum_predicted_ticks: 7,
+            maximum_input_delay_before_prediction_ticks: 2,
+            maximum_predicted_ticks: 8,
         }
     }
 }
@@ -465,6 +484,10 @@ mod tests {
             Duration::from_millis(100)
         );
         assert_eq!(config.network.input_delay, InputDelayConfig::balanced());
+        assert_eq!(
+            config.network.lag_compensation,
+            LagCompensationConfig::default()
+        );
         assert_eq!(config.network.input_packet_redundancy_ticks, 3);
     }
 

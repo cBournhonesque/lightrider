@@ -7,7 +7,8 @@ use lightyear::prelude::input::bei::Fire;
 use crate::config::GameConfig;
 use crate::network::protocol::components::snake::Direction;
 use crate::network::protocol::prelude::*;
-use crate::utils::query::Simulated;
+use crate::utils::query::{Simulated, SimulationAuthority};
+use lightyear::prelude::LocalTimeline;
 
 pub struct MovementPlugin;
 
@@ -184,6 +185,7 @@ pub fn boost_acceleration(
 // 5. update the back of the tails: shorten tail
 pub fn update_tails(
     config: Res<GameConfig>,
+    timeline: Option<Res<LocalTimeline>>,
     mut query: Query<
         (
             &mut TailPoints,
@@ -191,12 +193,18 @@ pub fn update_tails(
             &mut TailLength,
             &mut Speed,
             &Acceleration,
+            Has<SimulationAuthority>,
+            Option<&mut TailPathHistory>,
         ),
         Simulated,
     >,
 ) {
     let movement = &config.movement;
-    for (mut tail, log, mut length, mut speed, acceleration) in query.iter_mut() {
+    let retained_extra_length = lag_compensation_extra_length(&config);
+    let max_history_samples = usize::from(config.network.lag_compensation.max_delay_ticks) + 3;
+    for (mut tail, log, mut length, mut speed, acceleration, has_simulation_authority, history) in
+        query.iter_mut()
+    {
         // 4. update acceleration and speed
         // update velocity
         // do not update speed if we are at min speed and acceleration is negative
@@ -210,16 +218,29 @@ pub fn update_tails(
 
         // update position
         let next_position = tail.front().0 + tail.front().1.delta() * speed.0;
-        let mut log = apply_tail_op(
+        let moved_distance = tail.front().0.distance(next_position);
+        let _ = apply_tail_op(
             tail.as_mut(),
             log,
             TailPointsOp::SetFrontPosition(next_position),
         );
+        let mut history = history;
+        if let Some(history) = history.as_deref_mut() {
+            history.advance_head(moved_distance);
+        }
         length.current_size += speed.0;
 
         // 5. update the back of the tails: shorten tail
         // NOTE: it's ok to activate change detection here because we already updated the snake anyway
-        shorten_tail_with_log(tail.as_mut(), log.as_deref_mut(), length.as_mut());
+        let retained_extra_length = if has_simulation_authority {
+            retained_extra_length
+        } else {
+            0.0
+        };
+        shorten_tail_with_retention(tail.as_mut(), length.as_mut(), retained_extra_length);
+        if let (Some(timeline), Some(history)) = (timeline.as_ref(), history.as_deref_mut()) {
+            history.record_sample(timeline.tick(), length.current_size, max_history_samples);
+        }
     }
 }
 
@@ -249,22 +270,27 @@ pub fn shorten_tail(tail: &mut TailPoints, tail_length: &mut TailLength) {
     tail_length.current_size = tail_length.target_size;
 }
 
-fn shorten_tail_with_log(
+fn shorten_tail_with_retention(
     tail: &mut TailPoints,
-    log: Option<&mut DiffLog<TailPoints>>,
     tail_length: &mut TailLength,
+    retained_extra_length: f32,
 ) {
-    if tail_length.target_size >= tail_length.current_size {
-        return;
+    if tail_length.target_size < tail_length.current_size {
+        tail_length.current_size = tail_length.target_size;
     }
 
-    let shorten_amount = tail_length.current_size - tail_length.target_size;
-    RepliconDiffable::apply_patch(tail, &TailPointsOp::ShortenBy(shorten_amount))
-        .expect("tail shorten diff patch should be valid for live TailPoints");
-    if let Some(log) = log {
-        log.record(TailPointsOp::ShortenBy(shorten_amount));
+    let retained_length = tail_length.current_size + retained_extra_length.max(0.0);
+    let excess = tail.total_length() - retained_length;
+    if excess > 0.0 {
+        tail.shorten_by(excess);
     }
-    tail_length.current_size = tail_length.target_size;
+}
+
+fn lag_compensation_extra_length(config: &GameConfig) -> f32 {
+    if !config.network.lag_compensation.enabled {
+        return 0.0;
+    }
+    config.movement.max_speed.max(0.0) * f32::from(config.network.lag_compensation.max_delay_ticks)
 }
 
 #[cfg(test)]
@@ -561,5 +587,28 @@ mod tests {
                 .current_size,
             30.0
         );
+    }
+
+    #[test]
+    fn retained_authoritative_tail_keeps_extra_path_without_changing_visible_length() {
+        let mut tail = TailPoints::new(VecDeque::from(vec![
+            (Vec2::new(100.0, 0.0), Direction::Right),
+            (Vec2::new(0.0, 0.0), Direction::Right),
+        ]));
+        let mut length = TailLength {
+            current_size: 100.0,
+            target_size: 80.0,
+        };
+
+        shorten_tail_with_retention(&mut tail, &mut length, 25.0);
+
+        assert_eq!(length.current_size, 80.0);
+        assert_eq!(tail.total_length(), 100.0);
+
+        length.target_size = 60.0;
+        shorten_tail_with_retention(&mut tail, &mut length, 25.0);
+
+        assert_eq!(length.current_size, 60.0);
+        assert_eq!(tail.total_length(), 85.0);
     }
 }

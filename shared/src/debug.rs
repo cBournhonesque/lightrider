@@ -618,6 +618,8 @@ fn validate_snakes_fixed_last(
         Option<&Speed>,
         Option<&RoomId>,
         Has<Interpolated>,
+        Has<SimulationAuthority>,
+        Has<Replicated>,
     )>,
 ) {
     if !config.debug.invariant_checks {
@@ -627,7 +629,17 @@ fn validate_snakes_fixed_last(
     let half_width = config.arena.width * 0.5;
     let half_height = config.arena.height * 0.5;
 
-    for (entity, tail, length, speed, room, is_interpolated) in &snakes {
+    for (
+        entity,
+        tail,
+        length,
+        speed,
+        room,
+        is_interpolated,
+        has_simulation_authority,
+        is_replicated,
+    ) in &snakes
+    {
         let Some((head, _direction)) = tail.0.front() else {
             emit_invariant_violation(
                 *role,
@@ -672,8 +684,14 @@ fn validate_snakes_fixed_last(
                 }
             }
             if let Some(length) = length {
-                let length_delta = (tail.total_length() - length.current_size).abs();
-                if length_delta > 1.0 {
+                let tail_total_length = tail.total_length();
+                let length_delta = (tail_total_length - length.current_size).abs();
+                let invalid_length = if has_simulation_authority || is_replicated {
+                    tail_total_length + 1.0 < length.current_size
+                } else {
+                    length_delta > 1.0
+                };
+                if invalid_length {
                     emit_invariant_violation(
                         *role,
                         entity,

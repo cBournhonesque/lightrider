@@ -96,7 +96,10 @@ impl Plugin for SnakeRenderPlugin {
 pub(crate) fn draw_snakes(
     mut gizmos: Gizmos,
     config: Res<GameConfig>,
-    tails: Query<&TailPoints, Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>>,
+    tails: Query<
+        (&TailPoints, Option<&TailLength>),
+        Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+    >,
 ) {
     if config.render.use_assets {
         return;
@@ -106,7 +109,8 @@ pub(crate) fn draw_snakes(
     let head_color = Color::srgb(0.75, 0.95, 1.0);
     let tail_width = config.render.tail_width.max(1.0);
     let head_size = config.render.head_size.max(1.0);
-    for points in tails.iter() {
+    for (points, length) in tails.iter() {
+        let points = visible_tail(points, length);
         gizmos.rect_2d(points.front().0, Vec2::ONE * head_size, head_color);
         points.pairs_front_to_back().for_each(|(start, end)| {
             draw_tail_segment(&mut gizmos, start.0, end.0, tail_width, color);
@@ -125,7 +129,7 @@ fn sync_asset_snake_visuals(
     mut materials: ResMut<Assets<ColorMaterial>>,
     players: Query<&Player>,
     tails: Query<
-        (Entity, &TailPoints, Option<&HasPlayer>),
+        (Entity, &TailPoints, Option<&TailLength>, Option<&HasPlayer>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
     mut sprite_visuals: Query<
@@ -225,7 +229,7 @@ fn desired_snake_visuals(
     sheet: &PowerlineSpriteSheet,
     players: &Query<&Player>,
     tails: &Query<
-        (Entity, &TailPoints, Option<&HasPlayer>),
+        (Entity, &TailPoints, Option<&TailLength>, Option<&HasPlayer>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) -> (Vec<DesiredSnakeSpriteVisual>, Vec<DesiredSnakeMeshVisual>) {
@@ -236,7 +240,8 @@ fn desired_snake_visuals(
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
-    for (owner, points, player) in tails.iter() {
+    for (owner, points, length, player) in tails.iter() {
+        let points = visible_tail(points, length);
         let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
         sprite_desired.push(DesiredSnakeSpriteVisual {
@@ -323,6 +328,12 @@ fn desired_snake_visuals(
     (sprite_desired, mesh_desired)
 }
 
+fn visible_tail(points: &TailPoints, length: Option<&TailLength>) -> TailPoints {
+    length
+        .map(|length| points.clipped_to_length(length.current_size))
+        .unwrap_or_else(|| points.clone())
+}
+
 fn snake_visual_color(
     owner: Entity,
     has_player: Option<&HasPlayer>,
@@ -395,7 +406,7 @@ fn spawn_snake_death_animations(
     mut deaths: MessageReader<ConfirmedDeath>,
     mut mesh_assets: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    tails: Query<(Entity, &TailPoints, Option<&HasPlayer>)>,
+    tails: Query<(Entity, &TailPoints, Option<&TailLength>, Option<&HasPlayer>)>,
 ) {
     if !config.render.use_assets {
         for _ in deaths.read() {}
@@ -407,13 +418,13 @@ fn spawn_snake_death_animations(
         let live_tail = tails
             .get(death.message.killed_snake)
             .ok()
-            .map(|(_, tail, _)| tail);
+            .map(|(_, tail, length, _)| visible_tail(tail, length));
         let tail = if death.local_player {
-            death.tail.as_ref().or(live_tail)
+            death.tail.clone().or(live_tail)
         } else {
-            live_tail.or(death.tail.as_ref())
+            live_tail.or_else(|| death.tail.clone())
         };
-        let Some(tail) = tail else {
+        let Some(tail) = tail.as_ref() else {
             if let Some(position) = death.position {
                 spawn_death_circle(
                     &mut commands,

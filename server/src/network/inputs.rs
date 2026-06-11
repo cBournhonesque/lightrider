@@ -35,7 +35,7 @@ pub(crate) fn handle_spawn_requests(
         Option<&ControlledBy>,
         Option<&RespawnReadyAt>,
     )>,
-    tails: Query<(&TailPoints, &RoomId)>,
+    tails: Query<(&TailPoints, Option<&TailLength>, &RoomId)>,
 ) {
     for (remote_id, mut receiver) in &mut clients {
         for _request in receiver.receive() {
@@ -66,10 +66,11 @@ pub(crate) fn handle_spawn_requests(
             let client_id = player.id;
             let obstacle_tails = tails
                 .iter()
-                .filter(|(_, tail_room)| **tail_room == *room)
-                .map(|(tail, _)| tail);
+                .filter(|(_, _, tail_room)| **tail_room == *room)
+                .map(|(tail, length, _)| visible_tail(tail, length))
+                .collect::<Vec<_>>();
             let (spawn_position, spawn_direction) =
-                snake_spawn_pose_avoiding(&config, *room, client_id.to_bits(), obstacle_tails);
+                snake_spawn_pose_avoiding(&config, *room, client_id.to_bits(), &obstacle_tails);
             let head_entity = SnakeBundle::spawn_with_room_at(
                 &mut commands,
                 client_id,
@@ -95,4 +96,10 @@ pub(crate) fn handle_spawn_requests(
             *status = PlayerStatus::Alive;
         }
     }
+}
+
+fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
+    length
+        .map(|length| tail.clipped_to_length(length.current_size))
+        .unwrap_or_else(|| tail.clone())
 }
