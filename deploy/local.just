@@ -68,11 +68,20 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
       release_arg="${bots_arg#release=}"
       bots_arg="4"
     fi
+    if [[ "$bots_arg" == headless=* || "$bots_arg" == --headless=* ]]; then
+      headless_arg="${bots_arg#*=}"
+      bots_arg="4"
+    elif [[ "$bots_arg" == "--headless" ]]; then
+      headless_arg="$config_arg"
+      bots_arg="4"
+      config_arg="config/test.ron"
+    fi
     if [[ "$release_arg" == release=* ]]; then
       release_arg="${release_arg#release=}"
     fi
-    if [[ "$headless_arg" == headless=* ]]; then
+    if [[ "$headless_arg" == headless=* || "$headless_arg" == --headless=* ]]; then
       headless_arg="${headless_arg#headless=}"
+      headless_arg="${headless_arg#--headless=}"
     fi
     if [[ -f secrets/admin.env ]]; then
       set -a
