@@ -74,6 +74,7 @@ fn sync_boost_marker(
     snakes: Query<
         (
             Entity,
+            &SnakeHead,
             &TailPoints,
             Option<&TailLength>,
             &RoomId,
@@ -176,7 +177,7 @@ fn sync_speed_particles(
     time: Res<Time>,
     sheet: Res<PowerlineSpriteSheet>,
     snakes: Query<
-        (Entity, &TailPoints, Option<&Speed>),
+        (Entity, &SnakeHead, Option<&Speed>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
     mut visuals: Query<(Entity, &SpeedParticleVisual, &mut Transform, &mut Sprite)>,
@@ -219,7 +220,7 @@ fn desired_speed_particles(
     elapsed_seconds: f32,
     sheet: &PowerlineSpriteSheet,
     snakes: &Query<
-        (Entity, &TailPoints, Option<&Speed>),
+        (Entity, &SnakeHead, Option<&Speed>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) -> Vec<DesiredParticle> {
@@ -229,14 +230,13 @@ fn desired_speed_particles(
     let threshold = min_speed + (max_speed - min_speed) * 0.58;
     let head_size = config.render.head_size.max(4.0);
 
-    for (snake, tail, speed) in snakes {
+    for (snake, head, speed) in snakes {
         let speed = speed.map(|speed| speed.0).unwrap_or(min_speed);
         if speed < threshold {
             continue;
         }
         let speed_t = ((speed - threshold) / (max_speed - threshold)).clamp(0.0, 1.0);
-        let head = tail.front().0;
-        let direction = tail.front().1.delta();
+        let direction = head.direction.delta();
         let normal = direction.perp();
         let particle_count =
             ((SPEED_PARTICLE_COUNT as f32) * (0.35 + speed_t * 0.65)).ceil() as usize;
@@ -247,7 +247,7 @@ fn desired_speed_particles(
             let spread = (seed * std::f32::consts::TAU + elapsed_seconds * 0.7).sin();
             let behind = head_size * 0.55 + age * (head_size * 3.4 + speed_t * 22.0);
             let side = spread * (head_size * 0.28 + age * head_size * 0.75);
-            let position = head - direction * behind + normal * side;
+            let position = head.position - direction * behind + normal * side;
             let fade = (1.0 - age).powf(1.35);
             let size = (head_size * (0.62 + speed_t * 0.42) * (0.62 + 0.38 * fade)).max(4.5);
             let color = Color::srgba(0.74, 0.96, 1.0, fade * (0.22 + speed_t * 0.45));
@@ -272,6 +272,7 @@ fn nearest_controlled_boost_contact(
     snakes: &Query<
         (
             Entity,
+            &SnakeHead,
             &TailPoints,
             Option<&TailLength>,
             &RoomId,
@@ -288,7 +289,7 @@ fn nearest_controlled_boost_contact(
     }
 
     let mut nearest = None;
-    for (entity, tail, _, room, speed, _, controlled) in snakes {
+    for (entity, head, _, _, room, speed, _, controlled) in snakes {
         if !controlled {
             continue;
         }
@@ -296,11 +297,10 @@ fn nearest_controlled_boost_contact(
             .map(|speed| speed.0)
             .unwrap_or(config.movement.min_speed);
         let spark_active = speed >= top_speed_marker_threshold(config);
-        let head = tail.front().0;
-        let direction = tail.front().1.delta();
+        let direction = head.direction.delta();
         let lightning_min_distance = config.render.head_size.max(4.0) * 1.6;
         let left = nearest_tail_ray_hit(
-            head,
+            head.position,
             direction.perp(),
             direction,
             max_distance,
@@ -311,7 +311,7 @@ fn nearest_controlled_boost_contact(
             spark_active,
         );
         let right = nearest_tail_ray_hit(
-            head,
+            head.position,
             -direction.perp(),
             direction,
             max_distance,
@@ -352,6 +352,7 @@ fn nearest_tail_ray_hit(
     snakes: &Query<
         (
             Entity,
+            &SnakeHead,
             &TailPoints,
             Option<&TailLength>,
             &RoomId,
@@ -364,11 +365,11 @@ fn nearest_tail_ray_hit(
     spark_active: bool,
 ) -> Option<BoostContact> {
     let mut nearest = None;
-    for (other_entity, other_tail, other_length, other_room, _, _, _) in snakes {
+    for (other_entity, other_head, other_tail, other_length, other_room, _, _, _) in snakes {
         if other_entity == excluded || other_room != room {
             continue;
         }
-        let other_tail = visible_tail(other_tail, other_length);
+        let other_tail = visible_tail(other_head, other_tail, other_length);
         for (segment_start, segment_end) in other_tail.pairs_front_to_back() {
             let segment = segment_end.0 - segment_start.0;
             let segment_length = segment.length();
@@ -405,10 +406,11 @@ fn nearest_tail_ray_hit(
     nearest
 }
 
-fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
-    length
-        .map(|length| tail.clipped_to_length(length.current_size))
-        .unwrap_or_else(|| tail.clone())
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }
 
 fn top_speed_marker_threshold(config: &GameConfig) -> f32 {
@@ -422,6 +424,7 @@ fn snake_entity_color(
     snakes: &Query<
         (
             Entity,
+            &SnakeHead,
             &TailPoints,
             Option<&TailLength>,
             &RoomId,
@@ -435,7 +438,7 @@ fn snake_entity_color(
 ) -> SnakePaletteColor {
     snakes
         .iter()
-        .find_map(|(entity, _, _, _, _, has_player, _)| {
+        .find_map(|(entity, _, _, _, _, _, has_player, _)| {
             (entity == snake_entity).then(|| {
                 has_player
                     .and_then(|has_player| players.get(has_player.0).ok())

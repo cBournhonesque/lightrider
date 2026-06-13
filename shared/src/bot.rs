@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::config::ArenaConfig;
-use crate::network::protocol::prelude::{Direction, TailPoints};
+use crate::network::protocol::prelude::{Direction, TailPolyline};
 use crate::utils::geometry::ray_segment_intersection;
 
 const LOOKAHEAD_DISTANCE: f32 = 420.0;
@@ -38,15 +38,15 @@ impl BotController {
         }
     }
 
-    pub fn choose_direction(&mut self, tail: &TailPoints, arena: &ArenaConfig) -> Direction {
+    pub fn choose_direction(&mut self, tail: &TailPolyline, arena: &ArenaConfig) -> Direction {
         self.choose_direction_avoiding(tail, arena, &[])
     }
 
     pub fn choose_direction_avoiding(
         &mut self,
-        tail: &TailPoints,
+        tail: &TailPolyline,
         arena: &ArenaConfig,
-        obstacle_tails: &[&TailPoints],
+        obstacle_tails: &[&TailPolyline],
     ) -> Direction {
         let current = tail.front().1;
         let current_safety = safety_distance(tail, obstacle_tails, current, arena);
@@ -145,9 +145,9 @@ fn candidate_directions(current: Direction) -> [Direction; 3] {
 }
 
 fn safest_direction(
-    tail: &TailPoints,
+    tail: &TailPolyline,
     arena: &ArenaConfig,
-    obstacle_tails: &[&TailPoints],
+    obstacle_tails: &[&TailPolyline],
     directions: &[Direction],
 ) -> Option<Direction> {
     directions.iter().copied().max_by(|a, b| {
@@ -158,8 +158,8 @@ fn safest_direction(
 }
 
 fn safety_distance(
-    tail: &TailPoints,
-    obstacle_tails: &[&TailPoints],
+    tail: &TailPolyline,
+    obstacle_tails: &[&TailPolyline],
     direction: Direction,
     arena: &ArenaConfig,
 ) -> f32 {
@@ -181,14 +181,14 @@ fn boundary_distance(position: Vec2, direction: Direction, arena: &ArenaConfig) 
     .max(0.0)
 }
 
-fn self_collision_distance(tail: &TailPoints, direction: Direction) -> f32 {
+fn self_collision_distance(tail: &TailPolyline, direction: Direction) -> f32 {
     let origin = tail.front().0 + direction.delta() * 0.01;
     tail_collision_distance(origin, direction, tail, 0.5)
 }
 
 fn obstacle_collision_distance(
-    tail: &TailPoints,
-    obstacle_tails: &[&TailPoints],
+    tail: &TailPolyline,
+    obstacle_tails: &[&TailPolyline],
     direction: Direction,
 ) -> f32 {
     let origin = tail.front().0 + direction.delta() * 0.01;
@@ -203,7 +203,7 @@ fn obstacle_collision_distance(
 fn tail_collision_distance(
     origin: Vec2,
     direction: Direction,
-    tail: &TailPoints,
+    tail: &TailPolyline,
     minimum_distance: f32,
 ) -> f32 {
     tail.pairs_front_to_back()
@@ -220,7 +220,7 @@ fn tail_collision_distance(
         .fold(LOOKAHEAD_DISTANCE, f32::min)
 }
 
-fn front_segment_length(tail: &TailPoints) -> f32 {
+fn front_segment_length(tail: &TailPolyline) -> f32 {
     tail.0
         .get(1)
         .map(|(next, _)| tail.front().0.distance(*next))
@@ -287,8 +287,8 @@ mod tests {
 
     use super::*;
 
-    fn tail(position: Vec2, direction: Direction) -> TailPoints {
-        TailPoints::new(VecDeque::from([
+    fn tail(position: Vec2, direction: Direction) -> TailPolyline {
+        TailPolyline::new(VecDeque::from([
             (position, direction),
             (position - direction.delta() * 100.0, direction),
         ]))
@@ -365,7 +365,7 @@ mod tests {
             width: 500.0,
             height: 500.0,
         };
-        let tail = TailPoints::new(VecDeque::from([
+        let tail = TailPolyline::new(VecDeque::from([
             (Vec2::new(10.0, 0.0), Direction::Right),
             (Vec2::ZERO, Direction::Right),
             (Vec2::new(0.0, -100.0), Direction::Up),
@@ -381,7 +381,7 @@ mod tests {
             width: 500.0,
             height: 500.0,
         };
-        let tail = TailPoints::new(VecDeque::from([
+        let tail = TailPolyline::new(VecDeque::from([
             (Vec2::ZERO, Direction::Up),
             (Vec2::new(0.0, -50.0), Direction::Up),
             (Vec2::new(50.0, -50.0), Direction::Left),
@@ -400,7 +400,7 @@ mod tests {
             height: 500.0,
         };
         let own_tail = tail(Vec2::ZERO, Direction::Up);
-        let obstacle_tail = TailPoints::new(VecDeque::from([
+        let obstacle_tail = TailPolyline::new(VecDeque::from([
             (Vec2::new(50.0, 20.0), Direction::Right),
             (Vec2::new(-50.0, 20.0), Direction::Right),
         ]));
@@ -418,7 +418,7 @@ mod tests {
             width: 500.0,
             height: 500.0,
         };
-        let tail = TailPoints::new(VecDeque::from([
+        let tail = TailPolyline::new(VecDeque::from([
             (Vec2::ZERO, Direction::Up),
             (Vec2::new(0.0, -200.0), Direction::Up),
         ]));

@@ -5,7 +5,9 @@ use lightyear::prelude::{ControlledBy, Interpolated, InterpolationDelay, LocalTi
 
 use crate::config::GameConfig;
 use crate::movement::SimulationSet;
-use crate::network::protocol::prelude::{RoomId, TailLength, TailPathHistory, TailPoints};
+use crate::network::protocol::prelude::{
+    RoomId, SnakeHead, TailLength, TailPathHistory, TailPoints, TailPolyline,
+};
 use crate::spatial::{TailSegment, TailSpatialIndex};
 use crate::utils::geometry::ray_segment_intersection;
 use crate::utils::query::Simulated;
@@ -53,7 +55,7 @@ pub const MAX_FRICTION_DISTANCE: f32 = 20.0;
 
 #[derive(Clone, Copy)]
 struct FrictionTail<'a> {
-    tail: &'a TailPoints,
+    tail: &'a TailPolyline,
     length: Option<&'a TailLength>,
     history: Option<&'a TailPathHistory>,
 }
@@ -65,10 +67,11 @@ pub(crate) fn snake_friction(
     config: Res<GameConfig>,
     timeline: Option<Res<LocalTimeline>>,
     clients: Query<&InterpolationDelay>,
-    boosted: Query<(Entity, &TailPoints, &RoomId, Option<&ControlledBy>), Simulated>,
+    boosted: Query<(Entity, &SnakeHead, &RoomId, Option<&ControlledBy>), Simulated>,
     tails: Query<
         (
             Entity,
+            &SnakeHead,
             &TailPoints,
             Option<&TailLength>,
             Option<&TailPathHistory>,
@@ -83,30 +86,57 @@ pub(crate) fn snake_friction(
         return;
     }
     let lag_compensation_enabled = config.network.lag_compensation.enabled;
+    let retained_extra_length = if lag_compensation_enabled {
+        crate::movement::lag_compensation_extra_length(&config)
+    } else {
+        0.0
+    };
+    let tail_snapshots = tails
+        .iter()
+        .map(|(entity, head, tail, length, history, room)| {
+            let length_value = length
+                .map(|length| {
+                    length.current_size
+                        + if history.is_some() {
+                            retained_extra_length
+                        } else {
+                            0.0
+                        }
+                })
+                .unwrap_or(0.0);
+            (
+                entity,
+                *room,
+                tail.polyline(head, length_value),
+                length,
+                history,
+            )
+        })
+        .collect::<Vec<_>>();
     let tail_index = TailSpatialIndex::from_tails(
-        tails
+        tail_snapshots
             .iter()
-            .map(|(entity, tail, _, _, room)| (entity, *room, tail)),
+            .map(|(entity, room, tail, _, _)| (*entity, *room, tail)),
     );
     let tail_lookup = lag_compensation_enabled.then(|| {
-        tails
+        tail_snapshots
             .iter()
-            .map(|(entity, tail, length, history, _)| {
+            .map(|(entity, _, tail, length, history)| {
                 (
-                    entity,
+                    *entity,
                     FrictionTail {
                         tail,
-                        length,
-                        history,
+                        length: *length,
+                        history: *history,
                     },
                 )
             })
             .collect::<EntityHashMap<_>>()
     });
     let tick = timeline.as_ref().map(|timeline| timeline.tick());
-    for (entity, tail, room, controlled_by) in boosted.iter() {
-        let origin = tail.front().0;
-        let direction = tail.front().1.delta();
+    for (entity, head, room, controlled_by) in boosted.iter() {
+        let origin = head.position;
+        let direction = head.direction.delta();
         let interpolation_delay = if tail_lookup.is_some() {
             controlled_by.and_then(|controlled_by| clients.get(controlled_by.owner).ok().copied())
         } else {
@@ -303,7 +333,7 @@ fn tail_collision_window(
     main: Entity,
     length: Option<&TailLength>,
     history: Option<&TailPathHistory>,
-    tail: &TailPoints,
+    tail: &TailPolyline,
     interpolation_delay: Option<InterpolationDelay>,
     tick: Option<Tick>,
 ) -> TailCollisionWindow {
@@ -343,7 +373,7 @@ fn tail_collision_window(
 }
 
 fn clipped_segment_for_window(
-    tail: &TailPoints,
+    tail: &TailPolyline,
     segment_index: usize,
     window: TailCollisionWindow,
 ) -> Option<(Vec2, Vec2)> {
@@ -381,7 +411,7 @@ fn nearest_tail_ray_hit_bruteforce<'a>(
     max_distance: f32,
     excluded: Entity,
     room: &RoomId,
-    tails: impl IntoIterator<Item = (Entity, &'a TailPoints, &'a RoomId)>,
+    tails: impl IntoIterator<Item = (Entity, &'a TailPolyline, &'a RoomId)>,
 ) -> Option<(f32, Entity)> {
     let mut nearest: Option<(f32, Entity)> = None;
     for (other_entity, other_tail, other_room) in tails {
@@ -424,59 +454,56 @@ mod tests {
         app.world_mut().run_schedule(FixedUpdate);
     }
 
+    fn legacy_tail<const N: usize>(
+        points: [(Vec2, Direction); N],
+    ) -> (SnakeHead, TailPoints, TailLength) {
+        let (head, length, tail) = TailPoints::from_legacy_polyline(VecDeque::from(points));
+        (head, tail, length)
+    }
+
+    fn polyline<const N: usize>(points: [(Vec2, Direction); N]) -> TailPolyline {
+        TailPolyline::new(VecDeque::from(points))
+    }
+
     #[test]
     fn indexed_friction_query_matches_bruteforce() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-
         let room = RoomId(1);
-        let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
-        app.world_mut().entity_mut(snake1).insert((
-            room,
-            TailPoints::new(VecDeque::from([
-                (Vec2::new(0.0, 0.0), Direction::Up),
-                (Vec2::new(0.0, -100.0), Direction::Up),
-            ])),
-        ));
-        let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        app.world_mut().entity_mut(snake2).insert((
-            room,
-            TailPoints::new(VecDeque::from([
-                (Vec2::new(8.0, 50.0), Direction::Up),
-                (Vec2::new(8.0, -50.0), Direction::Up),
-            ])),
-        ));
-        let other_room_snake = app.world_mut().spawn(SnakeBundle::default()).id();
-        app.world_mut().entity_mut(other_room_snake).insert((
-            RoomId(2),
-            TailPoints::new(VecDeque::from([
-                (Vec2::new(2.0, 50.0), Direction::Up),
-                (Vec2::new(2.0, -50.0), Direction::Up),
-            ])),
-        ));
-
-        let mut query = app.world_mut().query::<(
-            Entity,
-            &TailPoints,
-            Option<&TailLength>,
-            Option<&TailPathHistory>,
-            &RoomId,
-        )>();
+        let snake1 = Entity::from_bits(1);
+        let snake2 = Entity::from_bits(2);
+        let other_room_snake = Entity::from_bits(3);
+        let tail1 = polyline([
+            (Vec2::new(0.0, 0.0), Direction::Up),
+            (Vec2::new(0.0, -100.0), Direction::Up),
+        ]);
+        let tail2 = polyline([
+            (Vec2::new(8.0, 50.0), Direction::Up),
+            (Vec2::new(8.0, -50.0), Direction::Up),
+        ]);
+        let other_room_tail = polyline([
+            (Vec2::new(2.0, 50.0), Direction::Up),
+            (Vec2::new(2.0, -50.0), Direction::Up),
+        ]);
+        let tails = [
+            (snake1, tail1, room),
+            (snake2, tail2, room),
+            (other_room_snake, other_room_tail, RoomId(2)),
+        ];
         let index = TailSpatialIndex::from_tails(
-            query
-                .iter(app.world())
-                .map(|(entity, tail, _, _, room)| (entity, *room, tail)),
+            tails
+                .iter()
+                .map(|(entity, tail, room)| (*entity, *room, tail)),
         );
         let origin = Vec2::ZERO;
         let direction = Vec2::X;
-        let mut brute_force_query = app.world_mut().query::<(Entity, &TailPoints, &RoomId)>();
         let brute_force = nearest_tail_ray_hit_bruteforce(
             origin,
             direction,
             20.0,
             snake1,
             &room,
-            brute_force_query.iter(app.world()),
+            tails
+                .iter()
+                .map(|(entity, tail, room)| (*entity, tail, room)),
         );
         let indexed = nearest_tail_ray_hit(origin, direction, 20.0, snake1, room, &index);
 
@@ -494,23 +521,23 @@ mod tests {
         let snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         // snake2: vertical on the left of snake1
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints::new(VecDeque::from([
+        let points2 = legacy_tail([
             (Vec2::new(-MAX_FRICTION_DISTANCE / 1.5, 0.0), Direction::Up),
             (
                 Vec2::new(-MAX_FRICTION_DISTANCE / 1.5, -100.0),
                 Direction::Up,
             ),
-        ]));
+        ]);
         app.world_mut().entity_mut(snake2).insert(points2);
         // snake3: vertical on the right of snake1, closer than snake 2
         let snake3 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points3 = TailPoints::new(VecDeque::from([
+        let points3 = legacy_tail([
             (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 0.0), Direction::Up),
             (
                 Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),
                 Direction::Up,
             ),
-        ]));
+        ]);
         app.world_mut().entity_mut(snake3).insert(points3);
 
         run_fixed_update(&mut app);
@@ -563,13 +590,13 @@ mod tests {
 
         let _snake1 = app.world_mut().spawn(SnakeBundle::default()).id();
         let snake2 = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points2 = TailPoints::new(VecDeque::from([
+        let points2 = legacy_tail([
             (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 0.0), Direction::Up),
             (
                 Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),
                 Direction::Up,
             ),
-        ]));
+        ]);
         app.world_mut()
             .entity_mut(snake2)
             .insert((points2, RoomId(1)));
@@ -597,25 +624,21 @@ mod tests {
             .world_mut()
             .spawn((SnakeBundle::default(), Predicted))
             .id();
-        app.world_mut()
-            .entity_mut(predicted)
-            .insert(TailPoints::new(VecDeque::from([
-                (Vec2::ZERO, Direction::Up),
-                (Vec2::new(0.0, -100.0), Direction::Up),
-            ])));
+        app.world_mut().entity_mut(predicted).insert(legacy_tail([
+            (Vec2::ZERO, Direction::Up),
+            (Vec2::new(0.0, -100.0), Direction::Up),
+        ]));
         let remote = app
             .world_mut()
             .spawn((SnakeBundle::default(), Replicated, Interpolated))
             .id();
-        app.world_mut()
-            .entity_mut(remote)
-            .insert(TailPoints::new(VecDeque::from([
-                (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 100.0), Direction::Up),
-                (
-                    Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),
-                    Direction::Up,
-                ),
-            ])));
+        app.world_mut().entity_mut(remote).insert(legacy_tail([
+            (Vec2::new(MAX_FRICTION_DISTANCE / 2.0, 100.0), Direction::Up),
+            (
+                Vec2::new(MAX_FRICTION_DISTANCE / 2.0, -100.0),
+                Direction::Up,
+            ),
+        ]));
 
         run_fixed_update(&mut app);
 
@@ -641,19 +664,19 @@ mod tests {
         let room = RoomId(1);
         let victim = Entity::from_bits(1);
         let remote = Entity::from_bits(2);
-        let victim_tail = TailPoints::new(VecDeque::from([
+        let victim_tail = polyline([
             (Vec2::new(0.0, 50.0), Direction::Right),
             (Vec2::new(-10.0, 50.0), Direction::Right),
-        ]));
+        ]);
         let victim_length = TailLength {
             current_size: 10.0,
             target_size: 10.0,
         };
-        let remote_tail = TailPoints::new(VecDeque::from([
+        let remote_tail = polyline([
             (Vec2::new(5.0, 100.0), Direction::Up),
             (Vec2::new(5.0, 0.0), Direction::Up),
             (Vec2::new(5.0, -100.0), Direction::Up),
-        ]));
+        ]);
         let remote_length = TailLength {
             current_size: 100.0,
             target_size: 100.0,
@@ -708,19 +731,19 @@ mod tests {
         let room = RoomId(1);
         let victim = Entity::from_bits(1);
         let remote = Entity::from_bits(2);
-        let victim_tail = TailPoints::new(VecDeque::from([
+        let victim_tail = polyline([
             (Vec2::new(0.0, -50.0), Direction::Right),
             (Vec2::new(-10.0, -50.0), Direction::Right),
-        ]));
+        ]);
         let victim_length = TailLength {
             current_size: 10.0,
             target_size: 10.0,
         };
-        let remote_tail = TailPoints::new(VecDeque::from([
+        let remote_tail = polyline([
             (Vec2::new(5.0, 100.0), Direction::Up),
             (Vec2::new(5.0, 0.0), Direction::Up),
             (Vec2::new(5.0, -100.0), Direction::Up),
-        ]));
+        ]);
         let remote_length = TailLength {
             current_size: 100.0,
             target_size: 100.0,

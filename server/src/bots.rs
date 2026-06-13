@@ -82,7 +82,7 @@ fn maintain_bots(
     targets: Res<BotTargetOverrides>,
     time: Res<Time>,
     mut ids: ResMut<BotIdAllocator>,
-    tails: Query<(&TailPoints, Option<&TailLength>, &RoomId)>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
     mut bot_queries: ParamSet<(
         Query<(Entity, &Player, &RoomId), (With<Player>, With<BotMarker>)>,
         Query<
@@ -131,8 +131,8 @@ fn maintain_bots(
         for _ in existing.len()..target {
             let obstacle_tails = tails
                 .iter()
-                .filter(|(_, _, tail_room)| **tail_room == room.game_room)
-                .map(|(tail, length, _)| visible_tail(tail, length))
+                .filter(|(_, _, _, tail_room)| **tail_room == room.game_room)
+                .map(|(head, tail, length, _)| visible_tail(head, tail, length))
                 .collect::<Vec<_>>();
             spawn_bot(&mut commands, &config, *room, &mut ids, &obstacle_tails);
         }
@@ -160,8 +160,8 @@ fn maintain_bots(
         };
         let obstacle_tails = tails
             .iter()
-            .filter(|(_, _, tail_room)| **tail_room == *room)
-            .map(|(tail, length, _)| visible_tail(tail, length))
+            .filter(|(_, _, _, tail_room)| **tail_room == *room)
+            .map(|(head, tail, length, _)| visible_tail(head, tail, length))
             .collect::<Vec<_>>();
         let snake = spawn_bot_snake(
             &mut commands,
@@ -189,7 +189,7 @@ fn spawn_bot<'a>(
     config: &GameConfig,
     assignment: RoomAssignment,
     ids: &mut BotIdAllocator,
-    obstacle_tails: impl IntoIterator<Item = &'a TailPoints>,
+    obstacle_tails: impl IntoIterator<Item = &'a TailPolyline>,
 ) {
     let bot_id = ids.next();
     let snake = spawn_bot_snake(
@@ -220,7 +220,7 @@ fn spawn_bot_snake<'a>(
     room: RoomId,
     lightyear_room: LightyearRoomId,
     bot_id: PeerId,
-    obstacle_tails: impl IntoIterator<Item = &'a TailPoints>,
+    obstacle_tails: impl IntoIterator<Item = &'a TailPolyline>,
 ) -> Entity {
     let (spawn_position, spawn_direction) =
         snake_spawn_pose_avoiding(config, room, bot_id.to_bits(), obstacle_tails);
@@ -247,11 +247,18 @@ fn spawn_bot_snake<'a>(
 fn drive_bots(
     config: Res<GameConfig>,
     mut queries: ParamSet<(
-        Query<(Entity, &TailPoints, Option<&TailLength>, &RoomId)>,
+        Query<(
+            Entity,
+            &SnakeHead,
+            &TailPoints,
+            Option<&TailLength>,
+            &RoomId,
+        )>,
         Query<
             (
                 Entity,
                 &RoomId,
+                &mut SnakeHead,
                 &mut TailPoints,
                 &TailLength,
                 Option<&mut TailPointsDiffLog>,
@@ -264,29 +271,30 @@ fn drive_bots(
     let tail_snapshots = queries
         .p0()
         .iter()
-        .map(|(entity, tail, length, room)| (entity, *room, visible_tail(tail, length)))
+        .map(|(entity, head, tail, length, room)| (entity, *room, visible_tail(head, tail, length)))
         .collect::<Vec<_>>();
 
     let mut bot_query = queries.p1();
-    for (entity, room, mut tail, length, log, mut controller) in bot_query.iter_mut() {
+    for (entity, room, mut head, mut tail, length, log, mut controller) in bot_query.iter_mut() {
         let obstacle_tails = tail_snapshots
             .iter()
             .filter(|(other_entity, other_room, _)| *other_entity != entity && other_room == room)
             .map(|(_, _, tail)| tail)
             .collect::<Vec<_>>();
-        let visible_tail = tail.clipped_to_length(length.current_size);
+        let visible_tail = visible_tail(&head, &tail, Some(length));
         let direction =
             controller.choose_direction_avoiding(&visible_tail, &config.arena, &obstacle_tails);
-        if is_perpendicular_turn(tail.front().1, direction) {
-            let _ = turn_tail_with_log(tail.as_mut(), log, direction);
+        if is_perpendicular_turn(head.direction, direction) {
+            let _ = turn_tail_with_log(head.as_mut(), tail.as_mut(), log, direction);
         }
     }
 }
 
-fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
-    length
-        .map(|length| tail.clipped_to_length(length.current_size))
-        .unwrap_or_else(|| tail.clone())
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }
 
 #[cfg(test)]

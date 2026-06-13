@@ -6,7 +6,7 @@ use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::input::bei::Start;
 use lightyear::prelude::Predicted;
 use shared::config::GameConfig;
-use shared::network::protocol::prelude::{TailLength, TailPoints};
+use shared::network::protocol::prelude::{SnakeHead, TailLength};
 
 pub struct CameraPlugin {
     pub(crate) debug_enabled: bool,
@@ -86,8 +86,8 @@ fn follow_camera(
     camera_state: Res<State<CameraState>>,
     death_view: Res<DeathView>,
     mut shake: ResMut<CameraShake>,
-    predicted: Query<(&TailPoints, &TailLength), With<Predicted>>,
-    tails: Query<&TailPoints>,
+    predicted: Query<(&SnakeHead, &TailLength), With<Predicted>>,
+    tails: Query<&SnakeHead>,
     mut camera_query: Query<(&mut Transform, &mut Projection), With<Camera>>,
 ) {
     // how much we stick to the new position
@@ -95,11 +95,10 @@ fn follow_camera(
     // let lerp = 1.0;
     if let Ok((mut camera_pos, mut projection)) = camera_query.single_mut() {
         let mut has_target = false;
-        if let Ok((pos, tail_length)) = predicted.single() {
-            let head = pos.front().0;
+        if let Ok((head, tail_length)) = predicted.single() {
             // *camera_pos = Transform::from_translation(camera_pos.translation.mul_add(Vec3::splat(1.0 - lerp), Vec3::from((head, 0.0)) * lerp));
-            camera_pos.translation.x = head.x;
-            camera_pos.translation.y = head.y;
+            camera_pos.translation.x = head.position.x;
+            camera_pos.translation.y = head.position.y;
             has_target = true;
             if *camera_state.get() == CameraState::Follow {
                 smooth_camera_scale(
@@ -110,10 +109,9 @@ fn follow_camera(
                 );
             }
         } else if let Some(killer_snake) = death_view.killer_snake {
-            if let Ok(pos) = tails.get(killer_snake) {
-                let head = pos.front().0;
-                camera_pos.translation.x = head.x;
-                camera_pos.translation.y = head.y;
+            if let Ok(head) = tails.get(killer_snake) {
+                camera_pos.translation.x = head.position.x;
+                camera_pos.translation.y = head.position.y;
                 has_target = true;
             }
         }

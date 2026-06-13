@@ -13,9 +13,13 @@ impl Plugin for SnakeRenderPlugin {
 
 /// System that draws the boxed of the player positions.
 /// The components should be replicated from the server to the client
-pub(crate) fn draw_snakes(mut gizmos: Gizmos, tails: Query<&TailPoints, Without<Replicated>>) {
+pub(crate) fn draw_snakes(
+    mut gizmos: Gizmos,
+    tails: Query<(&SnakeHead, &TailPoints, &TailLength), Without<Replicated>>,
+) {
     let color = Color::srgb(0.0, 0.25, 1.0);
-    for points in tails.iter() {
+    for (head, points, length) in tails.iter() {
+        let points = points.polyline(head, length.current_size);
         // draw the head
         gizmos.rect_2d(points.front().0, Vec2::ONE * 10.0, color);
         points.pairs_front_to_back().for_each(|(start, end)| {

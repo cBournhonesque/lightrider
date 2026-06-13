@@ -56,7 +56,7 @@ fn add_recently_boosted_from_food_history(
         Entity,
         (
             With<Predicted>,
-            With<TailPoints>,
+            With<SnakeHead>,
             Without<RecentlyBoostedFromFood>,
         ),
     >,
@@ -75,7 +75,7 @@ fn predict_food_boosts(
     mut snakes: Query<
         (
             Entity,
-            &TailPoints,
+            &SnakeHead,
             &RoomId,
             &mut FoodBoost,
             &mut RecentlyBoostedFromFood,
@@ -93,12 +93,12 @@ fn predict_food_boosts(
         .collect::<Vec<_>>();
     let food_index = FoodSpatialIndex::from_food(candidates.iter().copied());
 
-    for (snake, tail, room, mut food_boost, mut recently_boosted) in &mut snakes {
+    for (snake, head, room, mut food_boost, mut recently_boosted) in &mut snakes {
         recently_boosted.retain_known_food(&candidates);
-        let near_food = food_index.within_radius(*room, tail.front().0, config.food.radius);
+        let near_food = food_index.within_radius(*room, head.position, config.food.radius);
         if let Some(food) = predict_food_boost_for_snake(
             &config,
-            tail,
+            head.position,
             *room,
             &mut food_boost,
             &mut recently_boosted,
@@ -122,13 +122,12 @@ fn predict_food_boosts(
 
 fn predict_food_boost_for_snake(
     config: &GameConfig,
-    tail: &TailPoints,
+    head: Vec2,
     room: RoomId,
     food_boost: &mut FoodBoost,
     recently_boosted: &mut RecentlyBoostedFromFood,
     foods: impl IntoIterator<Item = FoodPoint>,
 ) -> Option<Entity> {
-    let head = tail.front().0;
     let radius = config.food.radius.max(0.0);
     let food_boost_acceleration = config.movement.food_boost_acceleration.max(0.0);
     for food in foods {
@@ -164,8 +163,6 @@ impl RecentlyBoostedFromFood {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-
     use super::*;
 
     #[test]
@@ -173,10 +170,6 @@ mod tests {
         let config = GameConfig::default();
         let food = Entity::from_bits(42);
         let mut recently_boosted = RecentlyBoostedFromFood::default();
-        let tail = TailPoints::new(VecDeque::from([
-            (Vec2::ZERO, Direction::Right),
-            (Vec2::new(-80.0, 0.0), Direction::Right),
-        ]));
         let mut food_boost = FoodBoost::default();
         let candidate = FoodPoint {
             entity: food,
@@ -187,7 +180,7 @@ mod tests {
         assert_eq!(
             predict_food_boost_for_snake(
                 &config,
-                &tail,
+                Vec2::ZERO,
                 RoomId(7),
                 &mut food_boost,
                 &mut recently_boosted,
@@ -203,7 +196,7 @@ mod tests {
         assert_eq!(
             predict_food_boost_for_snake(
                 &config,
-                &tail,
+                Vec2::ZERO,
                 RoomId(7),
                 &mut food_boost,
                 &mut recently_boosted,
@@ -221,16 +214,12 @@ mod tests {
     fn predicted_food_boost_ignores_other_rooms() {
         let config = GameConfig::default();
         let mut recently_boosted = RecentlyBoostedFromFood::default();
-        let tail = TailPoints::new(VecDeque::from([
-            (Vec2::ZERO, Direction::Right),
-            (Vec2::new(-80.0, 0.0), Direction::Right),
-        ]));
         let mut food_boost = FoodBoost::default();
 
         assert_eq!(
             predict_food_boost_for_snake(
                 &config,
-                &tail,
+                Vec2::ZERO,
                 RoomId(1),
                 &mut food_boost,
                 &mut recently_boosted,
@@ -249,16 +238,12 @@ mod tests {
     fn predicted_food_boost_uses_server_pickup_radius() {
         let config = GameConfig::default();
         let mut recently_boosted = RecentlyBoostedFromFood::default();
-        let tail = TailPoints::new(VecDeque::from([
-            (Vec2::ZERO, Direction::Right),
-            (Vec2::new(-80.0, 0.0), Direction::Right),
-        ]));
         let mut food_boost = FoodBoost::default();
 
         assert_eq!(
             predict_food_boost_for_snake(
                 &config,
-                &tail,
+                Vec2::ZERO,
                 RoomId(1),
                 &mut food_boost,
                 &mut recently_boosted,

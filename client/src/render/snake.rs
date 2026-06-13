@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::AlphaMode2d;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Interpolated, Predicted, Replicated};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::collision::death::ConfirmedDeath;
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
@@ -21,6 +21,7 @@ const SNAKE_TAIL_Z: f32 = 10.0;
 const SNAKE_DEATH_Z: f32 = 16.0;
 const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.58;
 const MESH_CURVE_SEGMENTS: u32 = 14;
+const AXIS_REPAIR_EPSILON: f32 = 0.001;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SnakeVisual {
@@ -97,7 +98,7 @@ pub(crate) fn draw_snakes(
     mut gizmos: Gizmos,
     config: Res<GameConfig>,
     tails: Query<
-        (&TailPoints, Option<&TailLength>),
+        (&SnakeHead, &TailPoints, Option<&TailLength>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) {
@@ -109,8 +110,8 @@ pub(crate) fn draw_snakes(
     let head_color = Color::srgb(0.75, 0.95, 1.0);
     let tail_width = config.render.tail_width.max(1.0);
     let head_size = config.render.head_size.max(1.0);
-    for (points, length) in tails.iter() {
-        let points = visible_tail(points, length);
+    for (head, points, length) in tails.iter() {
+        let points = visible_tail(head, points, length);
         gizmos.rect_2d(points.front().0, Vec2::ONE * head_size, head_color);
         points.pairs_front_to_back().for_each(|(start, end)| {
             draw_tail_segment(&mut gizmos, start.0, end.0, tail_width, color);
@@ -129,7 +130,13 @@ fn sync_asset_snake_visuals(
     mut materials: ResMut<Assets<ColorMaterial>>,
     players: Query<&Player>,
     tails: Query<
-        (Entity, &TailPoints, Option<&TailLength>, Option<&HasPlayer>),
+        (
+            Entity,
+            &SnakeHead,
+            &TailPoints,
+            Option<&TailLength>,
+            Option<&HasPlayer>,
+        ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
     mut sprite_visuals: Query<
@@ -229,7 +236,13 @@ fn desired_snake_visuals(
     sheet: &PowerlineSpriteSheet,
     players: &Query<&Player>,
     tails: &Query<
-        (Entity, &TailPoints, Option<&TailLength>, Option<&HasPlayer>),
+        (
+            Entity,
+            &SnakeHead,
+            &TailPoints,
+            Option<&TailLength>,
+            Option<&HasPlayer>,
+        ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) -> (Vec<DesiredSnakeSpriteVisual>, Vec<DesiredSnakeMeshVisual>) {
@@ -240,8 +253,8 @@ fn desired_snake_visuals(
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
-    for (owner, points, length, player) in tails.iter() {
-        let points = visible_tail(points, length);
+    for (owner, head, points, length, player) in tails.iter() {
+        let points = visible_tail(head, points, length);
         let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
         sprite_desired.push(DesiredSnakeSpriteVisual {
@@ -328,10 +341,76 @@ fn desired_snake_visuals(
     (sprite_desired, mesh_desired)
 }
 
-fn visible_tail(points: &TailPoints, length: Option<&TailLength>) -> TailPoints {
-    length
-        .map(|length| points.clipped_to_length(length.current_size))
-        .unwrap_or_else(|| points.clone())
+fn visible_tail(
+    head: &SnakeHead,
+    points: &TailPoints,
+    length: Option<&TailLength>,
+) -> TailPolyline {
+    let length = length.map(|length| length.current_size).unwrap_or(0.0);
+    axis_aligned_tail(&points.polyline(head, length))
+}
+
+fn axis_aligned_tail(points: &TailPolyline) -> TailPolyline {
+    let Some(first) = points.0.front().copied() else {
+        return points.clone();
+    };
+
+    let mut repaired = VecDeque::with_capacity(points.0.len());
+    repaired.push_back(first);
+    for point in points.0.iter().skip(1).copied() {
+        let previous = *repaired
+            .back()
+            .expect("axis-aligned tail repair always keeps a front point");
+        if segment_is_axis_aligned(previous.0, point.0) {
+            repaired.push_back(point);
+            continue;
+        }
+
+        let corner = axis_aligned_corner(previous.0, point.0, point.1);
+        if previous.0.distance_squared(corner) > AXIS_REPAIR_EPSILON * AXIS_REPAIR_EPSILON
+            && point.0.distance_squared(corner) > AXIS_REPAIR_EPSILON * AXIS_REPAIR_EPSILON
+        {
+            repaired.push_back((
+                corner,
+                direction_between(corner, previous.0).unwrap_or(previous.1),
+            ));
+        }
+        repaired.push_back(point);
+    }
+
+    TailPolyline::new(repaired)
+}
+
+fn segment_is_axis_aligned(start: Vec2, end: Vec2) -> bool {
+    (start.x - end.x).abs() <= AXIS_REPAIR_EPSILON || (start.y - end.y).abs() <= AXIS_REPAIR_EPSILON
+}
+
+fn axis_aligned_corner(front: Vec2, back: Vec2, back_direction: Direction) -> Vec2 {
+    let delta = back_direction.delta();
+    if delta.x.abs() >= delta.y.abs() {
+        Vec2::new(front.x, back.y)
+    } else {
+        Vec2::new(back.x, front.y)
+    }
+}
+
+fn direction_between(start: Vec2, end: Vec2) -> Option<Direction> {
+    let delta = end - start;
+    if delta.x.abs() >= delta.y.abs() && delta.x.abs() > AXIS_REPAIR_EPSILON {
+        Some(if delta.x > 0.0 {
+            Direction::Right
+        } else {
+            Direction::Left
+        })
+    } else if delta.y.abs() > AXIS_REPAIR_EPSILON {
+        Some(if delta.y > 0.0 {
+            Direction::Up
+        } else {
+            Direction::Down
+        })
+    } else {
+        None
+    }
 }
 
 fn snake_visual_color(
@@ -406,7 +485,13 @@ fn spawn_snake_death_animations(
     mut deaths: MessageReader<ConfirmedDeath>,
     mut mesh_assets: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    tails: Query<(Entity, &TailPoints, Option<&TailLength>, Option<&HasPlayer>)>,
+    tails: Query<(
+        Entity,
+        &SnakeHead,
+        &TailPoints,
+        Option<&TailLength>,
+        Option<&HasPlayer>,
+    )>,
 ) {
     if !config.render.use_assets {
         for _ in deaths.read() {}
@@ -418,7 +503,7 @@ fn spawn_snake_death_animations(
         let live_tail = tails
             .get(death.message.killed_snake)
             .ok()
-            .map(|(_, tail, length, _)| visible_tail(tail, length));
+            .map(|(_, head, tail, length, _)| visible_tail(head, tail, length));
         let tail = if death.local_player {
             death.tail.clone().or(live_tail)
         } else {
@@ -672,6 +757,12 @@ fn draw_tail_segment(gizmos: &mut Gizmos, start: Vec2, end: Vec2, width: f32, co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    fn tail_is_axis_aligned(tail: &TailPolyline) -> bool {
+        tail.pairs_front_to_back()
+            .all(|(start, end)| segment_is_axis_aligned(start.0, end.0))
+    }
 
     #[test]
     fn death_animation_spawns_position_fallback_without_tail_snapshot() {
@@ -706,5 +797,45 @@ mod tests {
 
         let mut query = app.world_mut().query::<&SnakeDeathVisual>();
         assert_eq!(query.iter(app.world()).count(), 1);
+    }
+
+    #[test]
+    fn visible_tail_repairs_transient_diagonal_segments() {
+        let tail = TailPolyline::new(VecDeque::from([
+            (Vec2::new(10.0, 10.0), Direction::Right),
+            (Vec2::ZERO, Direction::Right),
+        ]));
+
+        let visible = axis_aligned_tail(&tail);
+
+        assert!(tail_is_axis_aligned(&visible));
+        assert_eq!(
+            visible.0,
+            VecDeque::from([
+                (Vec2::new(10.0, 10.0), Direction::Right),
+                (Vec2::new(10.0, 0.0), Direction::Up),
+                (Vec2::ZERO, Direction::Right),
+            ])
+        );
+    }
+
+    #[test]
+    fn visible_tail_clips_repaired_path_to_length() {
+        let tail = TailPolyline::new(VecDeque::from([
+            (Vec2::new(10.0, 10.0), Direction::Right),
+            (Vec2::ZERO, Direction::Right),
+        ]));
+
+        let visible = axis_aligned_tail(&tail).clipped_to_length(10.0);
+
+        assert!(tail_is_axis_aligned(&visible));
+        assert_eq!(visible.total_length(), 10.0);
+        assert_eq!(
+            visible.0,
+            VecDeque::from([
+                (Vec2::new(10.0, 10.0), Direction::Right),
+                (Vec2::new(10.0, 0.0), Direction::Up),
+            ])
+        );
     }
 }

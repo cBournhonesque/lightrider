@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use crate::network::protocol::prelude::{RoomId, TailPoints};
+use crate::network::protocol::prelude::{RoomId, TailPolyline};
 
 const AXIS_EPSILON: f32 = 0.001;
 const DEFAULT_TAIL_CELL_SIZE: f32 = 64.0;
@@ -81,7 +81,7 @@ impl TailSpatialIndex {
     }
 
     pub fn from_tails<'a>(
-        tails: impl IntoIterator<Item = (Entity, RoomId, &'a TailPoints)>,
+        tails: impl IntoIterator<Item = (Entity, RoomId, &'a TailPolyline)>,
     ) -> Self {
         let mut index = Self::default();
         for (owner, room, tail) in tails {
@@ -90,7 +90,7 @@ impl TailSpatialIndex {
         index
     }
 
-    pub fn insert_tail(&mut self, owner: Entity, room: RoomId, tail: &TailPoints) {
+    pub fn insert_tail(&mut self, owner: Entity, room: RoomId, tail: &TailPolyline) {
         for (segment_index, (segment_start, segment_end)) in tail.pairs_front_to_back().enumerate()
         {
             let Some(segment) =
@@ -318,8 +318,8 @@ mod tests {
 
     use super::*;
 
-    fn tail(points: impl IntoIterator<Item = (Vec2, Direction)>) -> TailPoints {
-        TailPoints::new(VecDeque::from_iter(points))
+    fn tail(points: impl IntoIterator<Item = (Vec2, Direction)>) -> TailPolyline {
+        TailPolyline::new(VecDeque::from_iter(points))
     }
 
     #[test]

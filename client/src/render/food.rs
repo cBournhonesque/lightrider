@@ -131,7 +131,7 @@ fn spawn_confirmed_food_pickup_animations(
     config: Res<GameConfig>,
     sheet: Res<PowerlineSpriteSheet>,
     mut pickups: MessageReader<ConfirmedFoodPickup>,
-    snakes: Query<&TailPoints>,
+    snakes: Query<&SnakeHead>,
     visuals: Query<(Entity, &FoodVisual)>,
 ) {
     if !config.render.use_assets {
@@ -149,7 +149,7 @@ fn spawn_confirmed_food_pickup_animations(
         let start = pickup.collision.food_position;
         let end = snakes
             .get(pickup.collision.snake)
-            .map(|tail| tail.front().0)
+            .map(|head| head.position)
             .unwrap_or(pickup.collision.head_position);
         let color = food_color(pickup.collision.food);
         commands.spawn((
@@ -170,7 +170,7 @@ fn spawn_confirmed_food_pickup_animations(
 fn update_food_pickup_animations(
     mut commands: Commands,
     time: Res<Time>,
-    tails: Query<&TailPoints>,
+    heads: Query<&SnakeHead>,
     mut animations: Query<(
         Entity,
         &mut FoodPickupAnimation,
@@ -186,9 +186,9 @@ fn update_food_pickup_animations(
             continue;
         }
 
-        let end = tails
+        let end = heads
             .get(animation.snake)
-            .map(|tail| tail.front().0)
+            .map(|head| head.position)
             .unwrap_or(animation.fallback_end);
         let eased = t * t;
         transform.translation = animation

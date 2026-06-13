@@ -9,7 +9,7 @@ use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Client, Controlled, Link, Predicted};
 use shared::config::{ArenaConfig, GameConfig};
 use shared::network::protocol::prelude::{
-    Player, PlayerDeathStats, PlayerStatus, RoomId, TailLength, TailPoints,
+    Player, PlayerDeathStats, PlayerStatus, RoomId, SnakeHead, TailLength, TailPoints, TailPolyline,
 };
 use std::{collections::HashSet, time::Duration};
 
@@ -403,8 +403,8 @@ fn update_minimap(
     leaderboard_state: Res<LeaderboardState>,
     minimap_root: Query<Entity, With<MiniMapRoot>>,
     players: Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
-    predicted_tails: Query<(&TailPoints, Option<&TailLength>), With<Predicted>>,
-    tails: Query<(&TailPoints, Option<&TailLength>)>,
+    predicted_tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>), With<Predicted>>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
     mut dots: Query<(&MiniMapDot, &mut Node, &mut Visibility), Without<MiniMapTrailSegment>>,
     mut trail_segments: Query<
         (
@@ -423,12 +423,12 @@ fn update_minimap(
     let local_tail = predicted_tails
         .single()
         .ok()
-        .map(|(tail, length)| visible_tail(tail, length))
+        .map(|(head, tail, length)| visible_tail(head, tail, length))
         .or_else(|| {
             local_player
                 .and_then(|(_, player, _, _)| player.snake)
                 .and_then(|snake| tails.get(snake).ok())
-                .map(|(tail, length)| visible_tail(tail, length))
+                .map(|(head, tail, length)| visible_tail(head, tail, length))
         });
     let local_position = local_tail.as_ref().map(snake_head);
     let leader_entity = local_room.and_then(|room| {
@@ -570,8 +570,8 @@ fn update_death_overlay(
 fn desired_minimap_trails(
     players: &Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
     local_room: Option<RoomId>,
-    local_tail: Option<&TailPoints>,
-    tails: &Query<(&TailPoints, Option<&TailLength>)>,
+    local_tail: Option<&TailPolyline>,
+    tails: &Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
     arena: &ArenaConfig,
 ) -> Vec<DesiredMiniMapTrailSegment> {
     let mut desired = Vec::new();
@@ -589,7 +589,7 @@ fn desired_minimap_trails(
             player
                 .snake
                 .and_then(|snake| tails.get(snake).ok())
-                .map(|(tail, length)| visible_tail(tail, length))
+                .map(|(head, tail, length)| visible_tail(head, tail, length))
         };
         let Some(tail) = tail else {
             continue;
@@ -612,20 +612,21 @@ fn desired_minimap_trails(
 
 fn player_position(
     player: &Player,
-    tails: &Query<(&TailPoints, Option<&TailLength>)>,
+    tails: &Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
 ) -> Option<Vec2> {
-    let (tail, length) = player.snake.and_then(|snake| tails.get(snake).ok())?;
-    Some(snake_head(&visible_tail(tail, length)))
+    let (head, tail, length) = player.snake.and_then(|snake| tails.get(snake).ok())?;
+    Some(snake_head(&visible_tail(head, tail, length)))
 }
 
-fn snake_head(tail: &TailPoints) -> Vec2 {
+fn snake_head(tail: &TailPolyline) -> Vec2 {
     tail.front().0
 }
 
-fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
-    length
-        .map(|length| tail.clipped_to_length(length.current_size))
-        .unwrap_or_else(|| tail.clone())
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }
 
 #[cfg(test)]
@@ -662,7 +663,7 @@ fn minimap_position_for_size(
     (Vec2::new(normalized_x * max.x, normalized_y * max.y) + offset).clamp(Vec2::ZERO, max)
 }
 
-fn minimap_trail_nodes(tail: &TailPoints, arena: &ArenaConfig) -> Vec<(usize, Node)> {
+fn minimap_trail_nodes(tail: &TailPolyline, arena: &ArenaConfig) -> Vec<(usize, Node)> {
     tail.pairs_front_to_back()
         .enumerate()
         .filter_map(|(index, (start, end))| {

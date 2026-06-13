@@ -1,7 +1,7 @@
 use crate::collision::collider::{snake_friction, SnakeFrictionEvent};
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
-use bevy_replicon::prelude::{DiffLog, Diffable as RepliconDiffable};
+use bevy_replicon::prelude::{Diffable as RepliconDiffable, PatchHistory};
 use lightyear::prelude::input::bei::Fire;
 
 use crate::config::GameConfig;
@@ -12,7 +12,7 @@ use lightyear::prelude::LocalTimeline;
 
 pub struct MovementPlugin;
 
-pub type TailPointsDiffLog = DiffLog<TailPoints>;
+pub type TailPointsDiffLog = PatchHistory<TailPoints>;
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum SimulationSet {
@@ -51,15 +51,22 @@ impl Plugin for MovementPlugin {
 // 1. turn heads according to input
 pub fn turn_head_from_input(
     trigger: On<Fire<MoveSnake>>,
-    mut query: Query<(&mut TailPoints, Option<&mut DiffLog<TailPoints>>), Simulated>,
+    mut query: Query<
+        (
+            &mut SnakeHead,
+            &mut TailPoints,
+            Option<&mut PatchHistory<TailPoints>>,
+        ),
+        Simulated,
+    >,
 ) {
     let Some(direction) = direction_from_input(trigger.value) else {
         return;
     };
-    let Ok((mut tail, log)) = query.get_mut(trigger.context) else {
+    let Ok((mut head, mut tail, log)) = query.get_mut(trigger.context) else {
         return;
     };
-    let _ = turn_tail_with_log(tail.as_mut(), log, direction);
+    let _ = turn_tail_with_log(&mut head, &mut tail, log, direction);
 }
 
 pub fn direction_from_input(input: Vec2) -> Option<Direction> {
@@ -79,26 +86,25 @@ pub fn direction_from_input(input: Vec2) -> Option<Direction> {
     }
 }
 
-pub fn turn_tail(tail: &mut TailPoints, requested: Direction) {
-    let _ = turn_tail_with_log(tail, None, requested);
+pub fn turn_tail(head: &mut SnakeHead, tail: &mut TailPoints, requested: Direction) {
+    let _ = turn_tail_with_log(head, tail, None, requested);
 }
 
 pub fn turn_tail_with_log<'a>(
+    head: &mut SnakeHead,
     tail: &mut TailPoints,
-    log: Option<Mut<'a, DiffLog<TailPoints>>>,
+    log: Option<Mut<'a, PatchHistory<TailPoints>>>,
     requested: Direction,
-) -> Option<Mut<'a, DiffLog<TailPoints>>> {
-    let current = tail.front().1;
+) -> Option<Mut<'a, PatchHistory<TailPoints>>> {
+    let current = head.direction;
     if is_perpendicular_turn(current, requested) {
-        let position = tail.front().0;
-        return apply_tail_op(
+        let log = apply_tail_op(
             tail,
             log,
-            TailPointsOp::SetFrontDirectionAndPush {
-                position,
-                direction: requested,
-            },
+            TailPointsOp::PushTurn(TailTurn::new(head.position, current.opposite())),
         );
+        head.direction = requested;
+        return log;
     }
     log
 }
@@ -188,8 +194,9 @@ pub fn update_tails(
     timeline: Option<Res<LocalTimeline>>,
     mut query: Query<
         (
+            &mut SnakeHead,
             &mut TailPoints,
-            Option<&mut DiffLog<TailPoints>>,
+            Option<&mut PatchHistory<TailPoints>>,
             &mut TailLength,
             &mut Speed,
             &Acceleration,
@@ -207,8 +214,16 @@ pub fn update_tails(
         0.0
     };
     let max_history_samples = usize::from(config.network.lag_compensation.max_delay_ticks) + 3;
-    for (mut tail, log, mut length, mut speed, acceleration, has_simulation_authority, history) in
-        query.iter_mut()
+    for (
+        mut head,
+        mut tail,
+        log,
+        mut length,
+        mut speed,
+        acceleration,
+        has_simulation_authority,
+        mut history,
+    ) in query.iter_mut()
     {
         // 4. update acceleration and speed
         // update velocity
@@ -222,14 +237,9 @@ pub fn update_tails(
         }
 
         // update position
-        let next_position = tail.front().0 + tail.front().1.delta() * speed.0;
-        let moved_distance = tail.front().0.distance(next_position);
-        let _ = apply_tail_op(
-            tail.as_mut(),
-            log,
-            TailPointsOp::SetFrontPosition(next_position),
-        );
-        let mut history = history;
+        let next_position = head.position + head.direction.delta() * speed.0;
+        let moved_distance = head.position.distance(next_position);
+        head.position = next_position;
         if lag_compensation_enabled {
             if let Some(history) = history.as_deref_mut() {
                 history.advance_head(moved_distance);
@@ -244,7 +254,13 @@ pub fn update_tails(
         } else {
             0.0
         };
-        shorten_tail_with_retention(tail.as_mut(), length.as_mut(), retained_extra_length);
+        let _ = shorten_tail_with_retention_with_log(
+            head.as_ref(),
+            &mut tail,
+            log,
+            length.as_mut(),
+            retained_extra_length,
+        );
         if lag_compensation_enabled {
             if let (Some(timeline), Some(history)) = (timeline.as_ref(), history.as_deref_mut()) {
                 history.record_sample(timeline.tick(), length.current_size, max_history_samples);
@@ -255,9 +271,9 @@ pub fn update_tails(
 
 fn apply_tail_op<'a>(
     tail: &mut TailPoints,
-    mut log: Option<Mut<'a, DiffLog<TailPoints>>>,
+    mut log: Option<Mut<'a, PatchHistory<TailPoints>>>,
     op: TailPointsOp,
-) -> Option<Mut<'a, DiffLog<TailPoints>>> {
+) -> Option<Mut<'a, PatchHistory<TailPoints>>> {
     RepliconDiffable::apply_patch(tail, &op)
         .expect("tail diff patches should be valid for live TailPoints");
     if let Some(log) = log.as_mut() {
@@ -267,35 +283,51 @@ fn apply_tail_op<'a>(
 }
 
 /// Shorten the tail to match the target size
-pub fn shorten_tail(tail: &mut TailPoints, tail_length: &mut TailLength) {
+pub fn shorten_tail(head: &SnakeHead, tail: &mut TailPoints, tail_length: &mut TailLength) {
     // if we still need to grow the tail, do nothing
     if tail_length.target_size >= tail_length.current_size {
         return;
     }
 
-    // we need to shorten the tail
-    let shorten_amount = tail_length.current_size - tail_length.target_size;
-    tail.shorten_by(shorten_amount);
+    let _ = tail.prune_to_length(head, tail_length.target_size);
     tail_length.current_size = tail_length.target_size;
 }
 
+#[cfg(test)]
 fn shorten_tail_with_retention(
+    head: &SnakeHead,
     tail: &mut TailPoints,
     tail_length: &mut TailLength,
     retained_extra_length: f32,
 ) {
+    let _ =
+        shorten_tail_with_retention_with_log(head, tail, None, tail_length, retained_extra_length);
+}
+
+fn shorten_tail_with_retention_with_log<'a>(
+    head: &SnakeHead,
+    tail: &mut TailPoints,
+    log: Option<Mut<'a, PatchHistory<TailPoints>>>,
+    tail_length: &mut TailLength,
+    retained_extra_length: f32,
+) -> Option<Mut<'a, PatchHistory<TailPoints>>> {
+    let mut log = log;
     if tail_length.target_size < tail_length.current_size {
         tail_length.current_size = tail_length.target_size;
     }
 
     let retained_length = tail_length.current_size + retained_extra_length.max(0.0);
-    let excess = tail.total_length() - retained_length;
-    if excess > 0.0 {
-        tail.shorten_by(excess);
+    let removed = tail.prune_to_length(head, retained_length);
+    if removed > 0 {
+        let op = TailPointsOp::RemoveTailTurns(removed.min(u16::MAX as usize) as u16);
+        if let Some(log) = log.as_mut() {
+            log.record(op);
+        }
     }
+    log
 }
 
-fn lag_compensation_extra_length(config: &GameConfig) -> f32 {
+pub fn lag_compensation_extra_length(config: &GameConfig) -> f32 {
     if !config.network.lag_compensation.enabled {
         return 0.0;
     }
@@ -312,17 +344,16 @@ mod tests {
     use lightyear::prelude::{Interpolated, Predicted, Replicated};
 
     fn create_snake(app: &mut App) -> Entity {
+        let (head, length, tail) = TailPoints::from_legacy_polyline(VecDeque::from(vec![
+            (Vec2::new(50.0, 100.0), Direction::Right),
+            (Vec2::new(0.0, 100.0), Direction::Right),
+            (Vec2::new(0.0, 0.0), Direction::Up),
+        ]));
         app.world_mut()
             .spawn((
-                TailPoints::new(VecDeque::from(vec![
-                    (Vec2::new(50.0, 100.0), Direction::Right),
-                    (Vec2::new(0.0, 100.0), Direction::Right),
-                    (Vec2::new(0.0, 0.0), Direction::Up),
-                ])),
-                TailLength {
-                    current_size: 150.0,
-                    target_size: 150.0,
-                },
+                head,
+                tail,
+                length,
                 Speed(0.5),
                 Acceleration(0.0),
                 FoodBoost::default(),
@@ -337,10 +368,17 @@ mod tests {
     fn head_position(app: &App, snake: Entity) -> Vec2 {
         app.world()
             .entity(snake)
-            .get::<TailPoints>()
+            .get::<SnakeHead>()
             .unwrap()
-            .front()
-            .0
+            .position
+    }
+
+    fn visible_tail(app: &App, snake: Entity) -> TailPolyline {
+        let entity = app.world().entity(snake);
+        let head = entity.get::<SnakeHead>().unwrap();
+        let tail = entity.get::<TailPoints>().unwrap();
+        let length = entity.get::<TailLength>().unwrap();
+        tail.polyline(head, length.current_size)
     }
 
     #[test]
@@ -358,22 +396,26 @@ mod tests {
 
     #[test]
     fn turn_tail_rejects_same_axis_turns() {
-        let mut tail = TailPoints::new(VecDeque::from(vec![
-            (Vec2::ZERO, Direction::Up),
-            (Vec2::new(0.0, -10.0), Direction::Up),
-        ]));
+        let mut head = SnakeHead {
+            position: Vec2::ZERO,
+            direction: Direction::Up,
+        };
+        let mut tail = TailPoints::empty();
 
-        turn_tail(&mut tail, Direction::Down);
-        assert_eq!(tail.front().1, Direction::Up);
-        assert_eq!(tail.0.len(), 2);
+        turn_tail(&mut head, &mut tail, Direction::Down);
+        assert_eq!(head.direction, Direction::Up);
+        assert!(tail.turns.is_empty());
 
-        turn_tail(&mut tail, Direction::Right);
-        assert_eq!(tail.front().1, Direction::Right);
-        assert_eq!(tail.0.len(), 3);
+        turn_tail(&mut head, &mut tail, Direction::Right);
+        assert_eq!(head.direction, Direction::Right);
+        assert_eq!(
+            tail.turns,
+            VecDeque::from([TailTurn::new(Vec2::ZERO, Direction::Down)])
+        );
 
-        turn_tail(&mut tail, Direction::Left);
-        assert_eq!(tail.front().1, Direction::Right);
-        assert_eq!(tail.0.len(), 3);
+        turn_tail(&mut head, &mut tail, Direction::Left);
+        assert_eq!(head.direction, Direction::Right);
+        assert_eq!(tail.turns.len(), 1);
     }
 
     #[test]
@@ -440,7 +482,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SnakeBundle::default(),
-                DiffLog::<TailPoints>::default(),
+                PatchHistory::<TailPoints>::default(),
                 Replicated,
                 Interpolated,
                 SimulationAuthority,
@@ -452,7 +494,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .entity(snake)
-                .get::<DiffLog<TailPoints>>()
+                .get::<PatchHistory<TailPoints>>()
                 .unwrap()
                 .current_cursor(),
             None
@@ -470,7 +512,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SnakeBundle::default(),
-                DiffLog::<TailPoints>::default(),
+                PatchHistory::<TailPoints>::default(),
                 Predicted,
             ))
             .id();
@@ -483,7 +525,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .entity(snake)
-                .get::<DiffLog<TailPoints>>()
+                .get::<PatchHistory<TailPoints>>()
                 .unwrap()
                 .current_cursor(),
             None
@@ -511,9 +553,9 @@ mod tests {
 
     fn shorten_snake_entity(app: &mut App, snake: Entity) {
         let world = app.world_mut();
-        let mut query = world.query::<(&mut TailPoints, &mut TailLength)>();
-        let (mut tail, mut length) = query.get_mut(world, snake).unwrap();
-        shorten_tail(&mut tail, &mut length);
+        let mut query = world.query::<(&SnakeHead, &mut TailPoints, &mut TailLength)>();
+        let (head, mut tail, mut length) = query.get_mut(world, snake).unwrap();
+        shorten_tail(head, &mut tail, &mut length);
     }
 
     #[test]
@@ -531,8 +573,8 @@ mod tests {
 
         // check that the tail has been shortened
         assert_eq!(
-            app.world().entity(snake).get::<TailPoints>().unwrap(),
-            &TailPoints::new(VecDeque::from(vec![
+            visible_tail(&app, snake),
+            TailPolyline::new(VecDeque::from(vec![
                 (Vec2::new(50.0, 100.0), Direction::Right),
                 (Vec2::new(0.0, 100.0), Direction::Right),
                 (Vec2::new(0.0, 20.0), Direction::Up),
@@ -557,8 +599,8 @@ mod tests {
 
         // check that the last point got removed
         assert_eq!(
-            app.world().entity(snake).get::<TailPoints>().unwrap(),
-            &TailPoints::new(VecDeque::from(vec![
+            visible_tail(&app, snake),
+            TailPolyline::new(VecDeque::from(vec![
                 (Vec2::new(50.0, 100.0), Direction::Right),
                 (Vec2::new(0.0, 100.0), Direction::Right),
             ]))
@@ -582,8 +624,8 @@ mod tests {
 
         // check that it works even with one segment
         assert_eq!(
-            app.world().entity(snake).get::<TailPoints>().unwrap(),
-            &TailPoints::new(VecDeque::from(vec![
+            visible_tail(&app, snake),
+            TailPolyline::new(VecDeque::from(vec![
                 (Vec2::new(50.0, 100.0), Direction::Right),
                 (Vec2::new(20.0, 100.0), Direction::Right),
             ]))
@@ -600,24 +642,28 @@ mod tests {
 
     #[test]
     fn retained_authoritative_tail_keeps_extra_path_without_changing_visible_length() {
-        let mut tail = TailPoints::new(VecDeque::from(vec![
-            (Vec2::new(100.0, 0.0), Direction::Right),
-            (Vec2::new(0.0, 0.0), Direction::Right),
-        ]));
+        let head = SnakeHead {
+            position: Vec2::new(100.0, 100.0),
+            direction: Direction::Right,
+        };
+        let mut tail = TailPoints::new(VecDeque::from([TailTurn::new(
+            Vec2::new(0.0, 100.0),
+            Direction::Down,
+        )]));
         let mut length = TailLength {
             current_size: 100.0,
             target_size: 80.0,
         };
 
-        shorten_tail_with_retention(&mut tail, &mut length, 25.0);
+        shorten_tail_with_retention(&head, &mut tail, &mut length, 25.0);
 
         assert_eq!(length.current_size, 80.0);
-        assert_eq!(tail.total_length(), 100.0);
+        assert_eq!(tail.turns.len(), 1);
 
         length.target_size = 60.0;
-        shorten_tail_with_retention(&mut tail, &mut length, 25.0);
+        shorten_tail_with_retention(&head, &mut tail, &mut length, 25.0);
 
         assert_eq!(length.current_size, 60.0);
-        assert_eq!(tail.total_length(), 85.0);
+        assert!(tail.turns.is_empty());
     }
 }

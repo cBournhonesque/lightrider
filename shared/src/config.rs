@@ -114,7 +114,7 @@ impl Default for MovementConfig {
             min_speed: 0.85,
             max_speed: 4.0,
             base_acceleration: -0.01,
-            food_boost_acceleration: 0.03,
+            food_boost_acceleration: 0.012,
             food_boost_decay: 0.94,
             boost_acceleration_ratio: 2.0,
             boost_distance: 20.0,
@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(config.food.radius, 45.0);
         assert_eq!(config.food.max_count, 600);
         assert_eq!(config.food.death_food_max, 120);
-        assert_eq!(config.movement.food_boost_acceleration, 0.03);
+        assert_eq!(config.movement.food_boost_acceleration, 0.012);
         assert_eq!(config.movement.food_boost_decay, 0.94);
         assert_eq!(config.rooms.max_players_per_room, 50);
         assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);

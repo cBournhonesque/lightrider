@@ -7,7 +7,8 @@ use bevy::prelude::*;
 use lightyear::prelude::{Client, Controlled, MessageReceiver, Predicted};
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::{
-    DeathReason, HasPlayer, Player, PlayerDeath, PlayerDeathStats, TailPoints,
+    DeathReason, HasPlayer, Player, PlayerDeath, PlayerDeathStats, SnakeHead, TailLength,
+    TailPoints, TailPolyline,
 };
 
 pub(crate) struct DeathPlugin;
@@ -17,11 +18,11 @@ pub(crate) struct ConfirmedDeath {
     pub(crate) message: PlayerDeath,
     pub(crate) local_player: bool,
     pub(crate) position: Option<Vec2>,
-    pub(crate) tail: Option<TailPoints>,
+    pub(crate) tail: Option<TailPolyline>,
 }
 
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
-struct LastLocalSnakeTail(Option<TailPoints>);
+struct LastLocalSnakeTail(Option<TailPolyline>);
 
 #[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
 pub(crate) struct DeathView {
@@ -79,7 +80,7 @@ fn handle_death_message(
     time: Res<Time>,
     mut receivers: Query<&mut MessageReceiver<PlayerDeath>, With<Client>>,
     player: Query<(Entity, &Player), With<Controlled>>,
-    tails: Query<&TailPoints>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
     local_tail_cache: Res<LastLocalSnakeTail>,
     mut confirmed_deaths: MessageWriter<ConfirmedDeath>,
 ) {
@@ -111,13 +112,16 @@ fn handle_death_message(
 }
 
 fn cache_local_snake_tail(
-    local_snakes: Query<&TailPoints, (With<Controlled>, With<Predicted>)>,
+    local_snakes: Query<
+        (&SnakeHead, &TailPoints, Option<&TailLength>),
+        (With<Controlled>, With<Predicted>),
+    >,
     player: Query<&Player, With<Controlled>>,
-    tails: Query<&TailPoints>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
     mut cache: ResMut<LastLocalSnakeTail>,
 ) {
     if let Ok(tail) = local_snakes.single() {
-        cache.0 = Some(tail.clone());
+        cache.0 = Some(visible_tail(tail.0, tail.1, tail.2));
         return;
     }
 
@@ -129,15 +133,15 @@ fn cache_local_snake_tail(
     else {
         return;
     };
-    cache.0 = Some(tail.clone());
+    cache.0 = Some(visible_tail(tail.0, tail.1, tail.2));
 }
 
 fn death_tail_snapshot(
     message: &PlayerDeath,
-    tails: &Query<&TailPoints>,
+    tails: &Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
     local_player: Option<(Entity, &Player)>,
     local_tail_cache: &LastLocalSnakeTail,
-) -> Option<TailPoints> {
+) -> Option<TailPolyline> {
     let local_tail = || {
         let (player_entity, player) = local_player?;
         if player_entity != message.killed_player {
@@ -146,24 +150,37 @@ fn death_tail_snapshot(
         local_tail_cache.0.clone().or_else(|| {
             player
                 .snake
-                .and_then(|snake| tails.get(snake).ok().cloned())
+                .and_then(|snake| tails.get(snake).ok())
+                .map(|(head, tail, length)| visible_tail(head, tail, length))
         })
     };
-    local_tail().or_else(|| tails.get(message.killed_snake).ok().cloned())
+    local_tail().or_else(|| {
+        tails
+            .get(message.killed_snake)
+            .ok()
+            .map(|(head, tail, length)| visible_tail(head, tail, length))
+    })
 }
 
 fn death_position(
     message: &PlayerDeath,
-    tails: &Query<&TailPoints>,
-    tail_snapshot: Option<&TailPoints>,
+    tails: &Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
+    tail_snapshot: Option<&TailPolyline>,
 ) -> Option<Vec2> {
     tail_snapshot.map(|tail| tail.front().0).or_else(|| {
         tails
             .get(message.killed_snake)
             .or_else(|_| tails.get(message.killer_snake))
             .ok()
-            .map(|tail| tail.front().0)
+            .map(|(head, _, _)| head.position)
     })
+}
+
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }
 
 fn death_camera_target(message: &PlayerDeath) -> Option<Entity> {

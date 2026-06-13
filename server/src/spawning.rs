@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use shared::config::GameConfig;
-use shared::network::protocol::prelude::{Direction, RoomId, TailPoints};
+use shared::network::protocol::prelude::{Direction, RoomId, TailPolyline};
 use shared::utils::geometry::{project_on_segment, ray_segment_intersection};
 
 const SPAWN_ATTEMPTS: u64 = 32;
@@ -27,7 +27,7 @@ pub(crate) fn snake_spawn_pose_avoiding<'a>(
     config: &GameConfig,
     room: RoomId,
     entity_seed: u64,
-    obstacle_tails: impl IntoIterator<Item = &'a TailPoints>,
+    obstacle_tails: impl IntoIterator<Item = &'a TailPolyline>,
 ) -> (Vec2, Direction) {
     let obstacle_tails = obstacle_tails.into_iter().collect::<Vec<_>>();
     let mut best = None;
@@ -57,7 +57,7 @@ fn spawn_score(
     config: &GameConfig,
     position: Vec2,
     direction: Direction,
-    obstacle_tails: &[&TailPoints],
+    obstacle_tails: &[&TailPolyline],
 ) -> f32 {
     let tail_end = position - direction.delta() * config.movement.starting_tail_length;
     let boundary_distance =
@@ -131,7 +131,7 @@ mod tests {
         use std::collections::VecDeque;
 
         let config = GameConfig::default();
-        let obstacle = TailPoints::new(VecDeque::from([
+        let obstacle = TailPolyline::new(VecDeque::from([
             (Vec2::new(-50.0, -100.0), Direction::Right),
             (Vec2::new(50.0, -100.0), Direction::Right),
         ]));
@@ -147,7 +147,7 @@ mod tests {
         use std::collections::VecDeque;
 
         let config = GameConfig::default();
-        let obstacle = TailPoints::new(VecDeque::from([
+        let obstacle = TailPolyline::new(VecDeque::from([
             (Vec2::new(-50.0, 500.0), Direction::Right),
             (Vec2::new(50.0, 500.0), Direction::Right),
         ]));

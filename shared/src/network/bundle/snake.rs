@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use bevy::prelude::*;
 use lightyear::prelude::{InterpolationTarget, NetworkTarget, PeerId, PredictionTarget, Replicate};
 
@@ -14,6 +12,7 @@ pub const TAIL_SIZE: f32 = 200.0;
 #[derive(Bundle)]
 pub struct SnakeBundle {
     // main
+    pub head: SnakeHead,
     pub tail_length: TailLength,
     pub speed: Speed,
     pub acceleration: Acceleration,
@@ -45,14 +44,13 @@ impl SnakeBundle {
         position: Vec2,
         direction: Direction,
     ) -> Self {
-        let tail_points = TailPoints::new(VecDeque::from([
-            (position, direction),
-            (
-                position - direction.delta() * config.starting_tail_length,
-                direction,
-            ),
-        ]));
+        let head = SnakeHead {
+            position,
+            direction,
+        };
+        let tail_points = TailPoints::empty();
         Self {
+            head,
             tail_points,
             tail_path_history: TailPathHistory::default(),
             tail_length: TailLength {

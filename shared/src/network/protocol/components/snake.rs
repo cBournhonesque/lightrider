@@ -12,6 +12,7 @@ use parry2d::math::Point;
 use serde::{Deserialize, Serialize};
 
 const TAIL_POINT_ROLLBACK_EPSILON: f32 = 0.5;
+const SNAKE_HEAD_ROLLBACK_EPSILON: f32 = 0.5;
 const TAIL_LENGTH_ROLLBACK_EPSILON: f32 = 0.5;
 const TAIL_VISUAL_CORRECTION_EPSILON: f32 = 0.05;
 const SPEED_ROLLBACK_EPSILON: f32 = 0.02;
@@ -33,6 +34,15 @@ impl Direction {
             Direction::Right => Vec2::new(1.0, 0.0),
             Direction::Up => Vec2::new(0.0, 1.0),
             Direction::Down => Vec2::new(0.0, -1.0),
+        }
+    }
+
+    pub fn opposite(&self) -> Self {
+        match self {
+            Direction::Left => Direction::Right,
+            Direction::Right => Direction::Left,
+            Direction::Up => Direction::Down,
+            Direction::Down => Direction::Up,
         }
     }
 }
@@ -58,13 +68,175 @@ pub struct TailPathSample {
     pub length: f32,
 }
 
+#[derive(Component, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct SnakeHead {
+    pub position: Vec2,
+    pub direction: Direction,
+}
+
+impl Default for SnakeHead {
+    fn default() -> Self {
+        Self {
+            position: Vec2::ZERO,
+            direction: Direction::Up,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct TailTurn {
+    pub position: Vec2,
+    pub tailward_direction: Direction,
+}
+
+impl TailTurn {
+    pub fn new(position: Vec2, tailward_direction: Direction) -> Self {
+        Self {
+            position,
+            tailward_direction,
+        }
+    }
+}
+
 #[derive(Component, Deserialize, Serialize, Clone, Debug, Reflect)]
-// tail inflection points, from front (head point) to back (tail end point)
-pub struct TailPoints(pub VecDeque<(Vec2, Direction)>);
+pub struct TailPoints {
+    pub turns: VecDeque<TailTurn>,
+    pub turn_path_length: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TailPolyline(pub VecDeque<(Vec2, Direction)>);
 
 impl TailPoints {
-    pub fn new(points: VecDeque<(Vec2, Direction)>) -> Self {
-        Self(points)
+    pub fn new(turns: VecDeque<TailTurn>) -> Self {
+        let mut points = Self {
+            turns,
+            turn_path_length: 0.0,
+        };
+        points.recompute_turn_path_length();
+        points
+    }
+
+    pub fn empty() -> Self {
+        Self::new(VecDeque::new())
+    }
+
+    pub fn from_legacy_polyline(
+        points: VecDeque<(Vec2, Direction)>,
+    ) -> (SnakeHead, TailLength, Self) {
+        let Some((position, direction)) = points.front().copied() else {
+            return (SnakeHead::default(), TailLength::default(), Self::empty());
+        };
+        let head = SnakeHead {
+            position,
+            direction,
+        };
+        let polyline = TailPolyline(points);
+        let length = TailLength {
+            current_size: polyline.total_length(),
+            target_size: polyline.total_length(),
+        };
+        let turns = polyline
+            .0
+            .iter()
+            .enumerate()
+            .skip(1)
+            .take(polyline.0.len().saturating_sub(2))
+            .map(|(index, (position, _))| {
+                let tailward_direction = polyline
+                    .0
+                    .get(index + 1)
+                    .map(|(_, next_headward_direction)| next_headward_direction.opposite())
+                    .unwrap_or(direction.opposite());
+                TailTurn::new(*position, tailward_direction)
+            })
+            .collect();
+        (head, length, Self::new(turns))
+    }
+
+    pub fn push_turn(&mut self, turn: TailTurn) {
+        self.turns.push_front(turn);
+        self.recompute_turn_path_length();
+    }
+
+    pub fn remove_tail_turns(&mut self, count: usize) {
+        for _ in 0..count {
+            if self.turns.pop_back().is_none() {
+                break;
+            }
+        }
+        self.recompute_turn_path_length();
+    }
+
+    pub fn prune_to_length(&mut self, head: &SnakeHead, length: f32) -> usize {
+        let retained_length = length.max(0.0);
+        let mut distance = 0.0;
+        let mut previous = head.position;
+        let mut keep = self.turns.len();
+
+        for (index, turn) in self.turns.iter().enumerate() {
+            distance += previous.distance(turn.position);
+            if distance >= retained_length - f32::EPSILON {
+                keep = index;
+                break;
+            }
+            previous = turn.position;
+        }
+
+        let removed = self.turns.len().saturating_sub(keep);
+        if removed > 0 {
+            self.turns.truncate(keep);
+            self.recompute_turn_path_length();
+        }
+        removed
+    }
+
+    pub fn polyline(&self, head: &SnakeHead, length: f32) -> TailPolyline {
+        let mut points = VecDeque::with_capacity(self.turns.len() + 2);
+        points.push_back((head.position, head.direction));
+
+        let mut remaining = length.max(0.0);
+        let mut current = head.position;
+        let mut tailward_direction = head.direction.opposite();
+        for turn in &self.turns {
+            if remaining <= f32::EPSILON {
+                break;
+            }
+
+            let segment_length = current.distance(turn.position);
+            if remaining <= segment_length + f32::EPSILON {
+                let endpoint = current + tailward_direction.delta() * remaining.min(segment_length);
+                if endpoint.distance_squared(current) > f32::EPSILON * f32::EPSILON {
+                    points.push_back((endpoint, tailward_direction.opposite()));
+                }
+                return TailPolyline(points);
+            }
+
+            if segment_length > f32::EPSILON {
+                points.push_back((turn.position, tailward_direction.opposite()));
+            }
+            remaining -= segment_length;
+            current = turn.position;
+            tailward_direction = turn.tailward_direction;
+        }
+
+        if remaining > f32::EPSILON {
+            let endpoint = current + tailward_direction.delta() * remaining;
+            if endpoint.distance_squared(current) > f32::EPSILON * f32::EPSILON {
+                points.push_back((endpoint, tailward_direction.opposite()));
+            }
+        }
+
+        TailPolyline(points)
+    }
+
+    pub fn recompute_turn_path_length(&mut self) {
+        self.turn_path_length = self
+            .turns
+            .iter()
+            .tuple_windows()
+            .map(|(a, b)| a.position.distance(b.position))
+            .sum();
     }
 }
 
@@ -121,17 +293,14 @@ impl TailPathHistory {
 
 impl PartialEq for TailPoints {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.turns == other.turns
     }
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub enum TailPointsOp {
-    SetFrontDirectionAndPush {
-        position: Vec2,
-        direction: Direction,
-    },
-    SetFrontPosition(Vec2),
+    PushTurn(TailTurn),
+    RemoveTailTurns(u16),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -148,7 +317,11 @@ impl MapEntities for HasPlayer {
     }
 }
 
-impl TailPoints {
+impl TailPolyline {
+    pub fn new(points: VecDeque<(Vec2, Direction)>) -> Self {
+        Self(points)
+    }
+
     pub fn front(&self) -> &(Vec2, Direction) {
         self.0.front().unwrap()
     }
@@ -239,18 +412,22 @@ impl RepliconDiffable for TailPoints {
 
     fn apply_patch(&mut self, patch: &Self::Patch) -> Result<()> {
         match *patch {
-            TailPointsOp::SetFrontDirectionAndPush {
-                position,
-                direction,
-            } => {
-                self.set_front_position(position);
-                self.set_front_direction_and_push(direction);
-            }
-            TailPointsOp::SetFrontPosition(position) => {
-                self.set_front_position(position);
-            }
+            TailPointsOp::PushTurn(turn) => self.push_turn(turn),
+            TailPointsOp::RemoveTailTurns(count) => self.remove_tail_turns(usize::from(count)),
         }
         Ok(())
+    }
+}
+
+pub fn interpolate_snake_head(start: SnakeHead, end: SnakeHead, t: f32) -> SnakeHead {
+    let t = t.clamp(0.0, 1.0);
+    SnakeHead {
+        position: start.position.lerp(end.position, t),
+        direction: if t < 0.5 {
+            start.direction
+        } else {
+            end.direction
+        },
     }
 }
 
@@ -307,15 +484,11 @@ impl LightyearDiffable for TailLength {
 }
 
 pub fn interpolate_tail_points(start: TailPoints, end: TailPoints, t: f32) -> TailPoints {
-    let start_length = TailLength {
-        current_size: start.total_length(),
-        target_size: start.total_length(),
-    };
-    let end_length = TailLength {
-        current_size: end.total_length(),
-        target_size: end.total_length(),
-    };
-    interpolate_tail_points_with_length(&start, &end, &start_length, &end_length, t).0
+    if t < 0.5 {
+        start
+    } else {
+        end
+    }
 }
 
 pub fn interpolate_tail_points_correction(
@@ -357,22 +530,20 @@ impl Ease for TailPointsCorrection {
 
 impl LightyearDiffable<TailPointsCorrection> for TailPoints {
     fn base_value() -> Self {
-        TailPoints::new(VecDeque::new())
+        TailPoints::empty()
     }
 
     fn diff(&self, new: &Self) -> TailPointsCorrection {
-        if self.0.len() != new.0.len() {
+        if self.turns.len() != new.turns.len() {
             return TailPointsCorrection::default();
         }
 
-        let mut offsets = Vec::with_capacity(self.0.len());
-        for ((current_point, current_direction), (visual_point, visual_direction)) in
-            self.0.iter().zip(new.0.iter())
-        {
-            if current_direction != visual_direction {
+        let mut offsets = Vec::with_capacity(self.turns.len());
+        for (current_turn, visual_turn) in self.turns.iter().zip(new.turns.iter()) {
+            if current_turn.tailward_direction != visual_turn.tailward_direction {
                 return TailPointsCorrection::default();
             }
-            offsets.push(*visual_point - *current_point);
+            offsets.push(visual_turn.position - current_turn.position);
         }
         TailPointsCorrection { offsets }
     }
@@ -381,38 +552,48 @@ impl LightyearDiffable<TailPointsCorrection> for TailPoints {
         if delta.offsets.is_empty() {
             return;
         }
-        if self.0.is_empty() {
-            self.0 = delta
+        if self.turns.is_empty() {
+            self.turns = delta
                 .offsets
                 .iter()
-                .map(|offset| (*offset, Direction::Right))
+                .map(|offset| TailTurn::new(*offset, Direction::Left))
                 .collect();
+            self.recompute_turn_path_length();
             return;
         }
-        if self.0.len() != delta.offsets.len() {
+        if self.turns.len() != delta.offsets.len() {
             return;
         }
-        for ((point, _), offset) in self.0.iter_mut().zip(delta.offsets.iter()) {
-            *point += *offset;
+        for (turn, offset) in self.turns.iter_mut().zip(delta.offsets.iter()) {
+            turn.position += *offset;
         }
+        self.recompute_turn_path_length();
     }
 }
 
 pub fn tail_points_should_rollback(confirmed: &TailPoints, predicted: &TailPoints) -> bool {
-    if confirmed.0.len() != predicted.0.len() {
+    if confirmed.turns.len() != predicted.turns.len() {
         return true;
     }
-    confirmed.0.iter().zip(predicted.0.iter()).any(
-        |((confirmed_point, confirmed_direction), (predicted_point, predicted_direction))| {
-            confirmed_direction != predicted_direction
-                || confirmed_point.distance(*predicted_point) > TAIL_POINT_ROLLBACK_EPSILON
-        },
-    )
+    confirmed
+        .turns
+        .iter()
+        .zip(predicted.turns.iter())
+        .any(|(confirmed_turn, predicted_turn)| {
+            confirmed_turn.tailward_direction != predicted_turn.tailward_direction
+                || confirmed_turn.position.distance(predicted_turn.position)
+                    > TAIL_POINT_ROLLBACK_EPSILON
+        })
 }
 
 pub fn tail_length_should_rollback(confirmed: &TailLength, predicted: &TailLength) -> bool {
     (confirmed.current_size - predicted.current_size).abs() > TAIL_LENGTH_ROLLBACK_EPSILON
         || (confirmed.target_size - predicted.target_size).abs() > TAIL_LENGTH_ROLLBACK_EPSILON
+}
+
+pub fn snake_head_should_rollback(confirmed: &SnakeHead, predicted: &SnakeHead) -> bool {
+    confirmed.direction != predicted.direction
+        || confirmed.position.distance(predicted.position) > SNAKE_HEAD_ROLLBACK_EPSILON
 }
 
 pub fn speed_should_rollback(confirmed: &Speed, predicted: &Speed) -> bool {
@@ -425,103 +606,6 @@ pub fn acceleration_should_rollback(confirmed: &Acceleration, predicted: &Accele
 
 pub fn food_boost_should_rollback(confirmed: &FoodBoost, predicted: &FoodBoost) -> bool {
     (confirmed.0 - predicted.0).abs() > FOOD_BOOST_ROLLBACK_EPSILON
-}
-
-pub fn interpolate_tail_points_with_length(
-    start_tail: &TailPoints,
-    end_tail: &TailPoints,
-    start_length: &TailLength,
-    end_length: &TailLength,
-    t: f32,
-) -> (TailPoints, TailLength) {
-    let t = t.clamp(0.0, 1.0);
-    if t <= f32::EPSILON || start_tail.0.is_empty() || end_tail.0.is_empty() {
-        return (
-            start_tail.clone(),
-            interpolate_tail_length(start_length.clone(), end_length.clone(), t),
-        );
-    }
-    if (1.0 - t) <= f32::EPSILON {
-        return (
-            end_tail.clone(),
-            interpolate_tail_length(start_length.clone(), end_length.clone(), t),
-        );
-    }
-
-    let mut tail = start_tail.clone();
-    let mut length = interpolate_tail_length(start_length.clone(), end_length.clone(), t);
-    let start_head = tail.front().0;
-
-    let mut tail_diff_length = 0.0;
-    let mut pos_distance_to_move = 0.0;
-    let mut segment_idx = None;
-
-    for (i, (from, to)) in end_tail.pairs_front_to_back().enumerate() {
-        if point_on_axis_aligned_segment(from.0, to.0, start_head) {
-            tail_diff_length += to.0.distance(start_head);
-            if tail.front().1 != from.1 {
-                tail.front_mut().1 = from.1;
-                tail.0.push_front((start_head, from.1));
-            }
-            pos_distance_to_move = t * tail_diff_length;
-            segment_idx = Some(i);
-            break;
-        }
-        tail_diff_length += from.0.distance(to.0);
-    }
-
-    let Some(segment_idx) = segment_idx else {
-        return (end_tail.clone(), length);
-    };
-    if pos_distance_to_move <= f32::EPSILON {
-        return (tail, length);
-    }
-
-    length.current_size += pos_distance_to_move;
-    let skip_segments = end_tail.0.len().saturating_sub(2 + segment_idx);
-    for (from, to) in end_tail.pairs_back_to_front().skip(skip_segments) {
-        let dist = tail.front().0.distance(to.0);
-        if dist <= pos_distance_to_move {
-            tail.front_mut().0 = to.0;
-            tail.front_mut().1 = to.1;
-            if (dist - pos_distance_to_move).abs() <= f32::EPSILON {
-                break;
-            }
-            pos_distance_to_move -= dist;
-            tail.0.push_front(to.clone());
-        } else {
-            tail.front_mut().0 += from.1.delta() * pos_distance_to_move;
-            tail.front_mut().1 = from.1;
-            break;
-        }
-    }
-
-    shorten_tail_to_length(&mut tail, &mut length);
-    (tail, length)
-}
-
-fn shorten_tail_to_length(tail: &mut TailPoints, tail_length: &mut TailLength) {
-    if tail_length.target_size >= tail_length.current_size {
-        return;
-    }
-
-    let shorten_amount = tail_length.current_size - tail_length.target_size;
-    tail.shorten_by(shorten_amount);
-    tail_length.current_size = tail_length.target_size;
-}
-
-fn point_on_axis_aligned_segment(a: Vec2, b: Vec2, p: Vec2) -> bool {
-    let cross = (b - a).perp_dot(p - a).abs();
-    if cross > 1000.0 * f32::EPSILON {
-        return false;
-    }
-
-    let min = a.min(b);
-    let max = a.max(b);
-    p.x >= min.x - f32::EPSILON
-        && p.x <= max.x + f32::EPSILON
-        && p.y >= min.y - f32::EPSILON
-        && p.y <= max.y + f32::EPSILON
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect, Add, Mul)]
@@ -539,14 +623,14 @@ pub struct FoodBoost(pub f32);
 mod tests {
     use super::*;
 
-    fn tail_is_axis_aligned(tail: &TailPoints) -> bool {
+    fn tail_is_axis_aligned(tail: &TailPolyline) -> bool {
         tail.pairs_front_to_back()
             .all(|(start, end)| start.0.x == end.0.x || start.0.y == end.0.y)
     }
 
     #[test]
     fn test_tail_pairs() {
-        let tail = TailPoints::new(VecDeque::from(vec![
+        let tail = TailPolyline::new(VecDeque::from(vec![
             (Vec2::new(0.0, 0.0), Direction::Right),
             (Vec2::new(0.0, 1.0), Direction::Down),
             (Vec2::new(-2.0, 1.0), Direction::Right),
@@ -580,200 +664,66 @@ mod tests {
     }
 
     #[test]
-    fn turn_patch_uses_authoritative_corner_position() {
+    fn reconstructs_polyline_from_head_turns_and_length() {
+        let head = SnakeHead {
+            position: Vec2::new(50.0, 100.0),
+            direction: Direction::Right,
+        };
+        let tail = TailPoints::new(VecDeque::from([
+            TailTurn::new(Vec2::new(0.0, 100.0), Direction::Down),
+            TailTurn::new(Vec2::new(0.0, 0.0), Direction::Left),
+        ]));
+
+        let polyline = tail.polyline(&head, 120.0);
+
+        assert!(tail_is_axis_aligned(&polyline));
+        assert_eq!(
+            polyline.0,
+            VecDeque::from([
+                (Vec2::new(50.0, 100.0), Direction::Right),
+                (Vec2::new(0.0, 100.0), Direction::Right),
+                (Vec2::new(0.0, 30.0), Direction::Up),
+            ])
+        );
+    }
+
+    #[test]
+    fn pruning_removes_turns_past_tail_endpoint() {
+        let head = SnakeHead {
+            position: Vec2::new(50.0, 100.0),
+            direction: Direction::Right,
+        };
         let mut tail = TailPoints::new(VecDeque::from([
-            (Vec2::ZERO, Direction::Right),
-            (Vec2::new(-100.0, 0.0), Direction::Right),
+            TailTurn::new(Vec2::new(0.0, 100.0), Direction::Down),
+            TailTurn::new(Vec2::new(0.0, 0.0), Direction::Left),
         ]));
+
+        assert_eq!(tail.prune_to_length(&head, 120.0), 1);
+        assert_eq!(
+            tail.turns,
+            VecDeque::from([TailTurn::new(Vec2::new(0.0, 100.0), Direction::Down)])
+        );
+    }
+
+    #[test]
+    fn turn_patches_update_topology() {
+        let mut tail = TailPoints::empty();
 
         RepliconDiffable::apply_patch(
             &mut tail,
-            &TailPointsOp::SetFrontDirectionAndPush {
-                position: Vec2::new(25.0, 0.0),
-                direction: Direction::Up,
-            },
+            &TailPointsOp::PushTurn(TailTurn::new(Vec2::new(25.0, 0.0), Direction::Left)),
         )
         .unwrap();
         RepliconDiffable::apply_patch(
             &mut tail,
-            &TailPointsOp::SetFrontPosition(Vec2::new(25.0, 10.0)),
+            &TailPointsOp::PushTurn(TailTurn::new(Vec2::new(25.0, 10.0), Direction::Down)),
         )
         .unwrap();
+        RepliconDiffable::apply_patch(&mut tail, &TailPointsOp::RemoveTailTurns(1)).unwrap();
 
         assert_eq!(
-            tail.0,
-            VecDeque::from([
-                (Vec2::new(25.0, 10.0), Direction::Up),
-                (Vec2::new(25.0, 0.0), Direction::Up),
-                (Vec2::new(-100.0, 0.0), Direction::Right),
-            ])
-        );
-    }
-
-    #[test]
-    fn interpolate_inserts_corner_when_start_head_is_inside_new_direction_segment() {
-        let start = TailPoints::new(VecDeque::from([
-            (Vec2::new(10.0, 0.0), Direction::Up),
-            (Vec2::new(10.0, -100.0), Direction::Up),
-        ]));
-        let end = TailPoints::new(VecDeque::from([
-            (Vec2::new(50.0, 0.0), Direction::Right),
-            (Vec2::new(0.0, 0.0), Direction::Right),
-            (Vec2::new(0.0, -50.0), Direction::Up),
-        ]));
-        let length = TailLength {
-            current_size: 100.0,
-            target_size: 100.0,
-        };
-
-        let (tail, _) = interpolate_tail_points_with_length(&start, &end, &length, &length, 0.5);
-
-        assert!(tail_is_axis_aligned(&tail));
-        assert_eq!(
-            tail.0,
-            VecDeque::from([
-                (Vec2::new(30.0, 0.0), Direction::Right),
-                (Vec2::new(10.0, 0.0), Direction::Right),
-                (Vec2::new(10.0, -80.0), Direction::Up),
-            ])
-        );
-    }
-
-    #[test]
-    fn interpolate_single_segment() {
-        let start = TailPoints::new(VecDeque::from([
-            (Vec2::new(0.0, 0.0), Direction::Up),
-            (Vec2::new(0.0, -100.0), Direction::Up),
-        ]));
-        let end = TailPoints::new(VecDeque::from([
-            (Vec2::new(0.0, 20.0), Direction::Up),
-            (Vec2::new(0.0, -80.0), Direction::Up),
-        ]));
-        let length = TailLength {
-            current_size: 100.0,
-            target_size: 100.0,
-        };
-
-        let (tail, _) = interpolate_tail_points_with_length(&start, &end, &length, &length, 0.5);
-
-        assert_eq!(
-            tail.0,
-            VecDeque::from([
-                (Vec2::new(0.0, 10.0), Direction::Up),
-                (Vec2::new(0.0, -90.0), Direction::Up)
-            ])
-        );
-    }
-
-    #[test]
-    fn interpolate_turn_big_move() {
-        let start = TailPoints::new(VecDeque::from([
-            (Vec2::new(0.0, 0.0), Direction::Up),
-            (Vec2::new(0.0, -120.0), Direction::Up),
-        ]));
-        let end = TailPoints::new(VecDeque::from([
-            (Vec2::new(50.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, -20.0), Direction::Up),
-        ]));
-        let length = TailLength {
-            current_size: 120.0,
-            target_size: 120.0,
-        };
-
-        let (tail, _) = interpolate_tail_points_with_length(&start, &end, &length, &length, 0.75);
-
-        assert_eq!(
-            tail.0,
-            VecDeque::from([
-                (Vec2::new(25.0, 50.0), Direction::Right),
-                (Vec2::new(0.0, 50.0), Direction::Right),
-                (Vec2::new(0.0, -45.0), Direction::Up)
-            ])
-        );
-    }
-
-    #[test]
-    fn interpolate_turn_small_move() {
-        let start = TailPoints::new(VecDeque::from([
-            (Vec2::new(40.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, -10.0), Direction::Up),
-        ]));
-        let end = TailPoints::new(VecDeque::from([
-            (Vec2::new(50.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, 0.0), Direction::Up),
-        ]));
-        let length = TailLength {
-            current_size: 100.0,
-            target_size: 100.0,
-        };
-
-        let (tail, _) = interpolate_tail_points_with_length(&start, &end, &length, &length, 0.75);
-
-        assert_eq!(
-            tail.0,
-            VecDeque::from([
-                (Vec2::new(47.5, 50.0), Direction::Right),
-                (Vec2::new(0.0, 50.0), Direction::Right),
-                (Vec2::new(0.0, -2.5), Direction::Up)
-            ])
-        );
-    }
-
-    #[test]
-    fn interpolate_on_turn_point() {
-        let start = TailPoints::new(VecDeque::from([
-            (Vec2::new(0.0, 0.0), Direction::Up),
-            (Vec2::new(0.0, -100.0), Direction::Up),
-        ]));
-        let end = TailPoints::new(VecDeque::from([
-            (Vec2::new(50.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, 50.0), Direction::Right),
-            (Vec2::new(0.0, 0.0), Direction::Up),
-        ]));
-        let length = TailLength {
-            current_size: 100.0,
-            target_size: 100.0,
-        };
-
-        let (tail, _) = interpolate_tail_points_with_length(&start, &end, &length, &length, 0.5);
-
-        assert_eq!(
-            tail.0,
-            VecDeque::from([
-                (Vec2::new(0.0, 50.0), Direction::Right),
-                (Vec2::new(0.0, -50.0), Direction::Up)
-            ])
-        );
-    }
-
-    #[test]
-    fn interpolate_immediate_turn() {
-        let start = TailPoints::new(VecDeque::from([
-            (Vec2::new(0.0, 0.0), Direction::Up),
-            (Vec2::new(0.0, -100.0), Direction::Up),
-        ]));
-        let end = TailPoints::new(VecDeque::from([
-            (Vec2::new(50.0, 50.0), Direction::Right),
-            (Vec2::new(50.0, 0.0), Direction::Up),
-            (Vec2::new(0.0, 0.0), Direction::Right),
-        ]));
-        let length = TailLength {
-            current_size: 100.0,
-            target_size: 100.0,
-        };
-
-        let (tail, _) = interpolate_tail_points_with_length(&start, &end, &length, &length, 0.5);
-
-        assert_eq!(
-            tail.0,
-            VecDeque::from([
-                (Vec2::new(50.0, 0.0), Direction::Up),
-                (Vec2::new(0.0, 0.0), Direction::Right),
-                (Vec2::new(0.0, -50.0), Direction::Up)
-            ])
+            tail.turns,
+            VecDeque::from([TailTurn::new(Vec2::new(25.0, 10.0), Direction::Down)])
         );
     }
 
@@ -820,12 +770,12 @@ mod tests {
     #[test]
     fn tail_points_correction_applies_and_decays_offsets() {
         let corrected = TailPoints::new(VecDeque::from([
-            (Vec2::new(10.0, 20.0), Direction::Right),
-            (Vec2::new(0.0, 20.0), Direction::Right),
+            TailTurn::new(Vec2::new(10.0, 20.0), Direction::Left),
+            TailTurn::new(Vec2::new(0.0, 20.0), Direction::Down),
         ]));
         let visual = TailPoints::new(VecDeque::from([
-            (Vec2::new(12.0, 20.0), Direction::Right),
-            (Vec2::new(2.0, 20.0), Direction::Right),
+            TailTurn::new(Vec2::new(12.0, 20.0), Direction::Left),
+            TailTurn::new(Vec2::new(2.0, 20.0), Direction::Down),
         ]));
         let error = corrected.diff(&visual);
         let residual =
@@ -835,10 +785,10 @@ mod tests {
         smoothed.apply_diff(&residual);
 
         assert_eq!(
-            smoothed.0,
+            smoothed.turns,
             VecDeque::from([
-                (Vec2::new(11.0, 20.0), Direction::Right),
-                (Vec2::new(1.0, 20.0), Direction::Right),
+                TailTurn::new(Vec2::new(11.0, 20.0), Direction::Left),
+                TailTurn::new(Vec2::new(1.0, 20.0), Direction::Down),
             ])
         );
         assert_eq!(
@@ -850,20 +800,20 @@ mod tests {
     #[test]
     fn rollback_checks_tolerate_tiny_snake_float_drift() {
         let confirmed_tail = TailPoints::new(VecDeque::from([
-            (Vec2::new(10.0, 20.0), Direction::Right),
-            (Vec2::new(0.0, 20.0), Direction::Right),
+            TailTurn::new(Vec2::new(10.0, 20.0), Direction::Left),
+            TailTurn::new(Vec2::new(0.0, 20.0), Direction::Down),
         ]));
         let close_tail = TailPoints::new(VecDeque::from([
-            (Vec2::new(10.2, 20.0), Direction::Right),
-            (Vec2::new(0.2, 20.0), Direction::Right),
+            TailTurn::new(Vec2::new(10.2, 20.0), Direction::Left),
+            TailTurn::new(Vec2::new(0.2, 20.0), Direction::Down),
         ]));
         let far_tail = TailPoints::new(VecDeque::from([
-            (Vec2::new(10.75, 20.0), Direction::Right),
-            (Vec2::new(0.2, 20.0), Direction::Right),
+            TailTurn::new(Vec2::new(10.75, 20.0), Direction::Left),
+            TailTurn::new(Vec2::new(0.2, 20.0), Direction::Down),
         ]));
         let wrong_direction = TailPoints::new(VecDeque::from([
-            (Vec2::new(10.2, 20.0), Direction::Up),
-            (Vec2::new(0.2, 20.0), Direction::Right),
+            TailTurn::new(Vec2::new(10.2, 20.0), Direction::Up),
+            TailTurn::new(Vec2::new(0.2, 20.0), Direction::Down),
         ]));
 
         assert!(!tail_points_should_rollback(&confirmed_tail, &close_tail));

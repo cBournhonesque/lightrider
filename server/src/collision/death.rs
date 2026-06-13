@@ -37,7 +37,7 @@ pub fn handle_collision(
         Query<(&mut Player, &mut PlayerStatus, Has<BotMarker>)>,
     )>,
     clients: Query<(&RemoteId, &ClientRoom), With<ClientOf>>,
-    snakes: Query<(&HasPlayer, &RoomId, &TailPoints, &TailLength)>,
+    snakes: Query<(&HasPlayer, &RoomId, &SnakeHead, &TailPoints, &TailLength)>,
     food: Query<&RoomId, With<FoodMarker>>,
     mut commands: Commands,
 ) {
@@ -48,13 +48,13 @@ pub fn handle_collision(
         if !reserve_collision_death(&mut killed_snakes, collision_event) {
             continue;
         }
-        let Ok((killed_player, killed_room, killed_tail, killed_length)) =
+        let Ok((killed_player, killed_room, killed_head, killed_tail, killed_length)) =
             snakes.get(collision_event.killed)
         else {
             error!("snake does not have HasPlayer component");
             continue;
         };
-        let Ok((killer_player, killer_room, _, _)) = snakes.get(collision_event.killer) else {
+        let Ok((killer_player, killer_room, _, _, _)) = snakes.get(collision_event.killer) else {
             error!("snake does not have HasPlayer component");
             continue;
         };
@@ -127,7 +127,7 @@ pub fn handle_collision(
             &rooms,
             &config,
             *killed_room,
-            &killed_tail.clipped_to_length(killed_length.current_size),
+            &killed_tail.polyline(killed_head, killed_length.current_size),
             &mut room_food_counts,
         );
         let killed_is_bot = {
@@ -178,7 +178,7 @@ fn spawn_death_food(
     rooms: &RoomDirectory,
     config: &GameConfig,
     room: RoomId,
-    tail: &TailPoints,
+    tail: &TailPolyline,
     room_food_counts: &mut std::collections::HashMap<RoomId, usize>,
 ) {
     let current_food_count = room_food_counts.get(&room).copied().unwrap_or_default();
@@ -203,7 +203,7 @@ fn death_food_spawn_limit(config: &GameConfig, current_food_count: usize) -> usi
         .min(config.food.remaining_capacity(current_food_count))
 }
 
-pub fn death_food_positions(tail: &TailPoints, spacing: f32, max_food: usize) -> Vec<Vec2> {
+pub fn death_food_positions(tail: &TailPolyline, spacing: f32, max_food: usize) -> Vec<Vec2> {
     if spacing <= 0.0 || max_food == 0 {
         return Vec::new();
     }
@@ -228,7 +228,7 @@ pub fn death_food_positions(tail: &TailPoints, spacing: f32, max_food: usize) ->
     positions
 }
 
-fn tail_position_at_distance(tail: &TailPoints, distance: f32) -> Option<Vec2> {
+fn tail_position_at_distance(tail: &TailPolyline, distance: f32) -> Option<Vec2> {
     let mut remaining = distance.max(0.0);
     for (start, end) in tail.pairs_front_to_back() {
         let segment = end.0 - start.0;
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn death_food_samples_tail_segments_without_exceeding_limit() {
-        let tail = TailPoints::new(VecDeque::from([
+        let tail = TailPolyline::new(VecDeque::from([
             (Vec2::new(100.0, 0.0), Direction::Right),
             (Vec2::ZERO, Direction::Right),
         ]));
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn death_food_limit_is_distributed_across_full_tail() {
-        let tail = TailPoints::new(VecDeque::from([
+        let tail = TailPolyline::new(VecDeque::from([
             (Vec2::new(300.0, 0.0), Direction::Right),
             (Vec2::ZERO, Direction::Right),
         ]));

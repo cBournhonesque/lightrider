@@ -77,7 +77,7 @@ pub(crate) fn spawn_food_entity(
 /// System that handles a snake eating a food
 fn food_collision(
     config: Res<GameConfig>,
-    tails: Query<(Entity, &TailPoints, &RoomId)>,
+    tails: Query<(Entity, &SnakeHead, &RoomId)>,
     food: Query<(Entity, &Position, &RoomId), With<FoodMarker>>,
     mut writer: MessageWriter<FoodCollision>,
 ) {
@@ -88,8 +88,8 @@ fn food_collision(
             room: *room,
             position: position.0,
         }));
-    for (snake, tail, room) in tails.iter() {
-        let collision_point = tail.front().0;
+    for (snake, head, room) in tails.iter() {
+        let collision_point = head.position;
         for food in food_index.within_radius(*room, collision_point, config.food.radius) {
             if eaten_food.contains(&food.entity) {
                 continue;
@@ -225,9 +225,7 @@ mod tests {
     use lightyear::prelude::{Interpolated, Replicated};
     use shared::movement::MovementPlugin;
     use shared::network::bundle::snake::SnakeBundle;
-    use shared::network::protocol::prelude::Direction;
     use shared::utils::SimulationAuthority;
-    use std::collections::VecDeque;
 
     use super::*;
 
@@ -304,11 +302,10 @@ mod tests {
         app.add_plugins(FoodPlugin);
         // snake: vertical, pointing up
         let snake = app.world_mut().spawn(SnakeBundle::default()).id();
-        let points = TailPoints::new(VecDeque::from([
-            (Vec2::new(0.0, 200.0), Direction::Up),
-            (Vec2::new(0.0, 0.0), Direction::Up),
-        ]));
-        app.world_mut().entity_mut(snake).insert(points);
+        app.world_mut().entity_mut(snake).insert(SnakeHead {
+            position: Vec2::new(0.0, 200.0),
+            direction: Direction::Up,
+        });
         // food: in front of snake
         let food = app
             .world_mut()

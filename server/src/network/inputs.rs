@@ -35,7 +35,7 @@ pub(crate) fn handle_spawn_requests(
         Option<&ControlledBy>,
         Option<&RespawnReadyAt>,
     )>,
-    tails: Query<(&TailPoints, Option<&TailLength>, &RoomId)>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
 ) {
     for (remote_id, mut receiver) in &mut clients {
         for _request in receiver.receive() {
@@ -66,8 +66,8 @@ pub(crate) fn handle_spawn_requests(
             let client_id = player.id;
             let obstacle_tails = tails
                 .iter()
-                .filter(|(_, _, tail_room)| **tail_room == *room)
-                .map(|(tail, length, _)| visible_tail(tail, length))
+                .filter(|(_, _, _, tail_room)| **tail_room == *room)
+                .map(|(head, tail, length, _)| visible_tail(head, tail, length))
                 .collect::<Vec<_>>();
             let (spawn_position, spawn_direction) =
                 snake_spawn_pose_avoiding(&config, *room, client_id.to_bits(), &obstacle_tails);
@@ -98,8 +98,9 @@ pub(crate) fn handle_spawn_requests(
     }
 }
 
-fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
-    length
-        .map(|length| tail.clipped_to_length(length.current_size))
-        .unwrap_or_else(|| tail.clone())
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }

@@ -28,6 +28,7 @@ use crate::utils::query::SimulationAuthority;
 pub const LIGHTYEAR_DEBUG_FILE_ENV: &str = "LIGHTYEAR_DEBUG_FILE";
 const LIGHTYEAR_DEBUG_TARGET: &str = "lightyear_debug";
 const LIGHTYEAR_DEBUG_TARGET_MANUAL: &str = "lightyear_debug::manual";
+const TAIL_AXIS_EPSILON: f32 = 0.001;
 static DEBUG_FRAME_INDEX: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -496,6 +497,7 @@ fn trace_perf_metrics(
 
 type SnakeTraceItem<'a> = (
     Entity,
+    &'a SnakeHead,
     &'a TailPoints,
     Option<&'a TailLength>,
     Option<&'a Speed>,
@@ -530,6 +532,7 @@ fn trace_snake_sample(
 
     for (
         entity,
+        head,
         tail,
         length,
         speed,
@@ -545,20 +548,6 @@ fn trace_snake_sample(
         is_bot,
     ) in &snakes
     {
-        let Some((head, direction)) = tail.0.front() else {
-            tracing::trace!(
-                target: LIGHTYEAR_DEBUG_TARGET_MANUAL,
-                kind = "snake_head_missing",
-                sample_point = sample_point.as_str(),
-                schedule = schedule,
-                role = role.as_str(),
-                entity = ?entity,
-                tick = ?tick,
-                tick_id = u64::from(tick.0),
-                "snake has no head point"
-            );
-            continue;
-        };
         let player_id_bits = has_player
             .and_then(|has_player| players.get(has_player.0).ok())
             .map(|player| player.id.to_bits())
@@ -586,11 +575,11 @@ fn trace_snake_sample(
             has_player = has_player.is_some(),
             player_entity = ?has_player.map(|has_player| has_player.0),
             controlled_by_owner = ?controlled_by.map(|controlled_by| controlled_by.owner),
-            head_x = head.x,
-            head_y = head.y,
-            direction = ?direction,
-            tail_points = tail.0.len() as u64,
-            tail_total_length = tail.total_length(),
+            head_x = head.position.x,
+            head_y = head.position.y,
+            direction = ?head.direction,
+            tail_points = tail.turns.len() as u64,
+            tail_turn_path_length = tail.turn_path_length,
             tail_length_current = tail_length_current,
             tail_length_target = tail_length_target,
             speed = speed,
@@ -613,6 +602,7 @@ fn validate_snakes_fixed_last(
     timeline: Res<LocalTimeline>,
     snakes: Query<(
         Entity,
+        &SnakeHead,
         &TailPoints,
         Option<&TailLength>,
         Option<&Speed>,
@@ -631,6 +621,7 @@ fn validate_snakes_fixed_last(
 
     for (
         entity,
+        head,
         tail,
         length,
         speed,
@@ -640,22 +631,10 @@ fn validate_snakes_fixed_last(
         is_replicated,
     ) in &snakes
     {
-        let Some((head, _direction)) = tail.0.front() else {
-            emit_invariant_violation(
-                *role,
-                entity,
-                room,
-                tick,
-                "empty_tail",
-                "snake tail has no head point",
-            );
-            continue;
-        };
-
-        if head.x < -half_width
-            || head.x > half_width
-            || head.y < -half_height
-            || head.y > half_height
+        if head.position.x < -half_width
+            || head.position.x > half_width
+            || head.position.y < -half_height
+            || head.position.y > half_height
         {
             emit_invariant_violation(
                 *role,
@@ -664,6 +643,29 @@ fn validate_snakes_fixed_last(
                 tick,
                 "head_outside_arena",
                 "snake head is outside configured arena bounds",
+            );
+        }
+
+        let polyline = tail.polyline(
+            head,
+            length.map(|length| length.current_size).unwrap_or(0.0),
+        );
+        if let Some((segment_index, dx, dy)) = first_diagonal_tail_segment(&polyline) {
+            warn!(
+                target: "lightrider::debug",
+                role = role.as_str(),
+                ?entity,
+                tick_id = u64::from(tick.0),
+                room_id = room.map(|room| room.0).unwrap_or(u64::MAX),
+                invariant = "tail_segment_diagonal",
+                detail = "snake tail segment is not axis-aligned",
+                segment_index = segment_index,
+                dx = dx,
+                dy = dy,
+                is_interpolated = is_interpolated,
+                has_simulation_authority = has_simulation_authority,
+                is_replicated = is_replicated,
+                "snake invariant violation"
             );
         }
 
@@ -684,7 +686,7 @@ fn validate_snakes_fixed_last(
                 }
             }
             if let Some(length) = length {
-                let tail_total_length = tail.total_length();
+                let tail_total_length = polyline.total_length();
                 let length_delta = (tail_total_length - length.current_size).abs();
                 let invalid_length = if has_simulation_authority || is_replicated {
                     tail_total_length + 1.0 < length.current_size
@@ -704,6 +706,17 @@ fn validate_snakes_fixed_last(
             }
         }
     }
+}
+
+fn first_diagonal_tail_segment(tail: &TailPolyline) -> Option<(usize, f32, f32)> {
+    tail.pairs_front_to_back()
+        .enumerate()
+        .map(|(index, (from, to))| {
+            let dx = (from.0.x - to.0.x).abs();
+            let dy = (from.0.y - to.0.y).abs();
+            (index, dx, dy)
+        })
+        .find(|(_, dx, dy)| *dx > TAIL_AXIS_EPSILON && *dy > TAIL_AXIS_EPSILON)
 }
 
 fn emit_invariant_violation(

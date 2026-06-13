@@ -16,7 +16,8 @@ impl Plugin for NetworkPlugin {
         // events
         app.add_message::<SnakeCollision>();
         // registry
-        app.register_type::<TailLength>()
+        app.register_type::<SnakeHead>()
+            .register_type::<TailLength>()
             .register_type::<TailPoints>()
             .register_type::<Speed>()
             .register_type::<Acceleration>()

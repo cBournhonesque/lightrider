@@ -6,7 +6,8 @@ use bevy::prelude::*;
 use lightyear::prelude::Controlled;
 use shared::config::{GameConfig, MovementConfig, SoundConfig};
 use shared::network::protocol::prelude::{
-    Acceleration, DeathReason, FoodBoost, Player, PlayerStatus, RoomId, Speed, TailPoints,
+    Acceleration, DeathReason, FoodBoost, Player, PlayerStatus, RoomId, SnakeHead, Speed,
+    TailPoints,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -103,7 +104,7 @@ fn sync_spatial_listener(
     mut commands: Commands,
     config: Res<GameConfig>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
-    tails: Query<&TailPoints>,
+    heads: Query<&SnakeHead>,
     mut listeners: Query<(Entity, &mut Transform, &mut SpatialListener), With<SoundListener>>,
 ) {
     if !config.sound.enabled || !config.sound.spatial_audio {
@@ -113,7 +114,7 @@ fn sync_spatial_listener(
         return;
     }
 
-    let Some(listener) = listener_snapshot(&players, &tails) else {
+    let Some(listener) = listener_snapshot(&players, &heads) else {
         return;
     };
     let ear_gap = config.sound.spatial_listener_ear_gap.max(0.0);
@@ -137,7 +138,7 @@ fn play_confirmed_death_sounds(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
-    tails: Query<&TailPoints>,
+    heads: Query<&SnakeHead>,
     mut deaths: MessageReader<ConfirmedDeath>,
 ) {
     if !config.sound.enabled {
@@ -145,7 +146,7 @@ fn play_confirmed_death_sounds(
         return;
     }
 
-    let listener = listener_snapshot(&players, &tails);
+    let listener = listener_snapshot(&players, &heads);
     for death in deaths.read() {
         let volume = death_sound_volume(death, listener, &config.sound);
         if volume <= 0.0 {
@@ -167,7 +168,7 @@ fn play_confirmed_food_sounds(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
-    snakes: Query<(&TailPoints, &RoomId)>,
+    snakes: Query<(&SnakeHead, &RoomId)>,
     mut pickups: MessageReader<ConfirmedFoodPickup>,
 ) {
     if !config.sound.enabled {
@@ -194,14 +195,14 @@ fn play_confirmed_food_sounds(
         let Some(listener) = listener else {
             continue;
         };
-        let Ok((tail, room)) = snakes.get(collision.snake) else {
+        let Ok((head, room)) = snakes.get(collision.snake) else {
             continue;
         };
         if *room != listener.room {
             continue;
         }
 
-        let source_position = tail.front().0;
+        let source_position = head.position;
         let attenuation =
             distance_attenuation(source_position.distance(listener.position), &config.sound);
         let volume = config.sound.master_volume
@@ -281,7 +282,7 @@ fn update_remote_speed_loops(
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<RemoteSpeedLoopState>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
-    tails: Query<&TailPoints>,
+    heads: Query<&SnakeHead>,
     speeds: Query<&Speed>,
     accelerations: Query<&Acceleration>,
     food_boosts: Query<&FoodBoost>,
@@ -294,7 +295,7 @@ fn update_remote_speed_loops(
         return;
     }
 
-    let Some(listener) = remote_listener_snapshot(&players, &tails) else {
+    let Some(listener) = remote_listener_snapshot(&players, &heads) else {
         clear_remote_speed_loops(&mut commands, &mut state);
         return;
     };
@@ -307,7 +308,7 @@ fn update_remote_speed_loops(
         let Some(snake) = player.snake else {
             continue;
         };
-        let (Ok(tail), Ok(speed)) = (tails.get(snake), speeds.get(snake)) else {
+        let (Ok(head), Ok(speed)) = (heads.get(snake), speeds.get(snake)) else {
             continue;
         };
         let proximity_active = accelerations
@@ -319,7 +320,7 @@ fn update_remote_speed_loops(
             });
 
         seen.insert(player_entity);
-        let source_position = tail.front().0;
+        let source_position = head.position;
         let distance = source_position.distance(listener.position);
         let (line_volume, fast_volume) =
             remote_speed_loop_volumes(Some(speed.0), distance, &config.sound, &config.movement);
@@ -518,15 +519,15 @@ fn despawn_loop(commands: &mut Commands, entity: Option<Entity>) {
 
 fn listener_snapshot(
     players: &Query<(&Player, &RoomId, Has<Controlled>)>,
-    tails: &Query<&TailPoints>,
+    heads: &Query<&SnakeHead>,
 ) -> Option<ListenerSnapshot> {
     players
         .iter()
         .find(|(_, _, is_local)| *is_local)
         .and_then(|(player, room, _)| {
             player.snake.and_then(|snake| {
-                tails.get(snake).ok().map(|tail| ListenerSnapshot {
-                    position: tail.front().0,
+                heads.get(snake).ok().map(|head| ListenerSnapshot {
+                    position: head.position,
                     room: *room,
                 })
             })
@@ -535,15 +536,15 @@ fn listener_snapshot(
 
 fn listener_snapshot_from_roomed_tails(
     players: &Query<(&Player, &RoomId, Has<Controlled>)>,
-    tails: &Query<(&TailPoints, &RoomId)>,
+    tails: &Query<(&SnakeHead, &RoomId)>,
 ) -> Option<ListenerSnapshot> {
     players
         .iter()
         .find(|(_, _, is_local)| *is_local)
         .and_then(|(player, room, _)| {
             player.snake.and_then(|snake| {
-                tails.get(snake).ok().map(|(tail, _)| ListenerSnapshot {
-                    position: tail.front().0,
+                tails.get(snake).ok().map(|(head, _)| ListenerSnapshot {
+                    position: head.position,
                     room: *room,
                 })
             })
@@ -552,15 +553,15 @@ fn listener_snapshot_from_roomed_tails(
 
 fn remote_listener_snapshot(
     players: &Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
-    tails: &Query<&TailPoints>,
+    heads: &Query<&SnakeHead>,
 ) -> Option<ListenerSnapshot> {
     players
         .iter()
         .find(|(_, _, _, _, is_local)| *is_local)
         .and_then(|(_, player, room, _, _)| {
             player.snake.and_then(|snake| {
-                tails.get(snake).ok().map(|tail| ListenerSnapshot {
-                    position: tail.front().0,
+                heads.get(snake).ok().map(|head| ListenerSnapshot {
+                    position: head.position,
                     room: *room,
                 })
             })

@@ -76,10 +76,17 @@ fn ensure_move_action_mocks(
 fn update_move_action_mocks(
     config: Res<GameConfig>,
     mut snakes: ParamSet<(
-        Query<(Entity, &TailPoints, Option<&TailLength>, &RoomId)>,
+        Query<(
+            Entity,
+            &SnakeHead,
+            &TailPoints,
+            Option<&TailLength>,
+            &RoomId,
+        )>,
         Query<
             (
                 Entity,
+                &SnakeHead,
                 &TailPoints,
                 Option<&TailLength>,
                 &RoomId,
@@ -96,14 +103,15 @@ fn update_move_action_mocks(
     let tail_snapshots = snakes
         .p0()
         .iter()
-        .map(|(entity, tail, length, room)| (entity, *room, visible_tail(tail, length)))
+        .map(|(entity, head, tail, length, room)| (entity, *room, visible_tail(head, tail, length)))
         .collect::<Vec<_>>();
 
     let mut controlled_snakes = snakes.p1();
-    let Ok((snake, tail, length, room, mut controller)) = controlled_snakes.single_mut() else {
+    let Ok((snake, head, tail, length, room, mut controller)) = controlled_snakes.single_mut()
+    else {
         return;
     };
-    let tail = visible_tail(tail, length);
+    let tail = visible_tail(head, tail, length);
     let obstacle_tails = tail_snapshots
         .iter()
         .filter(|(other_entity, other_room, _)| *other_entity != snake && other_room == room)
@@ -122,8 +130,9 @@ fn update_move_action_mocks(
     }
 }
 
-fn visible_tail(tail: &TailPoints, length: Option<&TailLength>) -> TailPoints {
-    length
-        .map(|length| tail.clipped_to_length(length.current_size))
-        .unwrap_or_else(|| tail.clone())
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }

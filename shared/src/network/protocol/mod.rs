@@ -95,13 +95,16 @@ impl Plugin for ProtocolPlugin {
         // Tail visual-correction functions exist but are intentionally not registered yet.
         // Keep predicted visual correction disabled until the smoothing behavior is validated.
         register_tail_points_diff(app);
+        app.register_component::<components::snake::SnakeHead>()
+            .add_prediction()
+            .add_should_rollback(components::snake::snake_head_should_rollback)
+            .register_interpolation_fn(components::snake::interpolate_snake_head)
+            .add_custom_interpolation();
         app.non_networked_component::<components::snake::TailPoints>()
-            .add_prediction_diff()
+            .add_prediction()
             .add_should_rollback(components::snake::tail_points_should_rollback)
-            // Install the diff interpolation writer before registering the interpolation fn,
-            // otherwise the generic history writer will try to deserialize patch payloads.
-            .add_custom_interpolation_diff()
-            .register_interpolation_fn(components::snake::interpolate_tail_points);
+            .register_interpolation_fn(components::snake::interpolate_tail_points)
+            .add_custom_interpolation();
         app.register_component::<components::snake::TailLength>()
             .add_prediction()
             .add_should_rollback(components::snake::tail_length_should_rollback)
@@ -117,7 +120,8 @@ impl Plugin for ProtocolPlugin {
             .add_prediction()
             .add_should_rollback(components::snake::food_boost_should_rollback);
         app.register_component::<components::snake::HasPlayer>()
-            .add_prediction();
+            .add_prediction()
+            .add_custom_interpolation();
         app.register_component::<inputs::SnakeInput>()
             .add_prediction();
 

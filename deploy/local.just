@@ -53,7 +53,7 @@ bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" 
     done
     wait
 
-local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="1001" room="auto" release="false":
+local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="1001" room="auto" release="false" headless="true":
     #!/usr/bin/env bash
     set -euo pipefail
     bots_arg="{{ bots }}"
@@ -63,6 +63,7 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
     first_bot_id_arg="{{ first_bot_id }}"
     room_arg="{{ room }}"
     release_arg="{{ release }}"
+    headless_arg="{{ headless }}"
     if [[ "$bots_arg" == release=* ]]; then
       release_arg="${bots_arg#release=}"
       bots_arg="4"
@@ -70,14 +71,17 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
     if [[ "$release_arg" == release=* ]]; then
       release_arg="${release_arg#release=}"
     fi
+    if [[ "$headless_arg" == headless=* ]]; then
+      headless_arg="${headless_arg#headless=}"
+    fi
     if [[ -f secrets/admin.env ]]; then
       set -a
       source secrets/admin.env
       set +a
     fi
-    # Local rendered smoke should exercise the same moderate receive-side
-    # conditioner on both peers that Lightyear examples call "average".
-    : "${LIGHTRIDER_NETWORK_CONDITIONER:=average}"
+    # Keep the interactive local run responsive by default. Set
+    # LIGHTRIDER_NETWORK_CONDITIONER=average explicitly when testing latency.
+    : "${LIGHTRIDER_NETWORK_CONDITIONER:=none}"
     export LIGHTRIDER_NETWORK_CONDITIONER
     trap 'jobs -pr | xargs -r kill' EXIT
     cargo_args=(-j 2)
@@ -90,7 +94,11 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
       cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $((first_bot_id_arg + i)) --server-port "$port_arg" --config "$config_arg" --room "$room_arg" &
       sleep 1
     done
-    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --client-id "$client_id_arg" --server-port "$port_arg" --config "$config_arg" --room "$room_arg"
+    foreground_client_args=(--client-id "$client_id_arg" --server-port "$port_arg" --config "$config_arg" --room "$room_arg")
+    if [[ "$headless_arg" == "true" || "$headless_arg" == "1" || "$headless_arg" == "yes" ]]; then
+      foreground_client_args=(--headless --mode bot "${foreground_client_args[@]}")
+    fi
+    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- "${foreground_client_args[@]}"
 
 trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_client_id="2001" room="auto" release="false":
     #!/usr/bin/env bash

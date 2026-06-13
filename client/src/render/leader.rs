@@ -37,7 +37,7 @@ fn sync_leader_crowns(
     leaderboard_state: Res<LeaderboardState>,
     sheet: Res<PowerlineSpriteSheet>,
     players: Query<(Entity, &Player, &RoomId)>,
-    tails: Query<&TailPoints>,
+    heads: Query<&SnakeHead>,
     mut visuals: Query<(Entity, &LeaderCrownVisual, &mut Transform, &mut Sprite)>,
 ) {
     if !config.render.use_assets {
@@ -47,7 +47,7 @@ fn sync_leader_crowns(
         return;
     }
 
-    let desired = desired_leader_crowns(&config, &leaderboard_state, &sheet, &players, &tails);
+    let desired = desired_leader_crowns(&config, &leaderboard_state, &sheet, &players, &heads);
     let mut seen = HashSet::with_capacity(desired.len());
 
     for desired in desired {
@@ -84,7 +84,7 @@ fn desired_leader_crowns(
     leaderboard_state: &LeaderboardState,
     sheet: &PowerlineSpriteSheet,
     players: &Query<(Entity, &Player, &RoomId)>,
-    tails: &Query<&TailPoints>,
+    heads: &Query<&SnakeHead>,
 ) -> Vec<DesiredLeaderCrown> {
     let crown_size = Vec2::new(
         config.render.head_size.max(1.0) * 2.6,
@@ -111,14 +111,14 @@ fn desired_leader_crowns(
         let Some(snake) = player.snake else {
             continue;
         };
-        let Ok(tail) = tails.get(snake) else {
+        let Ok(head) = heads.get(snake) else {
             continue;
         };
 
         crowns.push(DesiredLeaderCrown {
             player: player_entity,
             transform: Transform::from_translation(
-                (tail.front().0 + crown_offset).extend(LEADER_CROWN_Z),
+                (head.position + crown_offset).extend(LEADER_CROWN_Z),
             ),
             sprite: sheet.sprite(PowerlineFrame::Crown, crown_size, Color::WHITE),
         });

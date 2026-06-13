@@ -6,7 +6,7 @@ use bevy::sprite::Text2d;
 use bevy::transform::TransformSystems;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Interpolated, Predicted, Replicated};
-use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, TailPoints};
+use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, SnakeHead};
 
 use crate::render::colors::snake_color_for_player;
 
@@ -49,7 +49,7 @@ fn update_name_labels(
     mut commands: Commands,
     players: Query<(Entity, &Player, &PlayerStatus)>,
     tails: Query<
-        (Entity, &TailPoints, Option<&HasPlayer>),
+        (Entity, &SnakeHead, Option<&HasPlayer>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
     mut labels: Query<(
@@ -65,11 +65,11 @@ fn update_name_labels(
         .iter()
         .filter(|(_, _, status)| **status == PlayerStatus::Alive)
         .filter_map(|(player_entity, player, _)| {
-            let tail = tail_for_player(player_entity, player, &tails)?;
+            let head = head_for_player(player_entity, player, &tails)?;
             Some((
                 player_entity,
                 player.name.clone(),
-                tail.front().0,
+                head.position,
                 snake_color_for_player(player).label(),
             ))
         })
@@ -115,18 +115,18 @@ fn update_name_labels(
     }
 }
 
-fn tail_for_player<'a>(
+fn head_for_player<'a>(
     player_entity: Entity,
     player: &Player,
     tails: &'a Query<
-        (Entity, &TailPoints, Option<&HasPlayer>),
+        (Entity, &SnakeHead, Option<&HasPlayer>),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
-) -> Option<&'a TailPoints> {
-    tails.iter().find_map(|(snake_entity, tail, owner)| {
+) -> Option<&'a SnakeHead> {
+    tails.iter().find_map(|(snake_entity, head, owner)| {
         if owner.is_some_and(|owner| owner.0 == player_entity) || player.snake == Some(snake_entity)
         {
-            Some(tail)
+            Some(head)
         } else {
             None
         }
