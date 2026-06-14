@@ -100,30 +100,35 @@ fn interpolate_remote_snakes(
         else {
             continue;
         };
-        let Some(length_sample) =
-            sample_history_pair(length_history, interpolation_tick, interpolation_overstep)
-        else {
+        let Some(start_tail) = tail_history.get_present(head_sample.start_tick) else {
             continue;
         };
-        let Some(ConfirmedState::Confirmed(end_tail)) =
-            tail_history.get_state_at(head_sample.end_tick)
-        else {
+        let Some(end_tail) = tail_history.get_present(head_sample.end_tick) else {
             continue;
         };
-        let end_tail = end_tail.clone();
+        let Some(start_length) = length_history.get_present(head_sample.start_tick).cloned() else {
+            continue;
+        };
+        let Some(end_length) = length_history.get_present(head_sample.end_tick).cloned() else {
+            continue;
+        };
 
         let interpolated_length = interpolate_tail_length(
-            length_sample.start,
-            length_sample.end,
-            length_sample.fraction,
-        );
-        let (interpolated_head, interpolated_tail) = interpolate_snake_on_confirmed_path(
-            &head_sample.start,
-            &head_sample.end,
-            &end_tail,
-            &interpolated_length,
+            start_length.clone(),
+            end_length.clone(),
             head_sample.fraction,
         );
+        let Some((interpolated_head, interpolated_tail)) = interpolate_snake_on_confirmed_path(
+            &head_sample.start,
+            &head_sample.end,
+            start_tail,
+            end_tail,
+            &start_length,
+            &end_length,
+            head_sample.fraction,
+        ) else {
+            continue;
+        };
 
         log_diagonal_interpolation(
             entity,
@@ -133,7 +138,7 @@ fn interpolate_remote_snakes(
             &interpolated_head,
             &interpolated_tail,
             &interpolated_length,
-            &end_tail,
+            end_tail,
             tail_history,
             head_sample.end_tick,
         );
@@ -246,23 +251,90 @@ fn first_diagonal_segment(polyline: &TailPolyline) -> Option<(usize, f32, f32)> 
 fn interpolate_snake_on_confirmed_path(
     start: &SnakeHead,
     end: &SnakeHead,
+    start_tail: &TailPoints,
     end_tail: &TailPoints,
-    length: &TailLength,
+    start_length: &TailLength,
+    end_length: &TailLength,
     fraction: f32,
-) -> (SnakeHead, TailPoints) {
-    let final_polyline = end_tail.polyline(end, length.current_size);
-    let head_path = head_path_from_final_polyline(start, end, &final_polyline);
+) -> Option<(SnakeHead, TailPoints)> {
+    let final_polyline =
+        repair_tail_polyline_from_head(&end_tail.polyline(end, end_length.current_size), end);
+    let (head_path, path_source) = head_path_from_final_polyline(start, end, &final_polyline);
     let interpolated_head = walk_path(&head_path, fraction, *end);
-    let interpolated_tail = tail_points_behind_head(&final_polyline, &interpolated_head);
+    let interpolated_tail = if path_source == HeadPathSource::FinalPolyline {
+        tail_points_behind_head(&final_polyline, &interpolated_head).unwrap_or_else(|| {
+            tail_points_from_start_path(
+                start,
+                start_tail,
+                start_length,
+                &head_path,
+                &interpolated_head,
+            )
+        })
+    } else {
+        tail_points_from_start_path(
+            start,
+            start_tail,
+            start_length,
+            &head_path,
+            &interpolated_head,
+        )
+    };
 
-    (interpolated_head, interpolated_tail)
+    Some((interpolated_head, interpolated_tail))
+}
+
+fn repair_tail_polyline_from_head(polyline: &TailPolyline, head: &SnakeHead) -> TailPolyline {
+    let Some(first) = polyline.0.front().copied() else {
+        return polyline.clone();
+    };
+
+    let mut repaired = VecDeque::with_capacity(polyline.0.len() + 1);
+    repaired.push_back(first);
+    let mut tailward_direction = head.direction.opposite();
+
+    for raw_point in polyline.0.iter().skip(1).copied() {
+        let previous = repaired
+            .back()
+            .expect("tail polyline repair always keeps a front point")
+            .0;
+        if !axis_aligned(previous, raw_point.0) {
+            let corner = if tailward_direction.delta().x.abs() >= tailward_direction.delta().y.abs()
+            {
+                Vec2::new(raw_point.0.x, previous.y)
+            } else {
+                Vec2::new(previous.x, raw_point.0.y)
+            };
+            if !same_position(previous, corner) && !same_position(corner, raw_point.0) {
+                repaired.push_back((corner, tailward_direction.opposite()));
+                if let Some(next_tailward_direction) = direction_between_points(corner, raw_point.0)
+                {
+                    tailward_direction = next_tailward_direction;
+                }
+            }
+        } else if let Some(next_tailward_direction) =
+            direction_between_points(previous, raw_point.0)
+        {
+            tailward_direction = next_tailward_direction;
+        }
+
+        repaired.push_back((raw_point.0, tailward_direction.opposite()));
+    }
+
+    TailPolyline::new(repaired)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeadPathSource {
+    FinalPolyline,
+    Fallback,
 }
 
 fn head_path_from_final_polyline(
     start: &SnakeHead,
     end: &SnakeHead,
     final_polyline: &TailPolyline,
-) -> Vec<Vec2> {
+) -> (Vec<Vec2>, HeadPathSource) {
     let positions = final_polyline
         .0
         .iter()
@@ -296,10 +368,10 @@ fn head_path_from_final_polyline(
         {
             path.push(end.position);
         }
-        return path;
+        return (path, HeadPathSource::FinalPolyline);
     }
 
-    fallback_axis_path(start, end)
+    (fallback_axis_path(start, end), HeadPathSource::Fallback)
 }
 
 fn fallback_axis_path(start: &SnakeHead, end: &SnakeHead) -> Vec<Vec2> {
@@ -365,7 +437,7 @@ fn walk_path(path: &[Vec2], fraction: f32, end: SnakeHead) -> SnakeHead {
 fn tail_points_behind_head(
     final_polyline: &TailPolyline,
     interpolated_head: &SnakeHead,
-) -> TailPoints {
+) -> Option<TailPoints> {
     let positions = final_polyline
         .0
         .iter()
@@ -386,10 +458,60 @@ fn tail_points_behind_head(
             tail_positions.push(positions[segment_index + 1]);
         }
         tail_positions.extend_from_slice(&positions[segment_index + 2..]);
-        return tail_points_from_tailward_positions(interpolated_head, &tail_positions);
+        return Some(tail_points_from_tailward_positions(
+            interpolated_head,
+            &tail_positions,
+        ));
     }
 
-    TailPoints::empty()
+    None
+}
+
+fn tail_points_from_start_path(
+    start: &SnakeHead,
+    start_tail: &TailPoints,
+    start_length: &TailLength,
+    head_path: &[Vec2],
+    interpolated_head: &SnakeHead,
+) -> TailPoints {
+    let start_polyline = repair_tail_polyline_from_head(
+        &start_tail.polyline(start, start_length.current_size),
+        start,
+    );
+    let Some(segment_index) = head_path.windows(2).position(|segment| {
+        segment_contains_point(segment[0], segment[1], interpolated_head.position)
+    }) else {
+        return tail_points_from_tailward_positions(
+            interpolated_head,
+            &start_polyline
+                .0
+                .iter()
+                .map(|(position, _)| *position)
+                .collect::<Vec<_>>(),
+        );
+    };
+
+    let mut tail_positions = vec![interpolated_head.position];
+    if !same_position(interpolated_head.position, head_path[segment_index]) {
+        tail_positions.push(head_path[segment_index]);
+    }
+    for point in head_path[..segment_index].iter().rev() {
+        if tail_positions
+            .last()
+            .is_none_or(|previous| !same_position(*previous, *point))
+        {
+            tail_positions.push(*point);
+        }
+    }
+    tail_positions.extend(
+        start_polyline
+            .0
+            .iter()
+            .skip(1)
+            .map(|(position, _)| *position),
+    );
+
+    tail_points_from_tailward_positions(interpolated_head, &tail_positions)
 }
 
 fn tail_points_from_tailward_positions(head: &SnakeHead, positions: &[Vec2]) -> TailPoints {
@@ -639,6 +761,59 @@ mod tests {
         assert_eq!(
             live_tail.turns,
             VecDeque::from([TailTurn::new(Vec2::new(10.0, 0.0), Direction::Left)])
+        );
+    }
+
+    #[test]
+    fn remote_snake_interpolation_repairs_missing_front_turn_in_tail_sample() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, interpolate_remote_snakes);
+        insert_timeline(&mut app, Tick(1), 0.0);
+
+        let stale_tail = TailPoints::new(VecDeque::from([TailTurn::new(
+            Vec2::ZERO,
+            Direction::Right,
+        )]));
+        let snake = app
+            .world_mut()
+            .spawn((
+                Interpolated,
+                SnakeHead::default(),
+                TailPoints::empty(),
+                TailLength::default(),
+                confirmed_history(
+                    head(Vec2::new(5.0, 10.0), Direction::Right),
+                    head(Vec2::new(10.0, 10.0), Direction::Right),
+                ),
+                confirmed_history(TailPoints::empty(), stale_tail),
+                confirmed_history(length(100.0), length(100.0)),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(snake);
+        let live_head = entity.get::<SnakeHead>().unwrap();
+        let live_tail = entity.get::<TailPoints>().unwrap();
+        let live_length = entity.get::<TailLength>().unwrap();
+        assert_vec2_close(live_head.position, Vec2::new(7.5, 10.0));
+        assert_eq!(live_head.direction, Direction::Right);
+        assert_eq!(
+            live_tail.turns,
+            VecDeque::from([
+                TailTurn::new(Vec2::new(0.0, 10.0), Direction::Down),
+                TailTurn::new(Vec2::ZERO, Direction::Right),
+            ])
+        );
+        assert_eq!(
+            live_tail.polyline(live_head, live_length.current_size).0,
+            VecDeque::from([
+                (Vec2::new(7.5, 10.0), Direction::Right),
+                (Vec2::new(0.0, 10.0), Direction::Right),
+                (Vec2::ZERO, Direction::Up),
+                (Vec2::new(82.5, 0.0), Direction::Left),
+            ])
         );
     }
 
