@@ -162,6 +162,75 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
 trace-summary dir="logs/debug/latest":
     duckdb -batch -cmd "SET VARIABLE trace_glob = '{{ dir }}/*.ndjson';" < tools/debug_trace_summary.sql
 
+interpolation-stress *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    seconds="20"
+    config="config/interpolation_stress.ron"
+    port="5100"
+    clients="3"
+    first_client_id="5001"
+    room="auto"
+    release="false"
+    max_step_per_tick="64"
+    args=({{ args }})
+    for arg in "${args[@]}"; do
+      case "$arg" in
+        seconds=*) seconds="${arg#*=}" ;;
+        config=*) config="${arg#*=}" ;;
+        port=*) port="${arg#*=}" ;;
+        clients=*) clients="${arg#*=}" ;;
+        first_client_id=*) first_client_id="${arg#*=}" ;;
+        room=*) room="${arg#*=}" ;;
+        release=*) release="${arg#*=}" ;;
+        max_step_per_tick=*) max_step_per_tick="${arg#*=}" ;;
+        *) echo "unknown interpolation-stress argument: $arg" >&2; exit 2 ;;
+      esac
+    done
+    if [[ -f secrets/admin.env ]]; then
+      set -a
+      source secrets/admin.env
+      set +a
+    fi
+    run_dir="logs/debug/$(date +%Y%m%d-%H%M%S)-interpolation-stress"
+    mkdir -p "$run_dir"
+    ln -sfn "$(basename "$run_dir")" logs/debug/latest-interpolation-stress
+    unset LIGHTRIDER_NETWORK_CONDITIONER
+    cargo_args=(-j 4)
+    bin_dir="debug"
+    if [[ "$release" == "true" ]]; then
+      cargo_args+=(--release)
+      bin_dir="release"
+    fi
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
+    pids=()
+    cleanup() {
+      for pid in "${pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+      done
+      wait 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    RUST_LOG="info,lightyear_debug=trace,server::food=warn" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
+      "$target_dir/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
+      > "$run_dir/server.log" 2>&1 &
+    pids+=("$!")
+    sleep 2
+    for i in $(seq 0 $((clients - 1))); do
+      id=$((first_client_id + i))
+      RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-bot-$id.ndjson" \
+        "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+        > "$run_dir/client-bot-$id.log" 2>&1 &
+      pids+=("$!")
+      sleep 0.5
+    done
+    sleep "$seconds"
+    cleanup
+    trap - EXIT
+    echo "interpolation stress run: $run_dir"
+    python3 tools/interpolation_stress_check.py "$run_dir" --max-interpolated-step-per-tick "$max_step_per_tick"
+
 # Load-test commands are intentionally separate from trace-local:
 # - `load-local` starts a server, many headless bot clients, OS samplers, and
 #   low-rate Lightyear JSONL tracing for the server plus a small client sample.

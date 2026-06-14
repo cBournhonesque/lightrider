@@ -150,19 +150,13 @@ fn sample_snake_history_pair(
     interpolation_overstep: f32,
 ) -> Option<SnakeHistorySample> {
     let start_index =
-        composite_sample_indices(head_history, tail_history, length_history, |tick| {
-            tick <= interpolation_tick
-        })
-        .last()?;
-    let end_index = composite_sample_indices(head_history, tail_history, length_history, |tick| {
-        tick > interpolation_tick
-    })
-    .next();
+        tail_sample_indices(tail_history, |tick| tick <= interpolation_tick).last()?;
+    let end_index = tail_sample_indices(tail_history, |tick| tick > interpolation_tick).next();
 
     let (start_tick, start_head, start_length, start_tail) =
-        composite_sample_at_index(head_history, tail_history, length_history, start_index)?;
+        tail_driven_sample_at_index(head_history, tail_history, length_history, start_index)?;
     let Some((end_tick, end_head, end_length, end_tail)) = end_index.and_then(|index| {
-        composite_sample_at_index(head_history, tail_history, length_history, index)
+        tail_driven_sample_at_index(head_history, tail_history, length_history, index)
     }) else {
         return Some(SnakeHistorySample {
             start_tick,
@@ -196,50 +190,33 @@ fn sample_snake_history_pair(
     })
 }
 
-fn composite_sample_indices<'a>(
-    head_history: &'a ConfirmedHistory<SnakeHead>,
+fn tail_sample_indices<'a>(
     tail_history: &'a ConfirmedHistory<TailPoints>,
-    length_history: &'a ConfirmedHistory<TailLength>,
     tick_filter: impl Fn(Tick) -> bool + 'a,
 ) -> impl Iterator<Item = usize> + 'a {
-    (0..head_history.len()).filter(move |index| {
-        let Some(tick) = head_history.get_nth_tick(*index) else {
+    (0..tail_history.len()).filter(move |index| {
+        let Some(tick) = tail_history.get_nth_tick(*index) else {
             return false;
         };
         tick_filter(tick)
-            && head_history
-                .get_state_at(tick)
-                .and_then(ConfirmedState::value)
-                .is_some()
             && tail_history
                 .get_state_at(tick)
-                .and_then(ConfirmedState::value)
-                .is_some()
-            && length_history
-                .get_state_at(tick)
-                .and_then(ConfirmedState::value)
-                .is_some()
+                .is_some_and(|state| matches!(state, ConfirmedState::Confirmed(_)))
     })
 }
 
-fn composite_sample_at_index(
+fn tail_driven_sample_at_index(
     head_history: &ConfirmedHistory<SnakeHead>,
     tail_history: &ConfirmedHistory<TailPoints>,
     length_history: &ConfirmedHistory<TailLength>,
     index: usize,
 ) -> Option<(Tick, SnakeHead, TailLength, TailPoints)> {
-    let (tick, ConfirmedState::Confirmed(head)) = head_history.get_nth_state(index)? else {
+    let (tick, ConfirmedState::Confirmed(tail)) = tail_history.get_nth_state(index)? else {
         return None;
     };
-    let length = length_history
-        .get_state_at(tick)
-        .and_then(ConfirmedState::value)?
-        .clone();
-    let tail = tail_history
-        .get_state_at(tick)
-        .and_then(ConfirmedState::value)?
-        .clone();
-    Some((tick, *head, length, tail))
+    let head = *head_history.get_present(tick)?;
+    let length = length_history.get_present(tick)?.clone();
+    Some((tick, head, length, tail.clone()))
 }
 
 fn log_diagonal_interpolation(
@@ -268,9 +245,9 @@ fn log_diagonal_interpolation(
         ?entity,
         interpolation_tick = interpolation_tick.0,
         interpolation_overstep,
-        head_start_tick = sample.start_tick.0,
-        head_end_tick = sample.end_tick.0,
-        head_fraction = sample.fraction,
+        sample_start_tick = sample.start_tick.0,
+        sample_end_tick = sample.end_tick.0,
+        sample_fraction = sample.fraction,
         head_start = ?sample.start_head,
         head_end = ?sample.end_head,
         interpolated_head = ?interpolated_head,
@@ -764,6 +741,40 @@ mod tests {
         assert_eq!(live_head.direction, Direction::Right);
         assert!(live_tail.turns.is_empty());
         assert_eq!(live_length.current_size, 40.0);
+    }
+
+    #[test]
+    fn remote_snake_interpolation_uses_tail_points_ticks_as_interpolation_window() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, interpolate_remote_snakes);
+        insert_timeline(&mut app, Tick(12), 0.0);
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                Interpolated,
+                SnakeHead::default(),
+                TailPoints::empty(),
+                TailLength::default(),
+                confirmed_history_at([
+                    (Tick(8), head(Vec2::ZERO, Direction::Right)),
+                    (Tick(13), head(Vec2::new(8.0, 0.0), Direction::Right)),
+                ]),
+                confirmed_history_at([
+                    (Tick(10), TailPoints::empty()),
+                    (Tick(14), TailPoints::empty()),
+                ]),
+                confirmed_history_at([(Tick(8), length(40.0)), (Tick(13), length(40.0))]),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(snake);
+        let live_head = entity.get::<SnakeHead>().unwrap();
+        assert_vec2_close(live_head.position, Vec2::new(4.0, 0.0));
+        assert_eq!(live_head.direction, Direction::Right);
     }
 
     #[test]
