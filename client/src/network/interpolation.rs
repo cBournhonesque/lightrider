@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use bevy::log::trace;
 use bevy::prelude::*;
 use lightyear::frame_interpolation::{FrameInterpolate, FrameInterpolationPlugin};
 use lightyear::prelude::*;
@@ -60,6 +61,7 @@ fn add_frame_interpolation_to_predicted_snakes(
 
 #[derive(Clone, Debug)]
 struct HistorySample<C> {
+    start_tick: Tick,
     end_tick: Tick,
     start: C,
     end: C,
@@ -70,6 +72,7 @@ fn interpolate_remote_snakes(
     timeline: Single<&InterpolationTimeline, With<IsSynced<InterpolationTimeline>>>,
     mut snakes: Query<
         (
+            Entity,
             &mut SnakeHead,
             &mut TailPoints,
             &mut TailLength,
@@ -84,6 +87,7 @@ fn interpolate_remote_snakes(
     let interpolation_overstep = timeline.overstep().to_f32();
 
     for (
+        entity,
         mut live_head,
         mut live_tail,
         mut live_length,
@@ -102,11 +106,14 @@ fn interpolate_remote_snakes(
         else {
             continue;
         };
-        let Some(end_tail) = tail_history
-            .get_present(head_sample.end_tick)
-            .or_else(|| tail_history.get_present(interpolation_tick))
-            .or_else(|| tail_history.newest_present().map(|(_, tail)| tail))
-            .cloned()
+        let Some((tail_sample_tick, end_tail)) =
+            present_at_or_before(tail_history, head_sample.end_tick)
+                .or_else(|| present_at_or_before(tail_history, interpolation_tick))
+                .or_else(|| {
+                    tail_history
+                        .newest_present()
+                        .map(|(tick, tail)| (tick, tail.clone()))
+                })
         else {
             continue;
         };
@@ -122,6 +129,18 @@ fn interpolate_remote_snakes(
             &end_tail,
             &interpolated_length,
             head_sample.fraction,
+        );
+
+        log_diagonal_interpolation(
+            entity,
+            interpolation_tick,
+            interpolation_overstep,
+            &head_sample,
+            &interpolated_head,
+            &interpolated_tail,
+            &interpolated_length,
+            tail_history,
+            tail_sample_tick,
         );
 
         *live_head = interpolated_head;
@@ -149,6 +168,7 @@ fn sample_history_pair<C: Clone>(
     let Some((end_tick, ConfirmedState::Confirmed(end))) = history.get_nth_state(start_index + 1)
     else {
         return Some(HistorySample {
+            start_tick,
             end_tick: start_tick,
             start: start.clone(),
             end: start.clone(),
@@ -165,11 +185,79 @@ fn sample_history_pair<C: Clone>(
     };
 
     Some(HistorySample {
+        start_tick,
         end_tick,
         start: start.clone(),
         end: end.clone(),
         fraction,
     })
+}
+
+fn present_at_or_before<C: Clone>(history: &ConfirmedHistory<C>, tick: Tick) -> Option<(Tick, C)> {
+    let index = (0..history.len())
+        .take_while(|index| {
+            history
+                .get_nth_tick(*index)
+                .is_some_and(|sample| sample <= tick)
+        })
+        .last()?;
+    let (sample_tick, ConfirmedState::Confirmed(value)) = history.get_nth_state(index)? else {
+        return None;
+    };
+    Some((sample_tick, value.clone()))
+}
+
+fn log_diagonal_interpolation(
+    entity: Entity,
+    interpolation_tick: Tick,
+    interpolation_overstep: f32,
+    head_sample: &HistorySample<SnakeHead>,
+    interpolated_head: &SnakeHead,
+    interpolated_tail: &TailPoints,
+    interpolated_length: &TailLength,
+    tail_history: &ConfirmedHistory<TailPoints>,
+    tail_sample_tick: Tick,
+) {
+    let polyline = interpolated_tail.polyline(interpolated_head, interpolated_length.current_size);
+    let Some((segment_index, dx, dy)) = first_diagonal_segment(&polyline) else {
+        return;
+    };
+    let tail_history_ticks = (0..tail_history.len())
+        .filter_map(|index| tail_history.get_nth_tick(index))
+        .map(|tick| tick.0)
+        .collect::<Vec<_>>();
+    trace!(
+        target: "lightyear_debug::lightrider_interpolation",
+        kind = "remote_snake_interpolation_diagonal",
+        ?entity,
+        interpolation_tick = interpolation_tick.0,
+        interpolation_overstep,
+        head_start_tick = head_sample.start_tick.0,
+        head_end_tick = head_sample.end_tick.0,
+        head_fraction = head_sample.fraction,
+        head_start = ?head_sample.start,
+        head_end = ?head_sample.end,
+        interpolated_head = ?interpolated_head,
+        tail_sample_tick = tail_sample_tick.0,
+        tail_history_ticks = ?tail_history_ticks,
+        tail_turns = ?interpolated_tail.turns,
+        tail_length = interpolated_length.current_size,
+        segment_index,
+        dx,
+        dy,
+        "remote snake interpolation produced diagonal tail"
+    );
+}
+
+fn first_diagonal_segment(polyline: &TailPolyline) -> Option<(usize, f32, f32)> {
+    polyline
+        .pairs_front_to_back()
+        .enumerate()
+        .find_map(|(index, (start, end))| {
+            let dx = (start.0.x - end.0.x).abs();
+            let dy = (start.0.y - end.0.y).abs();
+            (!axis_aligned(start.0, end.0)).then_some((index, dx, dy))
+        })
 }
 
 fn interpolate_snake_on_confirmed_path(
@@ -398,6 +486,10 @@ fn direction_between_points(start: Vec2, end: Vec2) -> Option<Direction> {
     } else {
         Some(Direction::Down)
     }
+}
+
+fn axis_aligned(start: Vec2, end: Vec2) -> bool {
+    (start.x - end.x).abs() <= GEOMETRY_EPSILON || (start.y - end.y).abs() <= GEOMETRY_EPSILON
 }
 
 fn same_position(a: Vec2, b: Vec2) -> bool {

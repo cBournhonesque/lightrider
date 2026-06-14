@@ -66,7 +66,18 @@ pub fn turn_head_from_input(
     let Ok((mut head, mut tail, log)) = query.get_mut(trigger.context) else {
         return;
     };
-    let _ = turn_tail_with_log(&mut head, &mut tail, log, direction);
+    let current = head.direction;
+    if !is_perpendicular_turn(current, direction) {
+        return;
+    }
+
+    let _ = apply_tail_op(
+        tail.bypass_change_detection(),
+        log,
+        TailPointsOp::PushTurn(TailTurn::new(head.position, current.opposite())),
+    );
+    tail.set_changed();
+    head.direction = direction;
 }
 
 pub fn direction_from_input(input: Vec2) -> Option<Direction> {
@@ -254,13 +265,16 @@ pub fn update_tails(
         } else {
             0.0
         };
-        let _ = shorten_tail_with_retention_with_log(
+        let (.., removed_tail_turns) = shorten_tail_with_retention_with_log(
             head.as_ref(),
-            &mut tail,
+            tail.bypass_change_detection(),
             log,
             length.as_mut(),
             retained_extra_length,
         );
+        if removed_tail_turns > 0 {
+            tail.set_changed();
+        }
         if lag_compensation_enabled {
             if let (Some(timeline), Some(history)) = (timeline.as_ref(), history.as_deref_mut()) {
                 history.record_sample(timeline.tick(), length.current_size, max_history_samples);
@@ -310,7 +324,7 @@ fn shorten_tail_with_retention_with_log<'a>(
     log: Option<Mut<'a, PatchHistory<TailPoints>>>,
     tail_length: &mut TailLength,
     retained_extra_length: f32,
-) -> Option<Mut<'a, PatchHistory<TailPoints>>> {
+) -> (Option<Mut<'a, PatchHistory<TailPoints>>>, usize) {
     let mut log = log;
     if tail_length.target_size < tail_length.current_size {
         tail_length.current_size = tail_length.target_size;
@@ -324,7 +338,7 @@ fn shorten_tail_with_retention_with_log<'a>(
             log.record(op);
         }
     }
-    log
+    (log, removed)
 }
 
 pub fn lag_compensation_extra_length(config: &GameConfig) -> f32 {

@@ -101,6 +101,7 @@ fn register_components(app: &mut App) {
     app.register_component::<components::snake::SnakeHead>()
         .add_prediction()
         .add_should_rollback(components::snake::snake_head_should_rollback)
+        .register_interpolation_fn(components::snake::interpolate_snake_head)
         .add_custom_interpolation();
     app.register_component_diff::<components::snake::TailPoints>()
         .add_prediction_diff()
@@ -109,6 +110,7 @@ fn register_components(app: &mut App) {
     app.register_component::<components::snake::TailLength>()
         .add_prediction()
         .add_should_rollback(components::snake::tail_length_should_rollback)
+        .register_interpolation_fn(components::snake::interpolate_tail_length)
         .add_custom_interpolation();
     app.register_component::<components::snake::Speed>()
         .add_prediction()
