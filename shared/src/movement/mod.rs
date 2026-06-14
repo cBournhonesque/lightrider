@@ -482,7 +482,6 @@ mod tests {
             .world_mut()
             .spawn((
                 SnakeBundle::default(),
-                PatchHistory::<TailPoints>::default(),
                 Replicated,
                 Interpolated,
                 SimulationAuthority,
@@ -510,11 +509,7 @@ mod tests {
 
         let snake = app
             .world_mut()
-            .spawn((
-                SnakeBundle::default(),
-                PatchHistory::<TailPoints>::default(),
-                Predicted,
-            ))
+            .spawn((SnakeBundle::default(), Predicted))
             .id();
         let before = head_position(&app, snake);
 

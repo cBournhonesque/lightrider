@@ -274,7 +274,12 @@ fn asset_file_path() -> String {
     if cfg!(target_family = "wasm") {
         "assets".to_string()
     } else {
-        "../assets".to_string()
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("client crate should live under the workspace root")
+            .join("assets")
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -311,6 +316,6 @@ mod tests {
 
     #[test]
     fn native_clients_load_assets_from_workspace_root() {
-        assert_eq!(asset_file_path(), "../assets");
+        assert!(std::path::Path::new(&asset_file_path()).join("powerline/sheet.png").exists());
     }
 }

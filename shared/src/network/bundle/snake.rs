@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_replicon::prelude::PatchHistory;
 use lightyear::prelude::{InterpolationTarget, NetworkTarget, PeerId, PredictionTarget, Replicate};
 
 use crate::network::protocol::prelude::Direction;
@@ -17,6 +18,7 @@ pub struct SnakeBundle {
     pub speed: Speed,
     pub acceleration: Acceleration,
     pub tail_points: TailPoints,
+    pub tail_points_patch_history: PatchHistory<TailPoints>,
     pub tail_path_history: TailPathHistory,
     pub food_boost: FoodBoost,
     pub input: SnakeInput,
@@ -52,6 +54,7 @@ impl SnakeBundle {
         Self {
             head,
             tail_points,
+            tail_points_patch_history: PatchHistory::default(),
             tail_path_history: TailPathHistory::default(),
             tail_length: TailLength {
                 current_size: config.starting_tail_length,

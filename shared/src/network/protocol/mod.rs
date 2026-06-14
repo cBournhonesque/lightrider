@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy_replicon::prelude::AppRuleExt as RepliconAppRuleExt;
 use lightyear::input::config::InputConfig;
 use lightyear::prelude::input::bei::InputPlugin;
 use lightyear::prelude::input::InputRegistryExt;
@@ -94,17 +93,15 @@ impl Plugin for ProtocolPlugin {
 
         // Tail visual-correction functions exist but are intentionally not registered yet.
         // Keep predicted visual correction disabled until the smoothing behavior is validated.
-        register_tail_points_diff(app);
         app.register_component::<components::snake::SnakeHead>()
             .add_prediction()
             .add_should_rollback(components::snake::snake_head_should_rollback)
             .register_interpolation_fn(components::snake::interpolate_snake_head)
             .add_custom_interpolation();
-        app.non_networked_component::<components::snake::TailPoints>()
-            .add_prediction()
+        app.register_component_diff::<components::snake::TailPoints>()
+            .add_prediction_diff()
             .add_should_rollback(components::snake::tail_points_should_rollback)
-            .register_interpolation_fn(components::snake::interpolate_tail_points)
-            .add_custom_interpolation();
+            .add_custom_interpolation_diff();
         app.register_component::<components::snake::TailLength>()
             .add_prediction()
             .add_should_rollback(components::snake::tail_length_should_rollback)
@@ -133,17 +130,4 @@ impl Plugin for ProtocolPlugin {
             .add_interpolation_with(components::common::interpolate_position);
         app.register_component::<components::common::RoomId>();
     }
-}
-
-fn register_tail_points_diff(app: &mut App) {
-    app.world_mut()
-        .init_resource::<lightyear::prelude::ComponentRegistry>();
-    app.world_mut().resource_scope(
-        |world, mut registry: Mut<lightyear::prelude::ComponentRegistry>| {
-            if !registry.is_registered::<components::snake::TailPoints>() {
-                registry.register_component::<components::snake::TailPoints>(world);
-            }
-        },
-    );
-    app.replicate_diff::<components::snake::TailPoints>();
 }
