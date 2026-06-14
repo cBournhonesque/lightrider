@@ -7,8 +7,8 @@ use bevy::prelude::*;
 use lightyear::prelude::{Client, Controlled, MessageReceiver, Predicted};
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::{
-    DeathReason, HasPlayer, Player, PlayerDeath, PlayerDeathStats, SnakeHead, TailLength,
-    TailPoints, TailPolyline,
+    DeathReason, HasPlayer, Player, PlayerDeath, PlayerDeathStats, PlayerScore, PlayerStats,
+    PlayerStatus, SnakeHead, TailLength, TailPoints, TailPolyline,
 };
 
 pub(crate) struct DeathPlugin;
@@ -23,6 +23,9 @@ pub(crate) struct ConfirmedDeath {
 
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 struct LastLocalSnakeTail(Option<TailPolyline>);
+
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+struct HadLocalSnake(bool);
 
 #[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
 pub(crate) struct DeathView {
@@ -60,9 +63,15 @@ impl Plugin for DeathPlugin {
 
         // all
         app.init_resource::<LastLocalSnakeTail>();
+        app.init_resource::<HadLocalSnake>();
         app.add_systems(
             Update,
-            (cache_local_snake_tail, handle_death_message).chain(),
+            (
+                cache_local_snake_tail,
+                handle_death_message,
+                ensure_death_view_for_dead_local_player,
+            )
+                .chain(),
         );
 
         // reflect
@@ -108,6 +117,64 @@ fn handle_death_message(
             death_view.stats = Some(message.stats);
             next_state.set(GameState::Dead);
         }
+    }
+}
+
+fn ensure_death_view_for_dead_local_player(
+    mut next_state: ResMut<NextState<GameState>>,
+    mut death_view: ResMut<DeathView>,
+    mut had_local_snake: ResMut<HadLocalSnake>,
+    config: Res<GameConfig>,
+    time: Res<Time>,
+    player: Query<
+        (
+            &Player,
+            &PlayerStatus,
+            Option<&PlayerScore>,
+            Option<&PlayerStats>,
+        ),
+        With<Controlled>,
+    >,
+    predicted_snakes: Query<Entity, (With<Controlled>, With<Predicted>, With<SnakeHead>)>,
+) {
+    let Ok((player, status, score, stats)) = player.single() else {
+        return;
+    };
+
+    let has_local_snake = player.snake.is_some() || predicted_snakes.iter().next().is_some();
+    if has_local_snake {
+        had_local_snake.0 = true;
+        return;
+    }
+
+    if !had_local_snake.0 || death_view.stats.is_some() || *status != PlayerStatus::Dead {
+        return;
+    }
+
+    debug!("Showing fallback death recap before detailed death message arrived");
+    *death_view = fallback_death_view(
+        time.elapsed_secs(),
+        &config,
+        score.map(|score| score.value),
+        stats.copied(),
+    );
+    next_state.set(GameState::Dead);
+}
+
+fn fallback_death_view(
+    now_seconds: f32,
+    config: &GameConfig,
+    score: Option<u32>,
+    stats: Option<PlayerStats>,
+) -> DeathView {
+    DeathView {
+        killer_snake: None,
+        respawn_allowed_at_seconds: now_seconds + config.respawn.player_cooldown_seconds.max(0.0),
+        message: "You died".to_string(),
+        stats: Some(match stats {
+            Some(stats) => PlayerDeathStats::from_live(score.unwrap_or_default(), &stats),
+            None => PlayerDeathStats::default(),
+        }),
     }
 }
 
@@ -173,6 +240,7 @@ fn death_position(
             .or_else(|_| tails.get(message.killer_snake))
             .ok()
             .map(|(head, _, _)| head.position)
+            .or(Some(message.position))
     })
 }
 
@@ -249,5 +317,42 @@ fn set_alive_state(
     if my_snake.iter().next().is_some() {
         trace!("Setting state to Alive");
         next_state.set(GameState::Alive);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_death_view_uses_current_life_stats_when_available() {
+        let config = GameConfig::default();
+        let stats = PlayerStats {
+            average_speed: 2.5,
+            speed_samples: 12,
+            time_alive_seconds: 9.0,
+            kills: 3,
+            time_as_leader_seconds: 4.0,
+            food_eaten: 5,
+        };
+
+        let view = fallback_death_view(10.0, &config, Some(42), Some(stats));
+
+        assert_eq!(view.message, "You died");
+        assert_eq!(
+            view.respawn_allowed_at_seconds,
+            10.0 + config.respawn.player_cooldown_seconds
+        );
+        assert_eq!(
+            view.stats,
+            Some(PlayerDeathStats {
+                average_speed: 2.5,
+                score: 42,
+                time_alive_seconds: 9.0,
+                kills: 3,
+                time_as_leader_seconds: 4.0,
+                food_eaten: 5,
+            })
+        );
     }
 }

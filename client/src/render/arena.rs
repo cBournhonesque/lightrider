@@ -1,6 +1,4 @@
 use bevy::prelude::*;
-use bevy::sprite_render::AlphaMode2d;
-
 use shared::config::GameConfig;
 
 pub(crate) struct ArenaRenderPlugin;
@@ -9,6 +7,8 @@ const BACKGROUND_Z: f32 = -100.0;
 const GRID_Z: f32 = -99.5;
 const BORDER_GLOW_Z: f32 = -90.5;
 const BORDER_Z: f32 = -90.0;
+const BORDER_GLOW_ALPHA: f32 = 0.075;
+const BORDER_CORE_ALPHA: f32 = 0.92;
 
 impl Plugin for ArenaRenderPlugin {
     fn build(&self, app: &mut App) {
@@ -18,18 +18,11 @@ impl Plugin for ArenaRenderPlugin {
     }
 }
 
-fn spawn_asset_arena(
-    mut commands: Commands,
-    config: Res<GameConfig>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
+fn spawn_asset_arena(mut commands: Commands, config: Res<GameConfig>) {
     if !config.render.use_assets {
         return;
     }
 
-    let half_width = config.arena.width * 0.5;
-    let half_height = config.arena.height * 0.5;
     let background = Sprite::from_color(
         Color::srgb(0.014, 0.046, 0.068),
         Vec2::new(config.arena.width, config.arena.height),
@@ -38,48 +31,24 @@ fn spawn_asset_arena(
     spawn_background_grid(&mut commands, &config);
 
     let outline_width = config.render.map_outline_width.max(1.0);
-    let core_width = outline_width.clamp(1.2, 1.8);
-    let glow_width = (outline_width * 5.5).max(13.0);
-    let glow_material = materials.add(ColorMaterial {
-        color: Color::linear_rgba(0.02, 0.45, 2.8, 0.06),
-        alpha_mode: AlphaMode2d::Blend,
-        ..default()
-    });
-    let border_material = materials.add(ColorMaterial {
-        color: Color::linear_rgb(0.06, 0.92, 4.2),
-        alpha_mode: AlphaMode2d::Opaque,
-        ..default()
-    });
-    let horizontal_glow_mesh = meshes.add(Capsule2d::new(glow_width * 0.5, config.arena.width));
-    let vertical_glow_mesh = meshes.add(Capsule2d::new(glow_width * 0.5, config.arena.height));
-    let horizontal_mesh = meshes.add(Capsule2d::new(core_width * 0.5, config.arena.width));
-    let vertical_mesh = meshes.add(Capsule2d::new(core_width * 0.5, config.arena.height));
-    for y in [-half_height, half_height] {
-        commands.spawn((
-            Mesh2d(horizontal_glow_mesh.clone()),
-            MeshMaterial2d(glow_material.clone()),
-            Transform::from_xyz(0.0, y, BORDER_GLOW_Z)
-                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-        ));
-        commands.spawn((
-            Mesh2d(horizontal_mesh.clone()),
-            MeshMaterial2d(border_material.clone()),
-            Transform::from_xyz(0.0, y, BORDER_Z)
-                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-        ));
-    }
-    for x in [-half_width, half_width] {
-        commands.spawn((
-            Mesh2d(vertical_glow_mesh.clone()),
-            MeshMaterial2d(glow_material.clone()),
-            Transform::from_xyz(x, 0.0, BORDER_GLOW_Z),
-        ));
-        commands.spawn((
-            Mesh2d(vertical_mesh.clone()),
-            MeshMaterial2d(border_material.clone()),
-            Transform::from_xyz(x, 0.0, BORDER_Z),
-        ));
-    }
+    let core_width = outline_width.clamp(1.15, 1.55);
+    let glow_width = (outline_width * 5.0).max(12.0);
+    spawn_inner_border_layer(
+        &mut commands,
+        config.arena.width,
+        config.arena.height,
+        glow_width,
+        Color::linear_rgba(0.02, 0.46, 2.4, BORDER_GLOW_ALPHA),
+        BORDER_GLOW_Z,
+    );
+    spawn_inner_border_layer(
+        &mut commands,
+        config.arena.width,
+        config.arena.height,
+        core_width,
+        Color::linear_rgba(0.10, 0.92, 4.2, BORDER_CORE_ALPHA),
+        BORDER_Z,
+    );
 }
 
 fn spawn_background_grid(commands: &mut Commands, config: &GameConfig) {
@@ -115,23 +84,57 @@ fn draw_arena(mut gizmos: Gizmos, config: Res<GameConfig>) {
 
     let half_width = config.arena.width * 0.5;
     let half_height = config.arena.height * 0.5;
-    let min = Vec2::new(-half_width, -half_height);
-    let max = Vec2::new(half_width, half_height);
-    let border = Color::srgb(0.55, 0.62, 0.7);
-    let outline = Color::srgb(0.05, 0.95, 1.0);
-    let axis = Color::srgb(0.12, 0.16, 0.2);
-
-    draw_rect(
-        &mut gizmos,
-        min,
-        max,
-        config.render.map_outline_width.max(1.0),
-        outline,
+    let glow_width = (config.render.map_outline_width.max(1.0) * 5.0).max(12.0);
+    let core_width = config.render.map_outline_width.max(1.0).clamp(1.15, 1.55);
+    let glow_min = Vec2::new(
+        -half_width + glow_width * 0.5,
+        -half_height + glow_width * 0.5,
     );
-    draw_rect(&mut gizmos, min, max, 1.0, border);
-    gizmos.line_2d(Vec2::new(min.x, 0.0), Vec2::new(max.x, 0.0), axis);
-    gizmos.line_2d(Vec2::new(0.0, min.y), Vec2::new(0.0, max.y), axis);
-    gizmos.circle_2d(Vec2::ZERO, 6.0, Color::srgb(0.25, 0.32, 0.38));
+    let glow_max = Vec2::new(
+        half_width - glow_width * 0.5,
+        half_height - glow_width * 0.5,
+    );
+    let core_min = Vec2::new(
+        -half_width + core_width * 0.5,
+        -half_height + core_width * 0.5,
+    );
+    let core_max = Vec2::new(
+        half_width - core_width * 0.5,
+        half_height - core_width * 0.5,
+    );
+    let glow = Color::linear_rgba(0.02, 0.46, 2.4, BORDER_GLOW_ALPHA);
+    let core = Color::linear_rgba(0.10, 0.92, 4.2, BORDER_CORE_ALPHA);
+
+    draw_rect(&mut gizmos, glow_min, glow_max, glow_width, glow);
+    draw_rect(&mut gizmos, core_min, core_max, core_width, core);
+}
+
+fn spawn_inner_border_layer(
+    commands: &mut Commands,
+    arena_width: f32,
+    arena_height: f32,
+    width: f32,
+    color: Color,
+    z: f32,
+) {
+    let half_width = arena_width * 0.5;
+    let half_height = arena_height * 0.5;
+    let horizontal_size = Vec2::new(arena_width, width);
+    let vertical_size = Vec2::new(width, (arena_height - width * 2.0).max(width));
+    let inset = width * 0.5;
+
+    for y in [-half_height + inset, half_height - inset] {
+        commands.spawn((
+            Sprite::from_color(color, horizontal_size),
+            Transform::from_xyz(0.0, y, z),
+        ));
+    }
+    for x in [-half_width + inset, half_width - inset] {
+        commands.spawn((
+            Sprite::from_color(color, vertical_size),
+            Transform::from_xyz(x, 0.0, z),
+        ));
+    }
 }
 
 fn draw_rect(gizmos: &mut Gizmos, min: Vec2, max: Vec2, width: f32, color: Color) {

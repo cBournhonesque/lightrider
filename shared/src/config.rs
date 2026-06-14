@@ -113,7 +113,7 @@ impl Default for MovementConfig {
             tick_rate_hz: 32.0,
             starting_tail_length: 200.0,
             min_speed: 0.85,
-            max_speed: 4.0,
+            max_speed: 3.4,
             base_acceleration: -0.01,
             food_boost_acceleration: 0.012,
             food_boost_decay: 0.94,
@@ -174,6 +174,8 @@ pub struct SoundConfig {
     pub background_volume: f32,
     pub death_volume: f32,
     pub food_volume: f32,
+    pub turn_volume: f32,
+    pub proximity_boost_volume: f32,
     pub electro_loop_volume: f32,
     pub spatial_audio: bool,
     pub spatial_scale: f32,
@@ -182,6 +184,8 @@ pub struct SoundConfig {
     pub remote_sound_max_distance: f32,
     pub remote_death_volume: f32,
     pub remote_food_volume: f32,
+    pub remote_turn_volume: f32,
+    pub remote_proximity_boost_volume: f32,
     pub remote_speed_volume: f32,
     pub speed_loop_start_speed: f32,
     pub speed_loop_min_volume: f32,
@@ -198,6 +202,8 @@ impl Default for SoundConfig {
             background_volume: 0.0,
             death_volume: 0.55,
             food_volume: 0.65,
+            turn_volume: 0.16,
+            proximity_boost_volume: 0.2,
             electro_loop_volume: 0.85,
             spatial_audio: true,
             spatial_scale: 0.02,
@@ -206,7 +212,9 @@ impl Default for SoundConfig {
             remote_sound_max_distance: 900.0,
             remote_death_volume: 1.0,
             remote_food_volume: 0.75,
-            remote_speed_volume: 0.6,
+            remote_turn_volume: 0.85,
+            remote_proximity_boost_volume: 0.85,
+            remote_speed_volume: 0.75,
             speed_loop_start_speed: 1.2,
             speed_loop_min_volume: 0.12,
             speed_loop_max_volume: 1.0,
@@ -484,12 +492,17 @@ mod tests {
         assert_eq!(config.render.normal_camera_max_scale, 0.62);
         assert_eq!(config.render.debug_camera_scale, 1.0);
         assert_eq!(config.movement.min_speed, 0.85);
+        assert_eq!(config.movement.max_speed, 3.4);
         assert!(config.sound.enabled);
         assert_eq!(config.sound.background_volume, 0.0);
         assert_eq!(config.sound.death_volume, 0.55);
+        assert_eq!(config.sound.turn_volume, 0.16);
+        assert_eq!(config.sound.proximity_boost_volume, 0.2);
         assert_eq!(config.sound.electro_loop_volume, 0.85);
         assert_eq!(config.sound.remote_sound_max_distance, 900.0);
-        assert_eq!(config.sound.remote_speed_volume, 0.6);
+        assert_eq!(config.sound.remote_turn_volume, 0.85);
+        assert_eq!(config.sound.remote_proximity_boost_volume, 0.85);
+        assert_eq!(config.sound.remote_speed_volume, 0.75);
         assert_eq!(config.sound.speed_loop_start_speed, 1.2);
         assert_eq!(config.sound.speed_loop_max_volume, 1.0);
         assert_eq!(config.food.visual_radius, 3.0);

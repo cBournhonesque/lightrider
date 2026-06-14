@@ -102,6 +102,7 @@ pub fn handle_collision(
             killed_name,
             room: *killed_room,
             reason: collision_event.reason,
+            position: killed_head.position,
             stats: killed_stats,
         };
         for (remote_id, client_room) in &clients {

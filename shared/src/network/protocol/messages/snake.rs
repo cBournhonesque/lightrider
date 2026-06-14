@@ -1,5 +1,5 @@
 use bevy::ecs::entity::{EntityMapper, MapEntities};
-use bevy::prelude::{Entity, Message, Reflect};
+use bevy::prelude::{Entity, Message, Reflect, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::network::protocol::components::common::RoomId;
@@ -36,6 +36,7 @@ pub struct PlayerDeath {
     pub killed_name: String,
     pub room: RoomId,
     pub reason: DeathReason,
+    pub position: Vec2,
     pub stats: PlayerDeathStats,
 }
 

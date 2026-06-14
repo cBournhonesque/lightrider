@@ -6,8 +6,8 @@ use bevy::prelude::*;
 use lightyear::prelude::Controlled;
 use shared::config::{GameConfig, MovementConfig, SoundConfig};
 use shared::network::protocol::prelude::{
-    Acceleration, DeathReason, FoodBoost, Player, PlayerStatus, RoomId, SnakeHead, Speed,
-    TailPoints,
+    Acceleration, DeathReason, Direction, FoodBoost, Player, PlayerStatus, RoomId, SnakeHead,
+    Speed, TailPoints,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -43,6 +43,16 @@ struct RemoteSpeedLoopState {
     loops: HashMap<Entity, RemoteSpeedLoops>,
 }
 
+#[derive(Resource, Default)]
+struct TurnSoundState {
+    directions: HashMap<Entity, Direction>,
+}
+
+#[derive(Resource, Default)]
+struct ProximityBoostSoundState {
+    active: HashSet<Entity>,
+}
+
 #[derive(Default)]
 struct RemoteSpeedLoops {
     line_loop: Option<Entity>,
@@ -73,10 +83,14 @@ impl Plugin for SoundPlugin {
         app.init_resource::<PowerlineSounds>();
         app.init_resource::<LocalSpeedLoopState>();
         app.init_resource::<RemoteSpeedLoopState>();
+        app.init_resource::<TurnSoundState>();
+        app.init_resource::<ProximityBoostSoundState>();
         app.add_systems(
             Update,
             (
                 sync_spatial_listener,
+                play_turn_sounds,
+                play_proximity_boost_sounds,
                 play_confirmed_death_sounds,
                 play_confirmed_food_sounds,
                 update_local_speed_loops,
@@ -131,6 +145,156 @@ fn sync_spatial_listener(
             GlobalTransform::default(),
         ));
     }
+}
+
+fn play_turn_sounds(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    sounds: Res<PowerlineSounds>,
+    mut state: ResMut<TurnSoundState>,
+    players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
+    local_snakes: Query<(Entity, &SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
+    heads: Query<&SnakeHead>,
+) {
+    if !config.sound.enabled {
+        state.directions.clear();
+        return;
+    }
+
+    let listener = remote_listener_snapshot(&players, &heads);
+    let mut seen = HashSet::new();
+
+    if let Some((snake, head, _)) = local_snakes.iter().next() {
+        seen.insert(snake);
+        if direction_changed(&mut state.directions, snake, head.direction) {
+            let volume = config.sound.master_volume * config.sound.turn_volume;
+            spawn_one_shot(
+                &mut commands,
+                sounds.food_grab.clone(),
+                None,
+                volume,
+                &config.sound,
+            );
+        }
+    }
+
+    let Some(listener) = listener else {
+        state.directions.retain(|entity, _| seen.contains(entity));
+        return;
+    };
+
+    for (player_entity, player, room, status, is_local) in &players {
+        if is_local || *status != PlayerStatus::Alive || *room != listener.room {
+            continue;
+        }
+        let Some(snake) = player.snake else {
+            continue;
+        };
+        let Ok(head) = heads.get(snake) else {
+            continue;
+        };
+
+        seen.insert(player_entity);
+        if !direction_changed(&mut state.directions, player_entity, head.direction) {
+            continue;
+        }
+
+        let volume = remote_event_volume(
+            head.position,
+            listener,
+            config.sound.master_volume * config.sound.turn_volume,
+            config.sound.remote_turn_volume,
+            &config.sound,
+        );
+        spawn_one_shot(
+            &mut commands,
+            sounds.food_grab.clone(),
+            Some(head.position),
+            volume,
+            &config.sound,
+        );
+    }
+
+    state.directions.retain(|entity, _| seen.contains(entity));
+}
+
+fn play_proximity_boost_sounds(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    sounds: Res<PowerlineSounds>,
+    mut state: ResMut<ProximityBoostSoundState>,
+    players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
+    local_snakes: Query<(Entity, &Acceleration, &FoodBoost), (With<Controlled>, With<TailPoints>)>,
+    heads: Query<&SnakeHead>,
+    accelerations: Query<&Acceleration>,
+    food_boosts: Query<&FoodBoost>,
+) {
+    if !config.sound.enabled {
+        state.active.clear();
+        return;
+    }
+
+    let listener = remote_listener_snapshot(&players, &heads);
+    let mut active_now = HashSet::new();
+
+    if let Some((snake, acceleration, food_boost)) = local_snakes.iter().next() {
+        if proximity_boost_active(acceleration.0, food_boost.0, &config.movement) {
+            active_now.insert(snake);
+            if !state.active.contains(&snake) {
+                let volume = config.sound.master_volume * config.sound.proximity_boost_volume;
+                spawn_one_shot(
+                    &mut commands,
+                    sounds.food_grab.clone(),
+                    None,
+                    volume,
+                    &config.sound,
+                );
+            }
+        }
+    }
+
+    if let Some(listener) = listener {
+        for (player_entity, player, room, status, is_local) in &players {
+            if is_local || *status != PlayerStatus::Alive || *room != listener.room {
+                continue;
+            }
+            let Some(snake) = player.snake else {
+                continue;
+            };
+            let (Ok(head), Ok(acceleration), Ok(food_boost)) = (
+                heads.get(snake),
+                accelerations.get(snake),
+                food_boosts.get(snake),
+            ) else {
+                continue;
+            };
+            if !proximity_boost_active(acceleration.0, food_boost.0, &config.movement) {
+                continue;
+            }
+
+            active_now.insert(player_entity);
+            if state.active.contains(&player_entity) {
+                continue;
+            }
+
+            let volume = remote_event_volume(
+                head.position,
+                listener,
+                config.sound.master_volume * config.sound.proximity_boost_volume,
+                config.sound.remote_proximity_boost_volume,
+                &config.sound,
+            );
+            spawn_one_shot(
+                &mut commands,
+                sounds.food_grab.clone(),
+                Some(head.position),
+                volume,
+                &config.sound,
+            );
+        }
+    }
+
+    state.active = active_now;
 }
 
 fn play_confirmed_death_sounds(
@@ -195,14 +359,11 @@ fn play_confirmed_food_sounds(
         let Some(listener) = listener else {
             continue;
         };
-        let Ok((head, room)) = snakes.get(collision.snake) else {
-            continue;
+        let source_position = match snakes.get(collision.snake) {
+            Ok((head, room)) if *room == listener.room => head.position,
+            Ok(_) => continue,
+            Err(_) => collision.head_position,
         };
-        if *room != listener.room {
-            continue;
-        }
-
-        let source_position = head.position;
         let attenuation =
             distance_attenuation(source_position.distance(listener.position), &config.sound);
         let volume = config.sound.master_volume
@@ -613,6 +774,29 @@ fn proximity_boost_active(acceleration: f32, food_boost: f32, movement: &Movemen
     acceleration - food_boost > movement.base_acceleration + 0.001
 }
 
+fn direction_changed(
+    directions: &mut HashMap<Entity, Direction>,
+    entity: Entity,
+    direction: Direction,
+) -> bool {
+    let changed = directions
+        .insert(entity, direction)
+        .is_some_and(|previous| previous != direction);
+    changed
+}
+
+fn remote_event_volume(
+    source_position: Vec2,
+    listener: ListenerSnapshot,
+    base_volume: f32,
+    remote_multiplier: f32,
+    sound: &SoundConfig,
+) -> f32 {
+    base_volume
+        * remote_multiplier
+        * distance_attenuation(source_position.distance(listener.position), sound)
+}
+
 fn death_sound_volume(
     death: &ConfirmedDeath,
     listener: Option<ListenerSnapshot>,
@@ -791,5 +975,51 @@ mod tests {
             &movement
         ));
         assert!(proximity_boost_active(0.04, 0.01, &movement));
+    }
+
+    #[test]
+    fn direction_change_only_triggers_after_first_observed_direction() {
+        let entity = Entity::from_bits(7);
+        let mut directions = HashMap::new();
+
+        assert!(!direction_changed(
+            &mut directions,
+            entity,
+            Direction::Right
+        ));
+        assert!(!direction_changed(
+            &mut directions,
+            entity,
+            Direction::Right
+        ));
+        assert!(direction_changed(&mut directions, entity, Direction::Up));
+    }
+
+    #[test]
+    fn remote_event_volume_uses_distance_attenuation() {
+        let sound = SoundConfig::default();
+        let listener = ListenerSnapshot {
+            position: Vec2::ZERO,
+            room: RoomId(1),
+        };
+        let base_volume = 0.5;
+
+        let nearby = remote_event_volume(
+            Vec2::new(sound.remote_sound_full_volume_distance * 0.5, 0.0),
+            listener,
+            base_volume,
+            sound.remote_turn_volume,
+            &sound,
+        );
+        let far = remote_event_volume(
+            Vec2::new(sound.remote_sound_max_distance, 0.0),
+            listener,
+            base_volume,
+            sound.remote_turn_volume,
+            &sound,
+        );
+
+        assert_eq!(nearby, base_volume * sound.remote_turn_volume);
+        assert_eq!(far, 0.0);
     }
 }

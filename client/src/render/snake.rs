@@ -67,6 +67,12 @@ struct DesiredSnakeMeshVisual {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+struct HeadGlowVisual {
+    diameter: f32,
+    alpha: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum TailMeshShape {
     Capsule { length: f32, width: f32 },
     Circle { radius: f32 },
@@ -135,6 +141,8 @@ fn sync_asset_snake_visuals(
             &SnakeHead,
             &TailPoints,
             Option<&TailLength>,
+            Option<&Speed>,
+            Option<&Acceleration>,
             Option<&HasPlayer>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -241,6 +249,8 @@ fn desired_snake_visuals(
             &SnakeHead,
             &TailPoints,
             Option<&TailLength>,
+            Option<&Speed>,
+            Option<&Acceleration>,
             Option<&HasPlayer>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -249,14 +259,14 @@ fn desired_snake_visuals(
     let tail_width = config.render.tail_width.max(1.0);
     let head_size = config.render.head_size.max(tail_width * 1.8);
     let head_diameter = (head_size * 0.62).max(tail_width * 2.5);
-    let head_glow_diameter = head_diameter * 3.0;
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
-    for (owner, head, points, length, player) in tails.iter() {
+    for (owner, head, points, length, speed, acceleration, player) in tails.iter() {
         let points = visible_tail(head, points, length);
         let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
+        let head_glow = head_glow_visual(head_diameter, speed, acceleration, config);
         sprite_desired.push(DesiredSnakeSpriteVisual {
             key: SnakeVisualKey {
                 owner,
@@ -265,8 +275,8 @@ fn desired_snake_visuals(
             transform: Transform::from_translation(head.extend(SNAKE_HEAD_GLOW_Z)),
             sprite: sheet.sprite(
                 PowerlineFrame::HeadDot,
-                Vec2::splat(head_glow_diameter),
-                color.head_glow(),
+                Vec2::splat(head_glow.diameter),
+                color.head_glow(head_glow.alpha),
             ),
         });
         sprite_desired.push(DesiredSnakeSpriteVisual {
@@ -339,6 +349,51 @@ fn desired_snake_visuals(
     }
 
     (sprite_desired, mesh_desired)
+}
+
+fn head_glow_visual(
+    head_diameter: f32,
+    speed: Option<&Speed>,
+    acceleration: Option<&Acceleration>,
+    config: &GameConfig,
+) -> HeadGlowVisual {
+    let base_diameter = head_diameter * 3.0;
+    let acceleration = acceleration
+        .map(|acceleration| acceleration.0)
+        .unwrap_or(0.0);
+    if acceleration <= 0.0 {
+        return HeadGlowVisual {
+            diameter: base_diameter,
+            alpha: 0.10,
+        };
+    }
+
+    let speed = speed
+        .map(|speed| speed.0)
+        .unwrap_or(config.movement.min_speed);
+    let speed_t = normalized_range(
+        speed,
+        config.movement.min_speed,
+        config
+            .movement
+            .max_speed
+            .max(config.movement.min_speed + f32::EPSILON),
+    );
+    let typical_acceleration = (config.movement.base_acceleration.abs()
+        * config.movement.boost_acceleration_ratio
+        + config.movement.food_boost_acceleration * 2.0)
+        .max(0.01);
+    let acceleration_t = (acceleration / typical_acceleration).clamp(0.0, 1.0);
+
+    HeadGlowVisual {
+        diameter: base_diameter * (1.0 + speed_t * 0.22 + acceleration_t * 0.10),
+        alpha: 0.10 + speed_t * 0.05 + acceleration_t * 0.03,
+    }
+}
+
+fn normalized_range(value: f32, start: f32, end: f32) -> f32 {
+    let width = (end - start).max(f32::EPSILON);
+    ((value - start) / width).clamp(0.0, 1.0)
 }
 
 fn visible_tail(
@@ -786,6 +841,7 @@ mod tests {
                     killed_name: "killed".to_string(),
                     room: RoomId(1),
                     reason: DeathReason::Collision,
+                    position: Vec2::new(12.0, 34.0),
                     stats: PlayerDeathStats::default(),
                 },
                 local_player: true,
@@ -837,5 +893,34 @@ mod tests {
                 (Vec2::new(10.0, 0.0), Direction::Up),
             ])
         );
+    }
+
+    #[test]
+    fn accelerating_snake_head_glow_expands_with_speed() {
+        let config = GameConfig::default();
+        let head_diameter = 4.0;
+        let idle = head_glow_visual(
+            head_diameter,
+            Some(&Speed(config.movement.min_speed)),
+            Some(&Acceleration(config.movement.base_acceleration)),
+            &config,
+        );
+        let accelerating_slow = head_glow_visual(
+            head_diameter,
+            Some(&Speed(config.movement.min_speed)),
+            Some(&Acceleration(0.01)),
+            &config,
+        );
+        let accelerating_fast = head_glow_visual(
+            head_diameter,
+            Some(&Speed(config.movement.max_speed)),
+            Some(&Acceleration(0.01)),
+            &config,
+        );
+
+        assert!(accelerating_slow.diameter > idle.diameter);
+        assert!(accelerating_slow.alpha > idle.alpha);
+        assert!(accelerating_fast.diameter > accelerating_slow.diameter);
+        assert!(accelerating_fast.alpha > accelerating_slow.alpha);
     }
 }
