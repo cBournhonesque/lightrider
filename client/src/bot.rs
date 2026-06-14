@@ -117,7 +117,13 @@ fn update_move_action_mocks(
         .filter(|(other_entity, other_room, _)| *other_entity != snake && other_room == room)
         .map(|(_, _, tail)| tail)
         .collect::<Vec<_>>();
-    let direction = controller.choose_direction_avoiding(&tail, &config.arena, &obstacle_tails);
+    let direction = controller.choose_direction_avoiding_limited(
+        &tail,
+        &config.arena,
+        &obstacle_tails,
+        config.bots.max_turns_per_second,
+        config.movement.tick_rate_hz.round().max(1.0) as u32,
+    );
     let value = ActionValue::Axis2D(direction_to_input(direction));
     for (_, mut mock) in actions
         .iter_mut()

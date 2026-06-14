@@ -364,7 +364,7 @@ fn head_glow_visual(
     if acceleration <= 0.0 {
         return HeadGlowVisual {
             diameter: base_diameter,
-            alpha: 0.10,
+            alpha: 0.0,
         };
     }
 
@@ -379,6 +379,12 @@ fn head_glow_visual(
             .max_speed
             .max(config.movement.min_speed + f32::EPSILON),
     );
+    if speed_t <= f32::EPSILON {
+        return HeadGlowVisual {
+            diameter: base_diameter,
+            alpha: 0.0,
+        };
+    }
     let typical_acceleration = (config.movement.base_acceleration.abs()
         * config.movement.boost_acceleration_ratio
         + config.movement.food_boost_acceleration * 2.0)
@@ -387,7 +393,7 @@ fn head_glow_visual(
 
     HeadGlowVisual {
         diameter: base_diameter * (1.0 + speed_t * 0.22 + acceleration_t * 0.10),
-        alpha: 0.10 + speed_t * 0.05 + acceleration_t * 0.03,
+        alpha: 0.05 + speed_t * 0.06 + acceleration_t * 0.03,
     }
 }
 
@@ -896,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn accelerating_snake_head_glow_expands_with_speed() {
+    fn accelerating_snake_head_glow_starts_after_minimum_speed_and_expands() {
         let config = GameConfig::default();
         let head_diameter = 4.0;
         let idle = head_glow_visual(
@@ -905,9 +911,17 @@ mod tests {
             Some(&Acceleration(config.movement.base_acceleration)),
             &config,
         );
-        let accelerating_slow = head_glow_visual(
+        let accelerating_at_minimum = head_glow_visual(
             head_diameter,
             Some(&Speed(config.movement.min_speed)),
+            Some(&Acceleration(0.01)),
+            &config,
+        );
+        let accelerating_mid = head_glow_visual(
+            head_diameter,
+            Some(&Speed(
+                (config.movement.min_speed + config.movement.max_speed) * 0.5,
+            )),
             Some(&Acceleration(0.01)),
             &config,
         );
@@ -918,9 +932,11 @@ mod tests {
             &config,
         );
 
-        assert!(accelerating_slow.diameter > idle.diameter);
-        assert!(accelerating_slow.alpha > idle.alpha);
-        assert!(accelerating_fast.diameter > accelerating_slow.diameter);
-        assert!(accelerating_fast.alpha > accelerating_slow.alpha);
+        assert_eq!(idle.alpha, 0.0);
+        assert_eq!(accelerating_at_minimum.alpha, 0.0);
+        assert!(accelerating_mid.diameter > idle.diameter);
+        assert!(accelerating_mid.alpha > idle.alpha);
+        assert!(accelerating_fast.diameter > accelerating_mid.diameter);
+        assert!(accelerating_fast.alpha > accelerating_mid.alpha);
     }
 }

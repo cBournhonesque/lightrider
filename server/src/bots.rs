@@ -282,8 +282,13 @@ fn drive_bots(
             .map(|(_, _, tail)| tail)
             .collect::<Vec<_>>();
         let visible_tail = visible_tail(&head, &tail, Some(length));
-        let direction =
-            controller.choose_direction_avoiding(&visible_tail, &config.arena, &obstacle_tails);
+        let direction = controller.choose_direction_avoiding_limited(
+            &visible_tail,
+            &config.arena,
+            &obstacle_tails,
+            config.bots.max_turns_per_second,
+            config.movement.tick_rate_hz.round().max(1.0) as u32,
+        );
         if is_perpendicular_turn(head.direction, direction) {
             let _ = turn_tail_with_log(head.as_mut(), tail.as_mut(), log, direction);
         }

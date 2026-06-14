@@ -75,7 +75,7 @@ fn sync_asset_food_visuals(
         return;
     }
 
-    let visual_size = (config.food.visual_radius.max(1.0) * 4.0).max(6.0);
+    let visual_size = food_visual_size(&config);
     let mut seen = HashSet::with_capacity(food.iter().len());
     for (target, position) in &food {
         seen.insert(target);
@@ -114,6 +114,10 @@ fn food_color(entity: Entity) -> Color {
     Color::hsl(hue, 1.0, 0.55)
 }
 
+fn food_visual_size(config: &GameConfig) -> f32 {
+    (config.food.visual_radius.max(1.0) * 3.25).max(5.0)
+}
+
 fn food_rotation(entity: Entity) -> Quat {
     let bits = entity.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15);
     let angle = ((bits >> 40) as f32 / ((1_u64 << 24) as f32)) * std::f32::consts::TAU;
@@ -139,7 +143,7 @@ fn spawn_confirmed_food_pickup_animations(
         return;
     }
 
-    let visual_size = (config.food.visual_radius.max(1.0) * 4.0).max(6.0);
+    let visual_size = food_visual_size(&config);
     for pickup in pickups.read() {
         for (visual_entity, visual) in &visuals {
             if visual.target == pickup.collision.food {
@@ -220,5 +224,11 @@ mod tests {
     fn food_color_is_stable_for_animation() {
         let food = Entity::from_bits(123);
         assert_eq!(food_color(food), food_color(food));
+    }
+
+    #[test]
+    fn food_visual_size_stays_smaller_than_old_sprite_scale() {
+        let config = GameConfig::default();
+        assert!(food_visual_size(&config) < config.food.visual_radius * 4.0);
     }
 }

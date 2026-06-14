@@ -21,7 +21,7 @@ pub enum SimulationSet {
 }
 
 pub const MIN_SPEED: f32 = 0.85;
-pub const MAX_SPEED: f32 = 3.4;
+pub const MAX_SPEED: f32 = 3.0;
 pub const BASE_ACCELERATION: f32 = -0.01;
 pub const ACCELERATION_RATIO: f32 = 2.0;
 

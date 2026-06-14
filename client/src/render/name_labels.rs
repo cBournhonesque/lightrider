@@ -10,17 +10,18 @@ use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, SnakeH
 
 use crate::render::colors::snake_color_for_player;
 
-const LABEL_OFFSET: Vec2 = Vec2::new(18.0, 16.0);
-const LABEL_SHADOW_OFFSET: Vec2 = Vec2::new(1.25, -1.25);
+const LABEL_OFFSET: Vec2 = Vec2::new(14.0, 12.0);
+const LABEL_SHADOW_OFFSET: Vec2 = Vec2::new(1.0, -1.0);
 const LABEL_Z: f32 = 20.0;
 const LABEL_SHADOW_Z: f32 = LABEL_Z - 0.01;
-const LABEL_FONT_SIZE: f32 = 14.0;
+const LABEL_FONT_SIZE: f32 = 10.0;
 
 pub(crate) struct NameLabelRenderPlugin;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct NameLabel {
     player: Entity,
+    snake: Entity,
     layer: NameLabelLayer,
 }
 
@@ -49,12 +50,19 @@ fn update_name_labels(
     mut commands: Commands,
     players: Query<(Entity, &Player, &PlayerStatus)>,
     tails: Query<
-        (Entity, &SnakeHead, Option<&HasPlayer>),
+        (
+            Entity,
+            &SnakeHead,
+            Option<&HasPlayer>,
+            Has<Predicted>,
+            Has<Interpolated>,
+            Has<Replicated>,
+        ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
     mut labels: Query<(
         Entity,
-        &NameLabel,
+        &mut NameLabel,
         &mut Text2d,
         &mut TextColor,
         &mut Transform,
@@ -65,9 +73,10 @@ fn update_name_labels(
         .iter()
         .filter(|(_, _, status)| **status == PlayerStatus::Alive)
         .filter_map(|(player_entity, player, _)| {
-            let head = head_for_player(player_entity, player, &tails)?;
+            let (snake, head) = visible_snake_for_player(player_entity, player, &tails)?;
             Some((
                 player_entity,
+                snake,
                 player.name.clone(),
                 head.position,
                 snake_color_for_player(player).label(),
@@ -76,14 +85,15 @@ fn update_name_labels(
         .collect::<Vec<_>>();
 
     let mut existing = HashSet::new();
-    for (label_entity, label, mut text, mut text_color, mut transform, mut visibility) in
+    for (label_entity, mut label, mut text, mut text_color, mut transform, mut visibility) in
         &mut labels
     {
-        if let Some((_, name, head, color)) = wanted
+        if let Some((_, snake, name, head, color)) = wanted
             .iter()
-            .find(|(player_entity, _, _, _)| *player_entity == label.player)
+            .find(|(player_entity, _, _, _, _)| *player_entity == label.player)
         {
-            existing.insert((label.player, label.layer));
+            label.snake = *snake;
+            existing.insert((label.player, *snake, label.layer));
             if text.0 != *name {
                 text.0 = name.clone();
             }
@@ -95,14 +105,15 @@ fn update_name_labels(
         }
     }
 
-    for (player_entity, name, head, color) in wanted {
+    for (player_entity, snake, name, head, color) in wanted {
         for layer in NameLabelLayer::ALL {
-            if existing.contains(&(player_entity, layer)) {
+            if existing.contains(&(player_entity, snake, layer)) {
                 continue;
             }
             commands.spawn((
                 NameLabel {
                     player: player_entity,
+                    snake,
                     layer,
                 },
                 Text2d::new(name.clone()),
@@ -115,22 +126,43 @@ fn update_name_labels(
     }
 }
 
-fn head_for_player<'a>(
+fn visible_snake_for_player<'a>(
     player_entity: Entity,
     player: &Player,
     tails: &'a Query<
-        (Entity, &SnakeHead, Option<&HasPlayer>),
+        (
+            Entity,
+            &SnakeHead,
+            Option<&HasPlayer>,
+            Has<Predicted>,
+            Has<Interpolated>,
+            Has<Replicated>,
+        ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
-) -> Option<&'a SnakeHead> {
-    tails.iter().find_map(|(snake_entity, head, owner)| {
-        if owner.is_some_and(|owner| owner.0 == player_entity) || player.snake == Some(snake_entity)
-        {
-            Some(head)
-        } else {
-            None
-        }
-    })
+) -> Option<(Entity, &'a SnakeHead)> {
+    tails
+        .iter()
+        .filter(|(snake_entity, _, owner, _, _, _)| {
+            owner.is_some_and(|owner| owner.0 == player_entity)
+                || player.snake == Some(*snake_entity)
+        })
+        .max_by_key(|(_, _, _, predicted, interpolated, replicated)| {
+            visible_snake_priority(*predicted, *interpolated, *replicated)
+        })
+        .map(|(snake_entity, head, _, _, _, _)| (snake_entity, head))
+}
+
+fn visible_snake_priority(predicted: bool, interpolated: bool, replicated: bool) -> u8 {
+    if predicted {
+        3
+    } else if interpolated {
+        2
+    } else if !replicated {
+        1
+    } else {
+        0
+    }
 }
 
 fn label_color(layer: NameLabelLayer, color: Color) -> Color {
@@ -150,4 +182,24 @@ fn label_translation(head: Vec2, layer: NameLabelLayer) -> Vec3 {
         NameLabelLayer::Text => LABEL_Z,
     };
     Vec3::new(head.x + offset.x, head.y + offset.y, z)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_snake_priority_prefers_rendered_entities() {
+        assert!(
+            visible_snake_priority(true, false, false) > visible_snake_priority(false, true, false)
+        );
+        assert!(
+            visible_snake_priority(false, true, false)
+                > visible_snake_priority(false, false, false)
+        );
+        assert!(
+            visible_snake_priority(false, false, false)
+                > visible_snake_priority(false, false, true)
+        );
+    }
 }

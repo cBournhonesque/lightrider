@@ -479,8 +479,10 @@ mod tests {
     #[test]
     fn top_speed_marker_threshold_is_near_max_speed() {
         let config = GameConfig::default();
+        let expected = config.movement.min_speed
+            + (config.movement.max_speed - config.movement.min_speed) * 0.92;
 
-        assert!(top_speed_marker_threshold(&config) > 3.7);
+        assert_eq!(top_speed_marker_threshold(&config), expected);
         assert!(top_speed_marker_threshold(&config) < config.movement.max_speed);
     }
 }

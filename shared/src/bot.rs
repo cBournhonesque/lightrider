@@ -8,6 +8,7 @@ const LOOKAHEAD_DISTANCE: f32 = 420.0;
 const DANGER_DISTANCE: f32 = 140.0;
 const MIN_SAFE_TURN_DISTANCE: f32 = 180.0;
 const MIN_SEGMENT_BEFORE_VOLUNTARY_TURN: f32 = 140.0;
+const MAX_TRACKED_TURNS: usize = 16;
 
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 pub struct BotMarker;
@@ -17,6 +18,9 @@ pub struct BotController {
     ticks_until_decision: u32,
     decision_interval_ticks: u32,
     mistake_chance_per_decision_percent: u8,
+    tick: u32,
+    recent_turn_ticks: [u32; MAX_TRACKED_TURNS],
+    recent_turn_count: u8,
     seed: u64,
 }
 
@@ -34,6 +38,9 @@ impl BotController {
             ticks_until_decision: 0,
             decision_interval_ticks: decision_interval_ticks.max(1),
             mistake_chance_per_decision_percent: mistake_chance_per_decision_percent.min(100),
+            tick: 0,
+            recent_turn_ticks: [0; MAX_TRACKED_TURNS],
+            recent_turn_count: 0,
             seed: seed | 1,
         }
     }
@@ -43,6 +50,36 @@ impl BotController {
     }
 
     pub fn choose_direction_avoiding(
+        &mut self,
+        tail: &TailPolyline,
+        arena: &ArenaConfig,
+        obstacle_tails: &[&TailPolyline],
+    ) -> Direction {
+        self.choose_direction_avoiding_limited(tail, arena, obstacle_tails, u8::MAX, 1)
+    }
+
+    pub fn choose_direction_avoiding_limited(
+        &mut self,
+        tail: &TailPolyline,
+        arena: &ArenaConfig,
+        obstacle_tails: &[&TailPolyline],
+        max_turns: u8,
+        window_ticks: u32,
+    ) -> Direction {
+        self.tick = self.tick.wrapping_add(1);
+        let current = tail.front().1;
+        let direction = self.choose_direction_avoiding_unlimited(tail, arena, obstacle_tails);
+        if direction == current {
+            return direction;
+        }
+        if self.try_consume_turn(max_turns, window_ticks.max(1)) {
+            direction
+        } else {
+            current
+        }
+    }
+
+    fn choose_direction_avoiding_unlimited(
         &mut self,
         tail: &TailPolyline,
         arena: &ArenaConfig,
@@ -99,6 +136,33 @@ impl BotController {
         } else {
             current
         }
+    }
+
+    fn try_consume_turn(&mut self, max_turns: u8, window_ticks: u32) -> bool {
+        if max_turns == 0 {
+            return false;
+        }
+        self.prune_turn_history(window_ticks);
+        let max_turns = usize::from(max_turns).min(MAX_TRACKED_TURNS);
+        if usize::from(self.recent_turn_count) >= max_turns {
+            return false;
+        }
+        self.recent_turn_ticks[usize::from(self.recent_turn_count)] = self.tick;
+        self.recent_turn_count += 1;
+        true
+    }
+
+    fn prune_turn_history(&mut self, window_ticks: u32) {
+        let cutoff = self.tick.saturating_sub(window_ticks);
+        let mut kept = 0;
+        for index in 0..usize::from(self.recent_turn_count) {
+            let turn_tick = self.recent_turn_ticks[index];
+            if turn_tick > cutoff {
+                self.recent_turn_ticks[kept] = turn_tick;
+                kept += 1;
+            }
+        }
+        self.recent_turn_count = kept as u8;
     }
 
     fn reset_decision_timer(&mut self) {
@@ -425,6 +489,37 @@ mod tests {
         let mut bot = BotController::new_with_mistakes(1, 1, 100);
 
         assert_ne!(bot.choose_direction(&tail, &arena), Direction::Up);
+    }
+
+    #[test]
+    fn bot_turn_budget_limits_turns_within_window() {
+        let arena = ArenaConfig {
+            width: 200.0,
+            height: 100.0,
+        };
+        let tail = tail(Vec2::new(98.0, 10.0), Direction::Right);
+        let mut bot = BotController::new(1, 1);
+
+        assert_ne!(
+            bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
+            Direction::Right
+        );
+        assert_ne!(
+            bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
+            Direction::Right
+        );
+        assert_eq!(
+            bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
+            Direction::Right
+        );
+        assert_eq!(
+            bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
+            Direction::Right
+        );
+        assert_ne!(
+            bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
+            Direction::Right
+        );
     }
 
     #[test]

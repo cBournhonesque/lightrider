@@ -113,7 +113,7 @@ impl Default for MovementConfig {
             tick_rate_hz: 32.0,
             starting_tail_length: 200.0,
             min_speed: 0.85,
-            max_speed: 3.4,
+            max_speed: 3.0,
             base_acceleration: -0.01,
             food_boost_acceleration: 0.012,
             food_boost_decay: 0.94,
@@ -210,7 +210,7 @@ impl Default for SoundConfig {
             spatial_listener_ear_gap: 8.0,
             remote_sound_full_volume_distance: 120.0,
             remote_sound_max_distance: 900.0,
-            remote_death_volume: 1.0,
+            remote_death_volume: 1.35,
             remote_food_volume: 0.75,
             remote_turn_volume: 0.85,
             remote_proximity_boost_volume: 0.85,
@@ -218,7 +218,7 @@ impl Default for SoundConfig {
             speed_loop_start_speed: 1.2,
             speed_loop_min_volume: 0.12,
             speed_loop_max_volume: 1.0,
-            speed_fast_loop_start_speed: 3.0,
+            speed_fast_loop_start_speed: 2.55,
             speed_fast_loop_volume: 1.4,
         }
     }
@@ -243,7 +243,7 @@ impl Default for FoodConfig {
             target_count: 400,
             max_count: 600,
             spawn_interval_seconds: 0.05,
-            visual_radius: 3.0,
+            visual_radius: 2.4,
             radius: 45.0,
             tail_growth: 20.0,
             death_food_spacing: 18.0,
@@ -288,6 +288,7 @@ pub struct BotConfig {
     pub enabled: bool,
     pub target_count_per_room: usize,
     pub decision_interval_ticks: u32,
+    pub max_turns_per_second: u8,
     pub mistake_chance_per_decision_percent: u8,
 }
 
@@ -297,6 +298,7 @@ impl Default for BotConfig {
             enabled: false,
             target_count_per_room: 0,
             decision_interval_ticks: 10,
+            max_turns_per_second: 6,
             mistake_chance_per_decision_percent: 3,
         }
     }
@@ -492,7 +494,7 @@ mod tests {
         assert_eq!(config.render.normal_camera_max_scale, 0.62);
         assert_eq!(config.render.debug_camera_scale, 1.0);
         assert_eq!(config.movement.min_speed, 0.85);
-        assert_eq!(config.movement.max_speed, 3.4);
+        assert_eq!(config.movement.max_speed, 3.0);
         assert!(config.sound.enabled);
         assert_eq!(config.sound.background_volume, 0.0);
         assert_eq!(config.sound.death_volume, 0.55);
@@ -502,16 +504,19 @@ mod tests {
         assert_eq!(config.sound.remote_sound_max_distance, 900.0);
         assert_eq!(config.sound.remote_turn_volume, 0.85);
         assert_eq!(config.sound.remote_proximity_boost_volume, 0.85);
+        assert_eq!(config.sound.remote_death_volume, 1.35);
         assert_eq!(config.sound.remote_speed_volume, 0.75);
         assert_eq!(config.sound.speed_loop_start_speed, 1.2);
+        assert_eq!(config.sound.speed_fast_loop_start_speed, 2.55);
         assert_eq!(config.sound.speed_loop_max_volume, 1.0);
-        assert_eq!(config.food.visual_radius, 3.0);
+        assert_eq!(config.food.visual_radius, 2.4);
         assert_eq!(config.food.radius, 45.0);
         assert_eq!(config.food.max_count, 600);
         assert_eq!(config.food.death_food_max, 120);
         assert_eq!(config.movement.food_boost_acceleration, 0.012);
         assert_eq!(config.movement.food_boost_decay, 0.94);
         assert_eq!(config.rooms.max_players_per_room, 50);
+        assert_eq!(config.bots.max_turns_per_second, 6);
         assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.fake_clients.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.network.server_port, 5000);

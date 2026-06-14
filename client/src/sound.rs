@@ -118,6 +118,7 @@ fn sync_spatial_listener(
     mut commands: Commands,
     config: Res<GameConfig>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
+    controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
     mut listeners: Query<(Entity, &mut Transform, &mut SpatialListener), With<SoundListener>>,
 ) {
@@ -128,7 +129,9 @@ fn sync_spatial_listener(
         return;
     }
 
-    let Some(listener) = listener_snapshot(&players, &heads) else {
+    let Some(listener) = controlled_listener_snapshot(&controlled_snakes)
+        .or_else(|| listener_snapshot(&players, &heads))
+    else {
         return;
     };
     let ear_gap = config.sound.spatial_listener_ear_gap.max(0.0);
@@ -161,7 +164,14 @@ fn play_turn_sounds(
         return;
     }
 
-    let listener = remote_listener_snapshot(&players, &heads);
+    let listener = local_snakes
+        .iter()
+        .next()
+        .map(|(_, head, room)| ListenerSnapshot {
+            position: head.position,
+            room: *room,
+        })
+        .or_else(|| remote_listener_snapshot(&players, &heads));
     let mut seen = HashSet::new();
 
     if let Some((snake, head, _)) = local_snakes.iter().next() {
@@ -225,6 +235,7 @@ fn play_proximity_boost_sounds(
     mut state: ResMut<ProximityBoostSoundState>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     local_snakes: Query<(Entity, &Acceleration, &FoodBoost), (With<Controlled>, With<TailPoints>)>,
+    controlled_heads: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
     accelerations: Query<&Acceleration>,
     food_boosts: Query<&FoodBoost>,
@@ -234,7 +245,8 @@ fn play_proximity_boost_sounds(
         return;
     }
 
-    let listener = remote_listener_snapshot(&players, &heads);
+    let listener = controlled_listener_snapshot(&controlled_heads)
+        .or_else(|| remote_listener_snapshot(&players, &heads));
     let mut active_now = HashSet::new();
 
     if let Some((snake, acceleration, food_boost)) = local_snakes.iter().next() {
@@ -302,6 +314,7 @@ fn play_confirmed_death_sounds(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
+    controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
     mut deaths: MessageReader<ConfirmedDeath>,
 ) {
@@ -310,7 +323,8 @@ fn play_confirmed_death_sounds(
         return;
     }
 
-    let listener = listener_snapshot(&players, &heads);
+    let listener = controlled_listener_snapshot(&controlled_snakes)
+        .or_else(|| listener_snapshot(&players, &heads));
     for death in deaths.read() {
         let volume = death_sound_volume(death, listener, &config.sound);
         if volume <= 0.0 {
@@ -332,6 +346,7 @@ fn play_confirmed_food_sounds(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
+    controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     snakes: Query<(&SnakeHead, &RoomId)>,
     mut pickups: MessageReader<ConfirmedFoodPickup>,
 ) {
@@ -340,7 +355,8 @@ fn play_confirmed_food_sounds(
         return;
     }
 
-    let listener = listener_snapshot_from_roomed_tails(&players, &snakes);
+    let listener = controlled_listener_snapshot(&controlled_snakes)
+        .or_else(|| listener_snapshot_from_roomed_tails(&players, &snakes));
     let local_snake = local_player_snake(&players);
     for pickup in pickups.read() {
         let collision = &pickup.collision;
@@ -443,6 +459,7 @@ fn update_remote_speed_loops(
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<RemoteSpeedLoopState>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
+    controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
     speeds: Query<&Speed>,
     accelerations: Query<&Acceleration>,
@@ -456,7 +473,9 @@ fn update_remote_speed_loops(
         return;
     }
 
-    let Some(listener) = remote_listener_snapshot(&players, &heads) else {
+    let Some(listener) = controlled_listener_snapshot(&controlled_snakes)
+        .or_else(|| remote_listener_snapshot(&players, &heads))
+    else {
         clear_remote_speed_loops(&mut commands, &mut state);
         return;
     };
@@ -692,6 +711,18 @@ fn listener_snapshot(
                     room: *room,
                 })
             })
+        })
+}
+
+fn controlled_listener_snapshot(
+    controlled_snakes: &Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
+) -> Option<ListenerSnapshot> {
+    controlled_snakes
+        .iter()
+        .next()
+        .map(|(head, room)| ListenerSnapshot {
+            position: head.position,
+            room: *room,
         })
 }
 
