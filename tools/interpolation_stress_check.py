@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument("--min-interpolated-entities", type=int, default=2)
     parser.add_argument("--min-interpolated-samples", type=int, default=60)
     parser.add_argument("--min-direction-changes", type=int, default=4)
+    parser.add_argument("--max-stationary-ticks", type=int, default=32)
     return parser.parse_args()
 
 
@@ -54,18 +55,20 @@ def scan_logs(run_dir):
 
 def iter_ndjson(run_dir):
     for path in sorted(run_dir.glob("*.ndjson")):
-        with path.open(errors="replace") as file:
-            for line_number, line in enumerate(file, 1):
-                line = line.strip()
-                if not line:
+        lines = path.read_text(errors="replace").splitlines()
+        for line_number, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield path, line_number, json.loads(line)
+            except json.JSONDecodeError as error:
+                if line_number == len(lines):
                     continue
-                try:
-                    yield path, line_number, json.loads(line)
-                except json.JSONDecodeError as error:
-                    yield path, line_number, {
-                        "kind": "__json_error__",
-                        "error": str(error),
-                    }
+                yield path, line_number, {
+                    "kind": "__json_error__",
+                    "error": str(error),
+                }
 
 
 def as_float(value):
@@ -133,8 +136,9 @@ def collect_trace_stats(run_dir, sample_schedule):
     return counts, json_errors, bad_events, interpolated_samples
 
 
-def check_interpolated_motion(samples_by_entity, max_step_per_tick):
+def check_interpolated_motion(samples_by_entity, max_step_per_tick, max_stationary_ticks):
     jumps = []
+    stationary = []
     total_samples = 0
     direction_changes = 0
     active_entities = 0
@@ -145,6 +149,8 @@ def check_interpolated_motion(samples_by_entity, max_step_per_tick):
         if len(samples) >= 2:
             active_entities += 1
         previous = None
+        stationary_start = None
+        stationary_ticks = 0
         for sample in samples:
             if previous is None:
                 previous = sample
@@ -164,6 +170,20 @@ def check_interpolated_motion(samples_by_entity, max_step_per_tick):
                     f"from=({previous['x']:.3f},{previous['y']:.3f},{previous['direction']}) "
                     f"to=({sample['x']:.3f},{sample['y']:.3f},{sample['direction']})"
                 )
+            if distance <= 1e-4 and (sample.get("speed") or 0.0) > 0.1:
+                if stationary_start is None:
+                    stationary_start = previous
+                stationary_ticks += tick_delta
+            else:
+                if stationary_ticks > max_stationary_ticks:
+                    stationary.append(
+                        f"{key}: tick {stationary_start['tick']}->{previous['tick']} "
+                        f"stationary_ticks={stationary_ticks} "
+                        f"head=({previous['x']:.3f},{previous['y']:.3f},{previous['direction']}) "
+                        f"speed={previous['speed']} tail_points={previous['tail_points']}"
+                    )
+                stationary_start = None
+                stationary_ticks = 0
             if (
                 previous.get("direction") is not None
                 and sample.get("direction") is not None
@@ -171,8 +191,15 @@ def check_interpolated_motion(samples_by_entity, max_step_per_tick):
             ):
                 direction_changes += 1
             previous = sample
+        if stationary_ticks > max_stationary_ticks:
+            stationary.append(
+                f"{key}: tick {stationary_start['tick']}->{previous['tick']} "
+                f"stationary_ticks={stationary_ticks} "
+                f"head=({previous['x']:.3f},{previous['y']:.3f},{previous['direction']}) "
+                f"speed={previous['speed']} tail_points={previous['tail_points']}"
+            )
 
-    return active_entities, total_samples, direction_changes, jumps
+    return active_entities, total_samples, direction_changes, jumps, stationary
 
 
 def main():
@@ -184,8 +211,10 @@ def main():
     counts, json_errors, bad_events, samples = collect_trace_stats(
         args.run_dir, args.sample_schedule
     )
-    active_entities, total_samples, direction_changes, jumps = check_interpolated_motion(
-        samples, args.max_interpolated_step_per_tick
+    active_entities, total_samples, direction_changes, jumps, stationary = (
+        check_interpolated_motion(
+            samples, args.max_interpolated_step_per_tick, args.max_stationary_ticks
+        )
     )
 
     if log_failures:
@@ -211,6 +240,8 @@ def main():
         )
     if jumps:
         return fail("interpolated remote snakes had implausible head jumps", jumps)
+    if stationary:
+        return fail("interpolated remote snakes stopped moving while live", stationary)
 
     print(
         "interpolation stress check passed: "
