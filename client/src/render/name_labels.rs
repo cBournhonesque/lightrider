@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use bevy::sprite::Text2d;
 use bevy::transform::TransformSystems;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
-use lightyear::prelude::{Interpolated, Predicted, Replicated};
-use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, SnakeHead};
+use lightyear::prelude::{ConfirmedHistory, Interpolated, Predicted, Replicated};
+use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, SnakeHead, TailPoints};
 
 use crate::render::colors::snake_color_for_player;
 
@@ -39,10 +39,44 @@ impl Plugin for NameLabelRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            update_name_labels
+            (sync_name_label_roots, update_name_labels)
+                .chain()
                 .after(FrameInterpolationSystems::Interpolate)
                 .before(TransformSystems::Propagate),
         );
+    }
+}
+
+fn sync_name_label_roots(
+    mut commands: Commands,
+    mut snakes: Query<
+        (
+            Entity,
+            &SnakeHead,
+            Option<&mut Transform>,
+            Option<&GlobalTransform>,
+        ),
+        (
+            With<TailPoints>,
+            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        ),
+    >,
+) {
+    for (snake, head, transform, global_transform) in &mut snakes {
+        let translation = head.position.extend(0.0);
+        if let Some(mut transform) = transform {
+            transform.translation = translation;
+            transform.rotation = Quat::IDENTITY;
+            transform.scale = Vec3::ONE;
+        } else {
+            commands
+                .entity(snake)
+                .insert(Transform::from_translation(translation));
+        }
+
+        if global_transform.is_none() {
+            commands.entity(snake).insert(GlobalTransform::default());
+        }
     }
 }
 
@@ -54,15 +88,20 @@ fn update_name_labels(
             Entity,
             &SnakeHead,
             Option<&HasPlayer>,
+            Option<&ConfirmedHistory<HasPlayer>>,
             Has<Predicted>,
             Has<Interpolated>,
             Has<Replicated>,
         ),
-        Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        (
+            With<TailPoints>,
+            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        ),
     >,
     mut labels: Query<(
         Entity,
         &mut NameLabel,
+        Option<&ChildOf>,
         &mut Text2d,
         &mut TextColor,
         &mut Transform,
@@ -73,84 +112,110 @@ fn update_name_labels(
         .iter()
         .filter(|(_, _, status)| **status == PlayerStatus::Alive)
         .filter_map(|(player_entity, player, _)| {
-            let (snake, head) = visible_snake_for_player(player_entity, player, &tails)?;
+            let snake = visible_snake_for_player(player_entity, player, &tails)?;
             Some((
                 player_entity,
                 snake,
                 player.name.clone(),
-                head.position,
                 snake_color_for_player(player).label(),
             ))
         })
         .collect::<Vec<_>>();
 
     let mut existing = HashSet::new();
-    for (label_entity, mut label, mut text, mut text_color, mut transform, mut visibility) in
-        &mut labels
+    for (
+        label_entity,
+        mut label,
+        parent,
+        mut text,
+        mut text_color,
+        mut transform,
+        mut visibility,
+    ) in &mut labels
     {
-        if let Some((_, snake, name, head, color)) = wanted
+        if let Some((_, snake, name, color)) = wanted
             .iter()
-            .find(|(player_entity, _, _, _, _)| *player_entity == label.player)
+            .find(|(player_entity, _, _, _)| *player_entity == label.player)
         {
+            if label.snake != *snake || parent.map(ChildOf::parent) != Some(*snake) {
+                commands.entity(label_entity).despawn();
+                continue;
+            }
+
             label.snake = *snake;
             existing.insert((label.player, *snake, label.layer));
             if text.0 != *name {
                 text.0 = name.clone();
             }
             *text_color = TextColor(label_color(label.layer, *color));
-            transform.translation = label_translation(*head, label.layer);
+            transform.translation = label_local_translation(label.layer);
             *visibility = Visibility::Inherited;
         } else {
             commands.entity(label_entity).despawn();
         }
     }
 
-    for (player_entity, snake, name, head, color) in wanted {
+    for (player_entity, snake, name, color) in wanted {
         for layer in NameLabelLayer::ALL {
             if existing.contains(&(player_entity, snake, layer)) {
                 continue;
             }
-            commands.spawn((
-                NameLabel {
-                    player: player_entity,
-                    snake,
-                    layer,
-                },
-                Text2d::new(name.clone()),
-                TextFont::from_font_size(LABEL_FONT_SIZE),
-                TextColor(label_color(layer, color)),
-                TextLayout::new_with_justify(Justify::Left),
-                Transform::from_translation(label_translation(head, layer)),
-            ));
+            commands.entity(snake).with_children(|parent| {
+                parent.spawn((
+                    NameLabel {
+                        player: player_entity,
+                        snake,
+                        layer,
+                    },
+                    Text2d::new(name.clone()),
+                    TextFont::from_font_size(LABEL_FONT_SIZE),
+                    TextColor(label_color(layer, color)),
+                    TextLayout::new_with_justify(Justify::Left),
+                    Transform::from_translation(label_local_translation(layer)),
+                ));
+            });
         }
     }
 }
 
-fn visible_snake_for_player<'a>(
+fn visible_snake_for_player(
     player_entity: Entity,
     player: &Player,
-    tails: &'a Query<
+    tails: &Query<
         (
             Entity,
             &SnakeHead,
             Option<&HasPlayer>,
+            Option<&ConfirmedHistory<HasPlayer>>,
             Has<Predicted>,
             Has<Interpolated>,
             Has<Replicated>,
         ),
-        Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        (
+            With<TailPoints>,
+            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        ),
     >,
-) -> Option<(Entity, &'a SnakeHead)> {
+) -> Option<Entity> {
     tails
         .iter()
-        .filter(|(snake_entity, _, owner, _, _, _)| {
-            owner.is_some_and(|owner| owner.0 == player_entity)
+        .filter(|(snake_entity, _, owner, owner_history, _, _, _)| {
+            snake_owner(*owner, *owner_history) == Some(player_entity)
                 || player.snake == Some(*snake_entity)
         })
-        .max_by_key(|(_, _, _, predicted, interpolated, replicated)| {
+        .max_by_key(|(_, _, _, _, predicted, interpolated, replicated)| {
             visible_snake_priority(*predicted, *interpolated, *replicated)
         })
-        .map(|(snake_entity, head, _, _, _, _)| (snake_entity, head))
+        .map(|(snake_entity, _, _, _, _, _, _)| snake_entity)
+}
+
+fn snake_owner(
+    owner: Option<&HasPlayer>,
+    owner_history: Option<&ConfirmedHistory<HasPlayer>>,
+) -> Option<Entity> {
+    owner.map(|owner| owner.0).or_else(|| {
+        owner_history.and_then(|history| history.newest_present().map(|(_, owner)| owner.0))
+    })
 }
 
 fn visible_snake_priority(predicted: bool, interpolated: bool, replicated: bool) -> u8 {
@@ -172,7 +237,7 @@ fn label_color(layer: NameLabelLayer, color: Color) -> Color {
     }
 }
 
-fn label_translation(head: Vec2, layer: NameLabelLayer) -> Vec3 {
+fn label_local_translation(layer: NameLabelLayer) -> Vec3 {
     let offset = match layer {
         NameLabelLayer::Shadow => LABEL_OFFSET + LABEL_SHADOW_OFFSET,
         NameLabelLayer::Text => LABEL_OFFSET,
@@ -181,12 +246,13 @@ fn label_translation(head: Vec2, layer: NameLabelLayer) -> Vec3 {
         NameLabelLayer::Shadow => LABEL_SHADOW_Z,
         NameLabelLayer::Text => LABEL_Z,
     };
-    Vec3::new(head.x + offset.x, head.y + offset.y, z)
+    Vec3::new(offset.x, offset.y, z)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightyear::prelude::{ConfirmedState, Tick};
 
     #[test]
     fn visible_snake_priority_prefers_rendered_entities() {
@@ -201,5 +267,14 @@ mod tests {
             visible_snake_priority(false, false, false)
                 > visible_snake_priority(false, false, true)
         );
+    }
+
+    #[test]
+    fn snake_owner_falls_back_to_confirmed_history() {
+        let player = Entity::from_bits(42);
+        let mut history = ConfirmedHistory::default();
+        history.insert(Tick(10), ConfirmedState::Confirmed(HasPlayer(player)));
+
+        assert_eq!(snake_owner(None, Some(&history)), Some(player));
     }
 }

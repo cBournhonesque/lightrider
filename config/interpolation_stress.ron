@@ -40,6 +40,8 @@
         remote_sound_max_distance: 900.0,
         remote_death_volume: 1.35,
         remote_food_volume: 0.75,
+        remote_turn_volume: 1.15,
+        remote_proximity_boost_volume: 0.85,
         remote_speed_volume: 0.75,
         speed_loop_start_speed: 1.2,
         speed_loop_min_volume: 0.12,

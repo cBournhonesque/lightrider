@@ -19,6 +19,7 @@ pub struct BotController {
     decision_interval_ticks: u32,
     mistake_chance_per_decision_percent: u8,
     tick: u32,
+    last_turn_tick: Option<u32>,
     recent_turn_ticks: [u32; MAX_TRACKED_TURNS],
     recent_turn_count: u8,
     seed: u64,
@@ -39,6 +40,7 @@ impl BotController {
             decision_interval_ticks: decision_interval_ticks.max(1),
             mistake_chance_per_decision_percent: mistake_chance_per_decision_percent.min(100),
             tick: 0,
+            last_turn_tick: None,
             recent_turn_ticks: [0; MAX_TRACKED_TURNS],
             recent_turn_count: 0,
             seed: seed | 1,
@@ -144,11 +146,20 @@ impl BotController {
         }
         self.prune_turn_history(window_ticks);
         let max_turns = usize::from(max_turns).min(MAX_TRACKED_TURNS);
+        let min_spacing_ticks = window_ticks
+            .div_ceil(u32::try_from(max_turns).unwrap_or(1))
+            .max(1);
+        if self.last_turn_tick.is_some_and(|last_turn_tick| {
+            self.tick.saturating_sub(last_turn_tick) < min_spacing_ticks
+        }) {
+            return false;
+        }
         if usize::from(self.recent_turn_count) >= max_turns {
             return false;
         }
         self.recent_turn_ticks[usize::from(self.recent_turn_count)] = self.tick;
         self.recent_turn_count += 1;
+        self.last_turn_tick = Some(self.tick);
         true
     }
 
@@ -504,11 +515,11 @@ mod tests {
             bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
             Direction::Right
         );
-        assert_ne!(
+        assert_eq!(
             bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
             Direction::Right
         );
-        assert_eq!(
+        assert_ne!(
             bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
             Direction::Right
         );

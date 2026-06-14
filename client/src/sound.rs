@@ -1,9 +1,10 @@
-use bevy::audio::{
-    AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, SpatialAudioSink,
-    SpatialListener, SpatialScale, Volume,
-};
+use bevy::ecs::query::Or;
 use bevy::prelude::*;
-use lightyear::prelude::Controlled;
+use bevy_seedling::prelude::{
+    sample_effects, AudioSample, EffectsQuery, SampleEffects, SamplePlayer, SeedlingPlugin,
+    SpatialBasicNode, SpatialListener2D, SpatialScale, Volume, VolumeNode,
+};
+use lightyear::prelude::{Controlled, Interpolated, Predicted, Replicated};
 use shared::config::{GameConfig, MovementConfig, SoundConfig};
 use shared::network::protocol::prelude::{
     Acceleration, DeathReason, Direction, FoodBoost, Player, PlayerStatus, RoomId, SnakeHead,
@@ -24,11 +25,11 @@ pub(crate) struct SoundPlugin;
 
 #[derive(Resource, Clone)]
 struct PowerlineSounds {
-    crash: Handle<AudioSource>,
-    food_grab: Handle<AudioSource>,
-    line_loop: Handle<AudioSource>,
-    line_fast_loop: Handle<AudioSource>,
-    electro_loop: Handle<AudioSource>,
+    crash: Handle<AudioSample>,
+    food_grab: Handle<AudioSample>,
+    line_loop: Handle<AudioSample>,
+    line_fast_loop: Handle<AudioSample>,
+    electro_loop: Handle<AudioSample>,
 }
 
 #[derive(Resource, Default)]
@@ -66,7 +67,7 @@ struct LocalSpeedLoopSound;
 #[derive(Component)]
 struct RemoteSpeedLoopSound {
     #[allow(dead_code)]
-    player: Entity,
+    snake: Entity,
 }
 
 #[derive(Component)]
@@ -80,6 +81,7 @@ struct ListenerSnapshot {
 
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(SeedlingPlugin::default());
         app.init_resource::<PowerlineSounds>();
         app.init_resource::<LocalSpeedLoopState>();
         app.init_resource::<RemoteSpeedLoopState>();
@@ -120,10 +122,10 @@ fn sync_spatial_listener(
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
-    mut listeners: Query<(Entity, &mut Transform, &mut SpatialListener), With<SoundListener>>,
+    mut listeners: Query<(Entity, &mut Transform), (With<SoundListener>, With<SpatialListener2D>)>,
 ) {
     if !config.sound.enabled || !config.sound.spatial_audio {
-        for (entity, _, _) in &mut listeners {
+        for (entity, _) in &mut listeners {
             commands.entity(entity).despawn();
         }
         return;
@@ -134,16 +136,14 @@ fn sync_spatial_listener(
     else {
         return;
     };
-    let ear_gap = config.sound.spatial_listener_ear_gap.max(0.0);
     let transform = Transform::from_translation(listener.position.extend(0.0));
 
-    if let Some((_, mut existing_transform, mut spatial_listener)) = listeners.iter_mut().next() {
+    if let Some((_, mut existing_transform)) = listeners.iter_mut().next() {
         *existing_transform = transform;
-        *spatial_listener = SpatialListener::new(ear_gap);
     } else {
         commands.spawn((
             SoundListener,
-            SpatialListener::new(ear_gap),
+            SpatialListener2D,
             transform,
             GlobalTransform::default(),
         ));
@@ -157,6 +157,14 @@ fn play_turn_sounds(
     mut state: ResMut<TurnSoundState>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     local_snakes: Query<(Entity, &SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
+    remote_snakes: Query<
+        (Entity, &SnakeHead, &RoomId),
+        (
+            With<TailPoints>,
+            Without<Controlled>,
+            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        ),
+    >,
     heads: Query<&SnakeHead>,
 ) {
     if !config.sound.enabled {
@@ -193,19 +201,13 @@ fn play_turn_sounds(
         return;
     };
 
-    for (player_entity, player, room, status, is_local) in &players {
-        if is_local || *status != PlayerStatus::Alive || *room != listener.room {
+    for (snake, head, room) in &remote_snakes {
+        if *room != listener.room {
             continue;
         }
-        let Some(snake) = player.snake else {
-            continue;
-        };
-        let Ok(head) = heads.get(snake) else {
-            continue;
-        };
 
-        seen.insert(player_entity);
-        if !direction_changed(&mut state.directions, player_entity, head.direction) {
+        seen.insert(snake);
+        if !direction_changed(&mut state.directions, snake, head.direction) {
             continue;
         }
 
@@ -236,9 +238,15 @@ fn play_proximity_boost_sounds(
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     local_snakes: Query<(Entity, &Acceleration, &FoodBoost), (With<Controlled>, With<TailPoints>)>,
     controlled_heads: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
+    remote_snakes: Query<
+        (Entity, &SnakeHead, &RoomId, &Acceleration, &FoodBoost),
+        (
+            With<TailPoints>,
+            Without<Controlled>,
+            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        ),
+    >,
     heads: Query<&SnakeHead>,
-    accelerations: Query<&Acceleration>,
-    food_boosts: Query<&FoodBoost>,
 ) {
     if !config.sound.enabled {
         state.active.clear();
@@ -266,26 +274,16 @@ fn play_proximity_boost_sounds(
     }
 
     if let Some(listener) = listener {
-        for (player_entity, player, room, status, is_local) in &players {
-            if is_local || *status != PlayerStatus::Alive || *room != listener.room {
+        for (snake, head, room, acceleration, food_boost) in &remote_snakes {
+            if *room != listener.room {
                 continue;
             }
-            let Some(snake) = player.snake else {
-                continue;
-            };
-            let (Ok(head), Ok(acceleration), Ok(food_boost)) = (
-                heads.get(snake),
-                accelerations.get(snake),
-                food_boosts.get(snake),
-            ) else {
-                continue;
-            };
             if !proximity_boost_active(acceleration.0, food_boost.0, &config.movement) {
                 continue;
             }
 
-            active_now.insert(player_entity);
-            if state.active.contains(&player_entity) {
+            active_now.insert(snake);
+            if state.active.contains(&snake) {
                 continue;
             }
 
@@ -407,8 +405,8 @@ fn update_local_speed_loops(
         (With<Controlled>, With<TailPoints>),
     >,
     speeds: Query<(&Speed, Option<&Acceleration>, Option<&FoodBoost>)>,
-    mut sinks: Query<&mut AudioSink, With<LocalSpeedLoopSound>>,
-    mut playback_settings: Query<&mut PlaybackSettings, With<LocalSpeedLoopSound>>,
+    sample_effects: Query<&SampleEffects, With<LocalSpeedLoopSound>>,
+    mut volume_nodes: Query<&mut VolumeNode>,
 ) {
     let state_snapshot = local_player_sound_state(&controlled_snakes, &players, &speeds);
     let (line_volume, fast_volume) = speed_loop_volumes(
@@ -430,8 +428,8 @@ fn update_local_speed_loops(
         LocalSpeedLoopSound,
         sounds.line_loop.clone(),
         line_volume,
-        &mut sinks,
-        &mut playback_settings,
+        &sample_effects,
+        &mut volume_nodes,
     );
     update_plain_loop(
         &mut commands,
@@ -439,8 +437,8 @@ fn update_local_speed_loops(
         LocalSpeedLoopSound,
         sounds.line_fast_loop.clone(),
         fast_volume,
-        &mut sinks,
-        &mut playback_settings,
+        &sample_effects,
+        &mut volume_nodes,
     );
     update_plain_loop(
         &mut commands,
@@ -448,8 +446,8 @@ fn update_local_speed_loops(
         LocalSpeedLoopSound,
         sounds.electro_loop.clone(),
         electro_volume,
-        &mut sinks,
-        &mut playback_settings,
+        &sample_effects,
+        &mut volume_nodes,
     );
 }
 
@@ -460,13 +458,25 @@ fn update_remote_speed_loops(
     mut state: ResMut<RemoteSpeedLoopState>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
+    remote_snakes: Query<
+        (
+            Entity,
+            &SnakeHead,
+            &RoomId,
+            &Speed,
+            Option<&Acceleration>,
+            Option<&FoodBoost>,
+        ),
+        (
+            With<TailPoints>,
+            Without<Controlled>,
+            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+        ),
+    >,
     heads: Query<&SnakeHead>,
-    speeds: Query<&Speed>,
-    accelerations: Query<&Acceleration>,
-    food_boosts: Query<&FoodBoost>,
-    mut sinks: Query<&mut SpatialAudioSink, With<RemoteSpeedLoopSound>>,
+    sample_effects: Query<&SampleEffects, With<RemoteSpeedLoopSound>>,
     mut transforms: Query<&mut Transform, With<RemoteSpeedLoopSound>>,
-    mut playback_settings: Query<&mut PlaybackSettings, With<RemoteSpeedLoopSound>>,
+    mut volume_nodes: Query<&mut VolumeNode>,
 ) {
     if !config.sound.enabled || !config.sound.spatial_audio {
         clear_remote_speed_loops(&mut commands, &mut state);
@@ -481,25 +491,18 @@ fn update_remote_speed_loops(
     };
 
     let mut seen = HashSet::new();
-    for (player_entity, player, room, status, is_local) in &players {
-        if is_local || *status != PlayerStatus::Alive || *room != listener.room {
+    for (snake, head, room, speed, acceleration, food_boost) in &remote_snakes {
+        if *room != listener.room {
             continue;
         }
-        let Some(snake) = player.snake else {
-            continue;
-        };
-        let (Ok(head), Ok(speed)) = (heads.get(snake), speeds.get(snake)) else {
-            continue;
-        };
-        let proximity_active = accelerations
-            .get(snake)
-            .ok()
-            .zip(food_boosts.get(snake).ok())
-            .is_some_and(|(acceleration, food_boost)| {
-                proximity_boost_active(acceleration.0, food_boost.0, &config.movement)
-            });
+        let proximity_active =
+            acceleration
+                .zip(food_boost)
+                .is_some_and(|(acceleration, food_boost)| {
+                    proximity_boost_active(acceleration.0, food_boost.0, &config.movement)
+                });
 
-        seen.insert(player_entity);
+        seen.insert(snake);
         let source_position = head.position;
         let distance = source_position.distance(listener.position);
         let (line_volume, fast_volume) =
@@ -512,43 +515,43 @@ fn update_remote_speed_loops(
         } else {
             0.0
         };
-        let loops = state.loops.entry(player_entity).or_default();
+        let loops = state.loops.entry(snake).or_default();
 
         update_remote_speed_loop(
             &mut commands,
             &mut loops.line_loop,
-            player_entity,
+            snake,
             sounds.line_loop.clone(),
             source_position,
             line_volume,
             &config.sound,
-            &mut sinks,
+            &sample_effects,
             &mut transforms,
-            &mut playback_settings,
+            &mut volume_nodes,
         );
         update_remote_speed_loop(
             &mut commands,
             &mut loops.line_fast_loop,
-            player_entity,
+            snake,
             sounds.line_fast_loop.clone(),
             source_position,
             fast_volume,
             &config.sound,
-            &mut sinks,
+            &sample_effects,
             &mut transforms,
-            &mut playback_settings,
+            &mut volume_nodes,
         );
         update_remote_speed_loop(
             &mut commands,
             &mut loops.electro_loop,
-            player_entity,
+            snake,
             sounds.electro_loop.clone(),
             source_position,
             electro_volume,
             &config.sound,
-            &mut sinks,
+            &sample_effects,
             &mut transforms,
-            &mut playback_settings,
+            &mut volume_nodes,
         );
     }
 
@@ -556,10 +559,10 @@ fn update_remote_speed_loops(
         .loops
         .keys()
         .copied()
-        .filter(|player| !seen.contains(player))
+        .filter(|snake| !seen.contains(snake))
         .collect::<Vec<_>>();
-    for player in stale_players {
-        if let Some(loops) = state.loops.remove(&player) {
+    for snake in stale_players {
+        if let Some(loops) = state.loops.remove(&snake) {
             despawn_loop(&mut commands, loops.line_loop);
             despawn_loop(&mut commands, loops.line_fast_loop);
             despawn_loop(&mut commands, loops.electro_loop);
@@ -571,19 +574,20 @@ fn update_plain_loop<C: Component>(
     commands: &mut Commands,
     entity: &mut Option<Entity>,
     marker: C,
-    sound: Handle<AudioSource>,
+    sound: Handle<AudioSample>,
     volume: f32,
-    sinks: &mut Query<&mut AudioSink, With<C>>,
-    playback_settings: &mut Query<&mut PlaybackSettings, With<C>>,
+    sample_effects: &Query<&SampleEffects, With<C>>,
+    volume_nodes: &mut Query<&mut VolumeNode>,
 ) {
     if let Some(existing) = *entity {
-        if let Ok(mut sink) = sinks.get_mut(existing) {
-            sink.set_volume(Volume::Linear(volume));
-            return;
+        if let Ok(effects) = sample_effects.get(existing) {
+            if let Ok(mut volume_node) = volume_nodes.get_effect_mut(effects) {
+                volume_node.volume = seedling_volume(volume);
+                return;
+            }
         }
-        if let Ok(mut settings) = playback_settings.get_mut(existing) {
-            settings.volume = Volume::Linear(volume);
-            return;
+        if commands.get_entity(existing).is_ok() {
+            commands.entity(existing).despawn();
         }
         *entity = None;
     }
@@ -596,8 +600,11 @@ fn update_plain_loop<C: Component>(
         commands
             .spawn((
                 marker,
-                AudioPlayer::new(sound),
-                PlaybackSettings::LOOP.with_volume(Volume::Linear(volume)),
+                SamplePlayer::new(sound).looping(),
+                sample_effects![VolumeNode {
+                    volume: seedling_volume(volume),
+                    ..default()
+                }],
             ))
             .id(),
     );
@@ -606,26 +613,27 @@ fn update_plain_loop<C: Component>(
 fn update_remote_speed_loop(
     commands: &mut Commands,
     entity: &mut Option<Entity>,
-    player: Entity,
-    sound: Handle<AudioSource>,
+    snake: Entity,
+    sound: Handle<AudioSample>,
     position: Vec2,
     volume: f32,
     sound_config: &SoundConfig,
-    sinks: &mut Query<&mut SpatialAudioSink, With<RemoteSpeedLoopSound>>,
+    sample_effects: &Query<&SampleEffects, With<RemoteSpeedLoopSound>>,
     transforms: &mut Query<&mut Transform, With<RemoteSpeedLoopSound>>,
-    playback_settings: &mut Query<&mut PlaybackSettings, With<RemoteSpeedLoopSound>>,
+    volume_nodes: &mut Query<&mut VolumeNode>,
 ) {
     if let Some(existing) = *entity {
         if let Ok(mut transform) = transforms.get_mut(existing) {
             transform.translation = position.extend(0.0);
         }
-        if let Ok(mut sink) = sinks.get_mut(existing) {
-            sink.set_volume(Volume::Linear(volume));
-            return;
+        if let Ok(effects) = sample_effects.get(existing) {
+            if let Ok(mut volume_node) = volume_nodes.get_effect_mut(effects) {
+                volume_node.volume = seedling_volume(volume);
+                return;
+            }
         }
-        if let Ok(mut settings) = playback_settings.get_mut(existing) {
-            settings.volume = Volume::Linear(volume);
-            return;
+        if commands.get_entity(existing).is_ok() {
+            commands.entity(existing).despawn();
         }
         *entity = None;
     }
@@ -637,11 +645,20 @@ fn update_remote_speed_loop(
     *entity = Some(
         commands
             .spawn((
-                RemoteSpeedLoopSound { player },
+                RemoteSpeedLoopSound { snake },
                 Transform::from_translation(position.extend(0.0)),
                 GlobalTransform::default(),
-                AudioPlayer::new(sound),
-                spatial_playback_settings(PlaybackSettings::LOOP, volume, sound_config),
+                SamplePlayer::new(sound).looping(),
+                sample_effects![
+                    (
+                        SpatialBasicNode::default(),
+                        seedling_spatial_scale(sound_config)
+                    ),
+                    VolumeNode {
+                        volume: seedling_volume(volume),
+                        ..default()
+                    }
+                ],
             ))
             .id(),
     );
@@ -649,7 +666,7 @@ fn update_remote_speed_loop(
 
 fn spawn_one_shot(
     commands: &mut Commands,
-    sound: Handle<AudioSource>,
+    sound: Handle<AudioSample>,
     source_position: Option<Vec2>,
     volume: f32,
     sound_config: &SoundConfig,
@@ -658,28 +675,33 @@ fn spawn_one_shot(
         return;
     }
 
-    let playback = PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume));
+    let player = SamplePlayer::new(sound).with_volume(seedling_volume(volume));
     if let Some(source_position) = source_position.filter(|_| sound_config.spatial_audio) {
         commands.spawn((
-            AudioPlayer::new(sound),
-            spatial_playback_settings(playback, volume, sound_config),
+            player,
             Transform::from_translation(source_position.extend(0.0)),
             GlobalTransform::default(),
+            sample_effects![(
+                SpatialBasicNode::default(),
+                seedling_spatial_scale(sound_config)
+            )],
         ));
     } else {
-        commands.spawn((AudioPlayer::new(sound), playback));
+        commands.spawn(player);
     }
 }
 
-fn spatial_playback_settings(
-    playback: PlaybackSettings,
-    volume: f32,
-    sound_config: &SoundConfig,
-) -> PlaybackSettings {
-    playback
-        .with_volume(Volume::Linear(volume))
-        .with_spatial(true)
-        .with_spatial_scale(SpatialScale::new_2d(sound_config.spatial_scale.max(0.0001)))
+fn seedling_volume(volume: f32) -> Volume {
+    let volume = if volume.is_finite() {
+        volume.max(0.0)
+    } else {
+        0.0
+    };
+    Volume::Linear(volume)
+}
+
+fn seedling_spatial_scale(sound_config: &SoundConfig) -> SpatialScale {
+    SpatialScale(Vec3::splat(sound_config.spatial_scale.max(0.0001)))
 }
 
 fn clear_remote_speed_loops(commands: &mut Commands, state: &mut RemoteSpeedLoopState) {
@@ -693,7 +715,9 @@ fn clear_remote_speed_loops(commands: &mut Commands, state: &mut RemoteSpeedLoop
 
 fn despawn_loop(commands: &mut Commands, entity: Option<Entity>) {
     if let Some(entity) = entity {
-        commands.entity(entity).despawn();
+        if commands.get_entity(entity).is_ok() {
+            commands.entity(entity).despawn();
+        }
     }
 }
 

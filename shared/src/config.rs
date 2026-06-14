@@ -212,7 +212,7 @@ impl Default for SoundConfig {
             remote_sound_max_distance: 900.0,
             remote_death_volume: 1.35,
             remote_food_volume: 0.75,
-            remote_turn_volume: 0.85,
+            remote_turn_volume: 1.15,
             remote_proximity_boost_volume: 0.85,
             remote_speed_volume: 0.75,
             speed_loop_start_speed: 1.2,
@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(config.sound.proximity_boost_volume, 0.2);
         assert_eq!(config.sound.electro_loop_volume, 0.85);
         assert_eq!(config.sound.remote_sound_max_distance, 900.0);
-        assert_eq!(config.sound.remote_turn_volume, 0.85);
+        assert_eq!(config.sound.remote_turn_volume, 1.15);
         assert_eq!(config.sound.remote_proximity_boost_volume, 0.85);
         assert_eq!(config.sound.remote_death_volume, 1.35);
         assert_eq!(config.sound.remote_speed_volume, 0.75);
