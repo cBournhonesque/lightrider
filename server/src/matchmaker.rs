@@ -230,6 +230,7 @@ fn provider_kind_from_env() -> ProviderKind {
         .as_str()
     {
         "edgegap" => ProviderKind::Edgegap,
+        "gameflow" => ProviderKind::Gameflow,
         _ => ProviderKind::Static,
     }
 }

@@ -38,6 +38,7 @@ FROM chef AS planner
 
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
 COPY lightrider /src/lightrider
 
 WORKDIR /src/lightyear-matchmaker
@@ -66,6 +67,7 @@ COPY --from=planner /tmp/lightyear-matchmaker-recipe.json /tmp/lightyear-matchma
 COPY --from=planner /tmp/lightrider-web-recipe.json /tmp/lightrider-web-recipe.json
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
 
 WORKDIR /src/lightyear-matchmaker
 RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
@@ -93,6 +95,7 @@ RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
 
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
 COPY lightrider /src/lightrider
 
 WORKDIR /src/lightyear-matchmaker

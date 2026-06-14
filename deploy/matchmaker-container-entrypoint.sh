@@ -64,6 +64,10 @@ edgegap_app_name="${EDGEGAP_APP_NAME:-$app_name}"
 edgegap_app_version="${EDGEGAP_APP_VERSION:-$app_version}"
 namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-${app_name}_${app_version}}}"
 allocation_source="${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-${MATCHMAKER_ALLOCATION_SOURCE:-nats_static}}"
+gameflow_mode="${GAMEFLOW_MODE:-fleet}"
+gameflow_api_key_env="${GAMEFLOW_API_KEY_ENV:-GAMEFLOW_API_KEY}"
+gameflow_api_key_path="${GAMEFLOW_API_KEY_PATH:-/run/secrets/gameflow_api_key}"
+gameflow_base_url="${GAMEFLOW_API_BASE_URL:-https://api.gameflow.gg}"
 
 if [[ -n "${NATS_TLS_CERT:-}" || -n "${NATS_TLS_KEY:-}" ]] && [[ -z "${NATS_TLS_CERT:-}" || -z "${NATS_TLS_KEY:-}" ]]; then
   echo "lightrider-matchmaker: set both NATS_TLS_CERT and NATS_TLS_KEY, or neither" >&2
@@ -185,7 +189,20 @@ port_name = $(toml_string "${EDGEGAP_GAME_PORT_NAME:-game}")
 session_ready_timeout_secs = ${LIGHTYEAR_MATCHMAKER_EDGEGAP_READY_TIMEOUT_SECS:-120}
 session_poll_ms = ${LIGHTYEAR_MATCHMAKER_EDGEGAP_POLL_MS:-500}
 release_missing_ok = true
+
+[gameflow_provider]
+game_id = $(toml_string "${GAMEFLOW_GAME_ID:-}")
+mode = $(toml_string "$gameflow_mode")
+api_key_env = $(toml_string "$gameflow_api_key_env")
+api_key_path = $(toml_string "$gameflow_api_key_path")
+base_url = $(toml_string "$gameflow_base_url")
 EOF
+if [[ -n "${GAMEFLOW_BUILD_ID:-}" ]]; then
+  printf 'build_id = %s\n' "$(toml_string "$GAMEFLOW_BUILD_ID")" >> "$matchmaker_config"
+fi
+if [[ -n "${GAMEFLOW_REGION:-}" ]]; then
+  printf 'region = %s\n' "$(toml_string "$GAMEFLOW_REGION")" >> "$matchmaker_config"
+fi
 
 /app/lightyear_matchmaker_server --config "$matchmaker_config" \
   > /var/log/lightyear_matchmaker_server.log 2>&1 &

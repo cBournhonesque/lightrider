@@ -25,6 +25,10 @@ edgegap-context:
       --exclude .git \
       --exclude target \
       ../lightyear-matchmaker/ .edgegap-build/context/lightyear-matchmaker/
+    rsync -a --delete \
+      --exclude .git \
+      --exclude target \
+      ../bevy_replicon/ .edgegap-build/context/bevy_replicon/
     if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
       cp /etc/ssl/certs/ca-certificates.crt .edgegap-build/context/host-ca-certificates.crt
     else
@@ -379,13 +383,13 @@ github-release tag=edgegap-default-tag title="" notes="":
     fi
     gh release create "{{ tag }}" --title "$release_title" --notes "$release_notes"
 
-edgegap-release-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app="lightrider" version="":
+edgegap-release-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app="lightrider" version="" env_file="secrets/web-server.env":
     #!/usr/bin/env bash
     set -euo pipefail
     source secrets/edgegap.env
     source secrets/prod-netcode.env
-    if [[ -f secrets/web-server.env ]]; then
-      source secrets/web-server.env
+    if [[ -f "{{ env_file }}" ]]; then
+      source "{{ env_file }}"
     fi
     edgegap_version="{{ version }}"
     if [[ -z "$edgegap_version" ]]; then

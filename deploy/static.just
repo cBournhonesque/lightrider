@@ -9,6 +9,15 @@ _remote-pull-service service image_env image_name *args:
     ssh_port="22"
     ssh_key=""
     env_file="secrets/web-server.env"
+    service_name=""
+    route=""
+    web_upstream_port=""
+    caddy_default_upstream_port=""
+    nats_port=""
+    nats_monitor_port=""
+    manage_static_server=""
+    run_static_server=""
+    allocation_source=""
     restart="1"
     positional=0
     for arg in {{ args }}; do
@@ -20,6 +29,18 @@ _remote-pull-service service image_env image_name *args:
         port=*) ssh_port="${arg#port=}" ;;
         ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
         env=*) env_file="${arg#env=}" ;;
+        service_name=*) service_name="${arg#service_name=}" ;;
+        route=*) route="${arg#route=}" ;;
+        matchmaker_route=*) route="${arg#matchmaker_route=}" ;;
+        web_upstream_port=*) web_upstream_port="${arg#web_upstream_port=}" ;;
+        caddy_default_upstream_port=*) caddy_default_upstream_port="${arg#caddy_default_upstream_port=}" ;;
+        nats_port=*) nats_port="${arg#nats_port=}" ;;
+        nats_public_port=*) nats_port="${arg#nats_public_port=}" ;;
+        nats_monitor_port=*) nats_monitor_port="${arg#nats_monitor_port=}" ;;
+        nats_monitor_public_port=*) nats_monitor_port="${arg#nats_monitor_public_port=}" ;;
+        manage_static_server=*) manage_static_server="${arg#manage_static_server=}" ;;
+        run_static_server=*) run_static_server="${arg#run_static_server=}" ;;
+        allocation_source=*) allocation_source="${arg#allocation_source=}" ;;
         restart=*) restart="${arg#restart=}" ;;
         *)
           case "$positional" in
@@ -136,6 +157,15 @@ deploy-web-server-pull *args:
     ssh_port="22"
     ssh_key=""
     env_file="secrets/web-server.env"
+    service_name=""
+    route=""
+    web_upstream_port=""
+    caddy_default_upstream_port=""
+    nats_port=""
+    nats_monitor_port=""
+    manage_static_server=""
+    run_static_server=""
+    allocation_source=""
     positional=0
     for arg in {{ args }}; do
       case "$arg" in
@@ -150,6 +180,18 @@ deploy-web-server-pull *args:
         ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
         ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
         env=*) env_file="${arg#env=}" ;;
+        service_name=*) service_name="${arg#service_name=}" ;;
+        route=*) route="${arg#route=}" ;;
+        matchmaker_route=*) route="${arg#matchmaker_route=}" ;;
+        web_upstream_port=*) web_upstream_port="${arg#web_upstream_port=}" ;;
+        caddy_default_upstream_port=*) caddy_default_upstream_port="${arg#caddy_default_upstream_port=}" ;;
+        nats_port=*) nats_port="${arg#nats_port=}" ;;
+        nats_public_port=*) nats_port="${arg#nats_public_port=}" ;;
+        nats_monitor_port=*) nats_monitor_port="${arg#nats_monitor_port=}" ;;
+        nats_monitor_public_port=*) nats_monitor_port="${arg#nats_monitor_public_port=}" ;;
+        manage_static_server=*) manage_static_server="${arg#manage_static_server=}" ;;
+        run_static_server=*) run_static_server="${arg#run_static_server=}" ;;
+        allocation_source=*) allocation_source="${arg#allocation_source=}" ;;
         *)
           case "$positional" in
             0) host="$arg" ;;
@@ -170,10 +212,29 @@ deploy-web-server-pull *args:
     done
     if [[ -z "$host" || -z "$tag" ]]; then
       echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env] [ssh_key] [edgegap_version] [domain]" >&2
-      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [edgegap_version=<version>] [domain=play.example.com] [https=1] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key]" >&2
+      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [edgegap_version=<version>] [domain=play.example.com] [https=1] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key] [service_name=<name>] [route=<name>] [web_upstream_port=<port>] [nats_port=<port>]" >&2
       exit 2
     fi
-    SKIP_IMAGE_BUILD=1 just deploy-web-server host="$host" ssh_port="$ssh_port" ssh_key="$ssh_key" tag="$tag" edgegap_version="$edgegap_version" domain="$web_domain" https="$enable_https" env="$env_file"
+    args=(
+      host="$host"
+      ssh_port="$ssh_port"
+      ssh_key="$ssh_key"
+      tag="$tag"
+      edgegap_version="$edgegap_version"
+      domain="$web_domain"
+      https="$enable_https"
+      env="$env_file"
+    )
+    if [[ -n "$service_name" ]]; then args+=(service_name="$service_name"); fi
+    if [[ -n "$route" ]]; then args+=(route="$route"); fi
+    if [[ -n "$web_upstream_port" ]]; then args+=(web_upstream_port="$web_upstream_port"); fi
+    if [[ -n "$caddy_default_upstream_port" ]]; then args+=(caddy_default_upstream_port="$caddy_default_upstream_port"); fi
+    if [[ -n "$nats_port" ]]; then args+=(nats_port="$nats_port"); fi
+    if [[ -n "$nats_monitor_port" ]]; then args+=(nats_monitor_port="$nats_monitor_port"); fi
+    if [[ -n "$manage_static_server" ]]; then args+=(manage_static_server="$manage_static_server"); fi
+    if [[ -n "$run_static_server" ]]; then args+=(run_static_server="$run_static_server"); fi
+    if [[ -n "$allocation_source" ]]; then args+=(allocation_source="$allocation_source"); fi
+    SKIP_IMAGE_BUILD=1 just deploy-web-server "${args[@]}"
 
 web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102" edgegap_version="":
     #!/usr/bin/env bash
@@ -196,6 +257,33 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       caller_has_nats_namespace=1
       caller_nats_namespace="$LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE"
     fi
+    caller_deploy_vars=(
+      LIGHTRIDER_WEB_UPSTREAM_PORT
+      LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT
+      LIGHTRIDER_MATCHMAKER_ROUTE
+      LIGHTRIDER_NATS_PUBLIC_PORT
+      LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT
+      LIGHTRIDER_NATS_STORE_HOST_DIR
+      LIGHTRIDER_MANAGE_STATIC_SERVER
+      LIGHTRIDER_RUN_STATIC_SERVER
+      LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE
+      EDGEGAP_API_KEY
+      EDGEGAP_API_TOKEN
+      GAMEFLOW_GAME_ID
+      GAMEFLOW_API_KEY
+      GAMEFLOW_MODE
+      GAMEFLOW_BUILD_ID
+      GAMEFLOW_REGION
+      GAMEFLOW_API_BASE_URL
+      GAMEFLOW_API_KEY_ENV
+      GAMEFLOW_API_KEY_PATH
+    )
+    declare -A caller_deploy_values=()
+    for var in "${caller_deploy_vars[@]}"; do
+      if [[ "${!var+x}" == "x" ]]; then
+        caller_deploy_values[$var]="${!var}"
+      fi
+    done
     if [[ -f "{{ file }}" && "${FORCE:-0}" != "1" ]]; then
       echo "{{ file }} already exists; set FORCE=1 to overwrite" >&2
       exit 1
@@ -229,6 +317,13 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       else
         unset LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE
       fi
+      for var in "${caller_deploy_vars[@]}"; do
+        if [[ "${caller_deploy_values[$var]+x}" == "x" ]]; then
+          printf -v "$var" '%s' "${caller_deploy_values[$var]}"
+        else
+          unset "$var"
+        fi
+      done
     fi
     if [[ -z "${LIGHTRIDER_PROTOCOL_ID:-}" ]]; then
       LIGHTRIDER_PROTOCOL_ID="1"
@@ -301,10 +396,17 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env NATS_ALLOW_INSECURE "${NATS_ALLOW_INSECURE:-1}"
       write_env LIGHTRIDER_ENABLE_HTTPS "$enable_https"
       write_env LIGHTRIDER_WEB_DOMAIN "$web_domain"
+      write_env LIGHTRIDER_WEB_UPSTREAM_PORT "${LIGHTRIDER_WEB_UPSTREAM_PORT:-8080}"
+      write_env LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT "${LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT:-8080}"
+      write_env LIGHTRIDER_MATCHMAKER_ROUTE "${LIGHTRIDER_MATCHMAKER_ROUTE:-}"
+      write_env LIGHTRIDER_NATS_PUBLIC_PORT "${LIGHTRIDER_NATS_PUBLIC_PORT:-4222}"
+      write_env LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT "${LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT:-8222}"
+      if [[ -n "${LIGHTRIDER_NATS_STORE_HOST_DIR:-}" ]]; then write_env LIGHTRIDER_NATS_STORE_HOST_DIR "$LIGHTRIDER_NATS_STORE_HOST_DIR"; fi
       write_env LIGHTRIDER_CADDY_EMAIL "${LIGHTRIDER_CADDY_EMAIL:-}"
       write_env MATCHMAKER_CORS "${MATCHMAKER_CORS:-$default_matchmaker_cors}"
       write_env LIGHTRIDER_MATCHMAKER_URL "${LIGHTRIDER_MATCHMAKER_URL:-$default_matchmaker_url}"
       write_env LIGHTRIDER_RUN_STATIC_SERVER "${LIGHTRIDER_RUN_STATIC_SERVER:-1}"
+      if [[ -n "${LIGHTRIDER_MANAGE_STATIC_SERVER:-}" ]]; then write_env LIGHTRIDER_MANAGE_STATIC_SERVER "$LIGHTRIDER_MANAGE_STATIC_SERVER"; fi
       write_env LIGHTRIDER_STATIC_SERVER_IMAGE "${LIGHTRIDER_STATIC_SERVER_IMAGE:-${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-server:{{ tag }}}"
       write_env LIGHTRIDER_STATIC_PUBLIC_IP "${LIGHTRIDER_STATIC_PUBLIC_IP:-{{ host }}}"
       write_env LIGHTRIDER_STATIC_PORT "${LIGHTRIDER_STATIC_PORT:-7777}"
@@ -316,6 +418,14 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       if [[ -n "${NATS_CA:-}" ]]; then write_env NATS_CA "$NATS_CA"; fi
       if [[ -n "${MATCHMAKER_NATS_HOST:-}" ]]; then write_env MATCHMAKER_NATS_HOST "$MATCHMAKER_NATS_HOST"; fi
       if [[ -n "${MATCHMAKER_NATS_INSECURE:-}" ]]; then write_env MATCHMAKER_NATS_INSECURE "$MATCHMAKER_NATS_INSECURE"; fi
+      if [[ -n "${GAMEFLOW_GAME_ID:-}" ]]; then write_env GAMEFLOW_GAME_ID "$GAMEFLOW_GAME_ID"; fi
+      if [[ -n "${GAMEFLOW_API_KEY:-}" ]]; then write_env GAMEFLOW_API_KEY "$GAMEFLOW_API_KEY"; fi
+      if [[ -n "${GAMEFLOW_MODE:-}" ]]; then write_env GAMEFLOW_MODE "$GAMEFLOW_MODE"; fi
+      if [[ -n "${GAMEFLOW_BUILD_ID:-}" ]]; then write_env GAMEFLOW_BUILD_ID "$GAMEFLOW_BUILD_ID"; fi
+      if [[ -n "${GAMEFLOW_REGION:-}" ]]; then write_env GAMEFLOW_REGION "$GAMEFLOW_REGION"; fi
+      if [[ -n "${GAMEFLOW_API_BASE_URL:-}" ]]; then write_env GAMEFLOW_API_BASE_URL "$GAMEFLOW_API_BASE_URL"; fi
+      if [[ -n "${GAMEFLOW_API_KEY_ENV:-}" ]]; then write_env GAMEFLOW_API_KEY_ENV "$GAMEFLOW_API_KEY_ENV"; fi
+      if [[ -n "${GAMEFLOW_API_KEY_PATH:-}" ]]; then write_env GAMEFLOW_API_KEY_PATH "$GAMEFLOW_API_KEY_PATH"; fi
     } > "{{ file }}"
     chmod 600 "{{ file }}"
     echo "Wrote {{ file }}"
@@ -364,6 +474,14 @@ web-server-env-check file="secrets/web-server.env":
     if [[ "$LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE" == "edgegap" ]]; then
       require_var EDGEGAP_API_KEY
     fi
+    if [[ "$LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE" == "gameflow" ]]; then
+      require_var GAMEFLOW_GAME_ID
+      require_var GAMEFLOW_API_KEY
+    fi
+    if [[ -n "${LIGHTRIDER_MATCHMAKER_ROUTE:-}" && ! "$LIGHTRIDER_MATCHMAKER_ROUTE" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      echo "LIGHTRIDER_MATCHMAKER_ROUTE may only contain letters, digits, '_' and '-'" >&2
+      exit 1
+    fi
     if truthy "${LIGHTRIDER_RUN_STATIC_SERVER:-1}"; then
       require_var LIGHTRIDER_STATIC_SERVER_IMAGE
       require_var LIGHTRIDER_STATIC_PUBLIC_IP
@@ -384,7 +502,7 @@ web-server-env-check file="secrets/web-server.env":
 
     echo "web-server env ok: {{ file }}"
 
-web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.env" ssh_key="":
+web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.env" ssh_key="" service_name="lightrider-matchmaker":
     #!/usr/bin/env bash
     set -euo pipefail
     test -f "{{ env }}" || {
@@ -410,7 +528,7 @@ web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.en
     ssh "${ssh_opts[@]}" "root@{{ host }}" "mkdir -p '$remote_dir'"
     scp "${scp_opts[@]}" deploy/setup_web_server_host.sh "root@{{ host }}:$remote_dir/setup_web_server_host.sh"
     scp "${scp_opts[@]}" "{{ env }}" "root@{{ host }}:$remote_dir/web-server.env"
-    ssh "${ssh_opts[@]}" "root@{{ host }}" "bash '$remote_dir/setup_web_server_host.sh' --env-file '$remote_dir/web-server.env'; rm -f '$remote_dir/web-server.env'"
+    ssh "${ssh_opts[@]}" "root@{{ host }}" "bash '$remote_dir/setup_web_server_host.sh' --env-file '$remote_dir/web-server.env' --service-name '{{ service_name }}'; rm -f '$remote_dir/web-server.env'"
 
 web-server-health host="45.79.138.102" scheme="http":
     #!/usr/bin/env bash
@@ -547,6 +665,15 @@ deploy-web-server *args:
     web_domain=""
     enable_https=""
     env_file="secrets/web-server.env"
+    service_name="lightrider-matchmaker"
+    route=""
+    web_upstream_port=""
+    caddy_default_upstream_port=""
+    nats_port=""
+    nats_monitor_port=""
+    manage_static_server=""
+    run_static_server=""
+    allocation_source=""
     build_memory=""
     build_cpus=""
     build_cpu_quota=""
@@ -566,6 +693,18 @@ deploy-web-server *args:
         https=*) enable_https="${arg#https=}" ;;
         enable_https=*) enable_https="${arg#enable_https=}" ;;
         env=*) env_file="${arg#env=}" ;;
+        service_name=*) service_name="${arg#service_name=}" ;;
+        route=*) route="${arg#route=}" ;;
+        matchmaker_route=*) route="${arg#matchmaker_route=}" ;;
+        web_upstream_port=*) web_upstream_port="${arg#web_upstream_port=}" ;;
+        caddy_default_upstream_port=*) caddy_default_upstream_port="${arg#caddy_default_upstream_port=}" ;;
+        nats_port=*) nats_port="${arg#nats_port=}" ;;
+        nats_public_port=*) nats_port="${arg#nats_public_port=}" ;;
+        nats_monitor_port=*) nats_monitor_port="${arg#nats_monitor_port=}" ;;
+        nats_monitor_public_port=*) nats_monitor_port="${arg#nats_monitor_public_port=}" ;;
+        manage_static_server=*) manage_static_server="${arg#manage_static_server=}" ;;
+        run_static_server=*) run_static_server="${arg#run_static_server=}" ;;
+        allocation_source=*) allocation_source="${arg#allocation_source=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
         build_memory=*) build_memory="${arg#build_memory=}" ;;
         cpus=*) build_cpus="${arg#cpus=}" ;;
@@ -593,7 +732,7 @@ deploy-web-server *args:
       esac
     done
     if [[ -z "$vps_host" ]]; then
-      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [domain=<domain>] [https=1] [env=<file>]" >&2
+      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [domain=<domain>] [https=1] [env=<file>] [service_name=<name>] [route=<name>] [web_upstream_port=<port>] [nats_port=<port>]" >&2
       echo "example: just deploy-web-server host=45.79.138.102 domain=play.example.com" >&2
       exit 2
     fi
@@ -606,9 +745,39 @@ deploy-web-server *args:
     else
       just matchmaker-build-push "$tag" "$build_memory" "$build_cpus" "$build_cpu_quota" "$build_cpuset_cpus"
     fi
-    LIGHTRIDER_ENABLE_HTTPS="$enable_https" LIGHTRIDER_WEB_DOMAIN="$web_domain" FORCE=1 just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
+    if [[ -z "$web_upstream_port" ]]; then
+      if [[ "$service_name" == "lightrider-matchmaker" ]]; then
+        web_upstream_port=8080
+      else
+        echo "web_upstream_port is required for non-default service_name=$service_name" >&2
+        exit 2
+      fi
+    fi
+    caddy_default_upstream_port="${caddy_default_upstream_port:-8080}"
+    nats_port="${nats_port:-4222}"
+    nats_monitor_port="${nats_monitor_port:-8222}"
+    env_args=(
+      LIGHTRIDER_ENABLE_HTTPS="$enable_https"
+      LIGHTRIDER_WEB_DOMAIN="$web_domain"
+      LIGHTRIDER_WEB_UPSTREAM_PORT="$web_upstream_port"
+      LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT="$caddy_default_upstream_port"
+      LIGHTRIDER_MATCHMAKER_ROUTE="$route"
+      LIGHTRIDER_NATS_PUBLIC_PORT="$nats_port"
+      LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT="$nats_monitor_port"
+      FORCE=1
+    )
+    if [[ -n "$manage_static_server" ]]; then
+      env_args+=(LIGHTRIDER_MANAGE_STATIC_SERVER="$manage_static_server")
+    fi
+    if [[ -n "$run_static_server" ]]; then
+      env_args+=(LIGHTRIDER_RUN_STATIC_SERVER="$run_static_server")
+    fi
+    if [[ -n "$allocation_source" ]]; then
+      env_args+=(LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE="$allocation_source")
+    fi
+    env "${env_args[@]}" just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
     just web-server-env-check "$env_file"
-    just web-server-install "$vps_host" "$ssh_port" "$env_file" "$ssh_key"
+    just web-server-install "$vps_host" "$ssh_port" "$env_file" "$ssh_key" "$service_name"
     if [[ "$enable_https" == "1" || "$enable_https" == "true" || "$enable_https" == "yes" ]]; then
       just web-server-health "$web_domain" https
     else
