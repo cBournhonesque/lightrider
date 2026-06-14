@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use lightyear::core::tick::TickDuration;
+use lightyear::interpolation::timeline::InterpolationConfig;
 use lightyear::link::LinkStats;
 use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeClient;
@@ -84,6 +85,7 @@ fn spawn_client(
     game_config: Res<GameConfig>,
 ) -> Result {
     let input_delay = &game_config.network.input_delay;
+    let interpolation_delay = &game_config.network.interpolation_delay;
     let client_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), config.client_port);
 
     let mut client = commands.spawn((
@@ -98,6 +100,9 @@ fn spawn_client(
                 .maximum_input_delay_before_prediction_ticks,
             maximum_predicted_ticks: input_delay.maximum_predicted_ticks,
         }),
+        InterpolationConfig::default()
+            .with_min_delay(interpolation_delay.min_delay())
+            .with_send_interval_ratio(interpolation_delay.send_interval_ratio),
         Name::from("Client"),
     ));
 

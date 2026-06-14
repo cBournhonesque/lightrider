@@ -89,6 +89,10 @@
             maximum_input_delay_before_prediction_ticks: 2,
             maximum_predicted_ticks: 8,
         ),
+        interpolation_delay: (
+            min_delay_ms: 5,
+            send_interval_ratio: 1.7,
+        ),
         lag_compensation: (
             enabled: false,
             max_delay_ticks: 10,

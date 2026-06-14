@@ -8,8 +8,13 @@ use lightyear::prelude::*;
 use shared::network::protocol::prelude::*;
 
 const GEOMETRY_EPSILON: f32 = 0.001;
+const MAX_REMOTE_INTERPOLATION_CATCH_UP_DISTANCE: f32 = 24.0;
+const MAX_REMOTE_INTERPOLATION_PATH_SNAP_DISTANCE: f32 = 24.0;
 
 pub struct InterpolationPlugin;
+
+#[derive(Component)]
+struct RemoteSnakeInterpolationInitialized;
 
 impl Plugin for InterpolationPlugin {
     fn build(&self, app: &mut App) {
@@ -72,6 +77,7 @@ struct SnakeHistorySample {
 
 fn interpolate_remote_snakes(
     timeline: Single<&InterpolationTimeline, With<IsSynced<InterpolationTimeline>>>,
+    mut commands: Commands,
     mut snakes: Query<
         (
             Entity,
@@ -81,6 +87,7 @@ fn interpolate_remote_snakes(
             &ConfirmedHistory<SnakeHead>,
             &ConfirmedHistory<TailPoints>,
             &ConfirmedHistory<TailLength>,
+            Option<&RemoteSnakeInterpolationInitialized>,
         ),
         With<Interpolated>,
     >,
@@ -96,6 +103,7 @@ fn interpolate_remote_snakes(
         head_history,
         tail_history,
         length_history,
+        initialized,
     ) in &mut snakes
     {
         let Some(sample) = sample_snake_history_pair(
@@ -123,6 +131,21 @@ fn interpolate_remote_snakes(
             continue;
         };
 
+        let (interpolated_head, interpolated_tail) = if initialized.is_some() {
+            smooth_large_visual_step(
+                &live_head,
+                &live_tail,
+                interpolated_head,
+                &interpolated_tail,
+                &sample.end_head,
+                &sample.end_tail,
+                &sample.end_length,
+            )
+            .unwrap_or((interpolated_head, interpolated_tail))
+        } else {
+            (interpolated_head, interpolated_tail)
+        };
+
         log_diagonal_interpolation(
             entity,
             interpolation_tick,
@@ -139,6 +162,9 @@ fn interpolate_remote_snakes(
         *live_head = interpolated_head;
         *live_tail = interpolated_tail;
         *live_length = interpolated_length;
+        commands
+            .entity(entity)
+            .insert(RemoteSnakeInterpolationInitialized);
     }
 }
 
@@ -292,6 +318,43 @@ fn interpolate_snake_on_confirmed_path(
     Some((interpolated_head, interpolated_tail))
 }
 
+fn smooth_large_visual_step(
+    live_head: &SnakeHead,
+    live_tail: &TailPoints,
+    target_head: SnakeHead,
+    target_tail: &TailPoints,
+    end_head: &SnakeHead,
+    end_tail: &TailPoints,
+    end_length: &TailLength,
+) -> Option<(SnakeHead, TailPoints)> {
+    if live_head.position.distance(target_head.position)
+        <= MAX_REMOTE_INTERPOLATION_CATCH_UP_DISTANCE
+    {
+        return Some((target_head, target_tail.clone()));
+    }
+
+    let final_polyline = end_tail.polyline(end_head, end_length.current_size);
+    let Some(path) = head_path_from_final_polyline(live_head, &target_head, &final_polyline)
+        .or_else(|| {
+            let projected_start = project_head_to_polyline(
+                live_head,
+                &final_polyline,
+                MAX_REMOTE_INTERPOLATION_PATH_SNAP_DISTANCE,
+            )?;
+            head_path_from_final_polyline(&projected_start, &target_head, &final_polyline)
+        })
+    else {
+        return Some((*live_head, live_tail.clone()));
+    };
+    let smoothed_head = walk_path_distance(
+        &path,
+        MAX_REMOTE_INTERPOLATION_CATCH_UP_DISTANCE,
+        target_head,
+    );
+    let smoothed_tail = tail_points_behind_head(&final_polyline, &smoothed_head)?;
+    Some((smoothed_head, smoothed_tail))
+}
+
 fn head_path_from_final_polyline(
     start: &SnakeHead,
     end: &SnakeHead,
@@ -337,6 +400,11 @@ fn head_path_from_final_polyline(
 }
 
 fn walk_path(path: &[Vec2], fraction: f32, end: SnakeHead) -> SnakeHead {
+    let total_length = path_length(path);
+    walk_path_distance(path, total_length * fraction.clamp(0.0, 1.0), end)
+}
+
+fn walk_path_distance(path: &[Vec2], distance: f32, end: SnakeHead) -> SnakeHead {
     if path.len() < 2 {
         return end;
     }
@@ -345,7 +413,7 @@ fn walk_path(path: &[Vec2], fraction: f32, end: SnakeHead) -> SnakeHead {
         return end;
     }
 
-    let mut remaining = total_length * fraction.clamp(0.0, 1.0);
+    let mut remaining = distance.clamp(0.0, total_length);
     for segment_index in 0..path.len() - 1 {
         let from = path[segment_index];
         let to = path[segment_index + 1];
@@ -375,6 +443,51 @@ fn walk_path(path: &[Vec2], fraction: f32, end: SnakeHead) -> SnakeHead {
     }
 
     end
+}
+
+fn project_head_to_polyline(
+    head: &SnakeHead,
+    polyline: &TailPolyline,
+    max_distance: f32,
+) -> Option<SnakeHead> {
+    let positions = polyline
+        .0
+        .iter()
+        .map(|(position, _)| *position)
+        .collect::<Vec<_>>();
+    let mut best = None;
+    for segment in positions.windows(2) {
+        let projected = project_point_to_segment(head.position, segment[0], segment[1])?;
+        let distance = head.position.distance(projected);
+        if distance <= max_distance
+            && best.is_none_or(|(_, best_distance)| distance < best_distance)
+        {
+            best = Some((projected, distance));
+        }
+    }
+    best.map(|(position, _)| SnakeHead {
+        position,
+        direction: head.direction,
+    })
+}
+
+fn project_point_to_segment(point: Vec2, start: Vec2, end: Vec2) -> Option<Vec2> {
+    if same_position(start, end) {
+        return Some(start);
+    }
+    if (start.x - end.x).abs() <= GEOMETRY_EPSILON {
+        return Some(Vec2::new(
+            start.x,
+            point.y.clamp(start.y.min(end.y), start.y.max(end.y)),
+        ));
+    }
+    if (start.y - end.y).abs() <= GEOMETRY_EPSILON {
+        return Some(Vec2::new(
+            point.x.clamp(start.x.min(end.x), start.x.max(end.x)),
+            start.y,
+        ));
+    }
+    None
 }
 
 fn tail_points_behind_head(
@@ -543,6 +656,37 @@ mod tests {
             actual.distance(expected) <= GEOMETRY_EPSILON,
             "expected {expected:?}, got {actual:?}"
         );
+    }
+
+    #[test]
+    fn large_visual_step_is_clamped_along_projected_confirmed_path() {
+        let live_head = head(Vec2::new(913.0, 379.0), Direction::Up);
+        let target_head = head(Vec2::new(778.0, 384.0), Direction::Left);
+        let end_head = head(Vec2::new(760.0, 384.0), Direction::Left);
+        let end_tail = TailPoints::new(VecDeque::from([TailTurn::new(
+            Vec2::new(913.0, 384.0),
+            Direction::Down,
+        )]));
+        let end_length = length(240.0);
+
+        let (smoothed_head, smoothed_tail) = smooth_large_visual_step(
+            &live_head,
+            &TailPoints::empty(),
+            target_head,
+            &TailPoints::empty(),
+            &end_head,
+            &end_tail,
+            &end_length,
+        )
+        .unwrap();
+
+        assert!(
+            live_head.position.distance(smoothed_head.position)
+                <= MAX_REMOTE_INTERPOLATION_CATCH_UP_DISTANCE + 6.0
+        );
+        assert!(smoothed_head.position.x > target_head.position.x);
+        assert_eq!(smoothed_head.direction, Direction::Left);
+        assert!(first_diagonal_segment(&smoothed_tail.polyline(&smoothed_head, 200.0)).is_none());
     }
 
     #[test]

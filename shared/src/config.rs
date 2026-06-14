@@ -22,6 +22,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<NetworkConfig>();
         app.register_type::<NetworkCompression>();
         app.register_type::<InputDelayConfig>();
+        app.register_type::<InterpolationDelayConfig>();
         app.register_type::<LagCompensationConfig>();
         app.register_type::<DebugConfig>();
     }
@@ -329,13 +330,14 @@ impl Default for RespawnConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Reflect)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
 #[serde(default)]
 pub struct NetworkConfig {
     pub server_port: u16,
     pub replication_send_hz: u16,
     pub compression: NetworkCompression,
     pub input_delay: InputDelayConfig,
+    pub interpolation_delay: InterpolationDelayConfig,
     pub lag_compensation: LagCompensationConfig,
     pub input_packet_redundancy_ticks: u16,
     pub artificial_latency_ms: u64,
@@ -350,6 +352,7 @@ impl Default for NetworkConfig {
             replication_send_hz: 16,
             compression: NetworkCompression::default(),
             input_delay: InputDelayConfig::default(),
+            interpolation_delay: InterpolationDelayConfig::default(),
             lag_compensation: LagCompensationConfig::default(),
             input_packet_redundancy_ticks: 3,
             artificial_latency_ms: 0,
@@ -367,6 +370,28 @@ impl NetworkConfig {
             Self::default().replication_send_hz
         };
         Duration::from_nanos(1_000_000_000 / u64::from(send_hz))
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
+#[serde(default)]
+pub struct InterpolationDelayConfig {
+    pub min_delay_ms: u64,
+    pub send_interval_ratio: f32,
+}
+
+impl Default for InterpolationDelayConfig {
+    fn default() -> Self {
+        Self {
+            min_delay_ms: 5,
+            send_interval_ratio: 1.7,
+        }
+    }
+}
+
+impl InterpolationDelayConfig {
+    pub fn min_delay(&self) -> Duration {
+        Duration::from_millis(self.min_delay_ms)
     }
 }
 
@@ -484,6 +509,10 @@ mod tests {
             Duration::from_nanos(62_500_000)
         );
         assert_eq!(config.network.input_delay, InputDelayConfig::balanced());
+        assert_eq!(
+            config.network.interpolation_delay,
+            InterpolationDelayConfig::default()
+        );
         assert_eq!(
             config.network.lag_compensation,
             LagCompensationConfig::default()

@@ -179,6 +179,7 @@ mod tests {
     fn config_network_conditioner_uses_one_way_artificial_values() {
         let config = NetworkConfig {
             input_delay: InputDelayConfig::balanced(),
+            interpolation_delay: crate::config::InterpolationDelayConfig::default(),
             lag_compensation: LagCompensationConfig::default(),
             input_packet_redundancy_ticks: 3,
             replication_send_hz: 16,
