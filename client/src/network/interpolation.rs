@@ -8,7 +8,6 @@ use lightyear::prelude::*;
 use shared::network::protocol::prelude::*;
 
 const GEOMETRY_EPSILON: f32 = 0.001;
-const INTERPOLATION_PATH_HINT: f32 = 100_000.0;
 
 pub struct InterpolationPlugin;
 
@@ -106,17 +105,12 @@ fn interpolate_remote_snakes(
         else {
             continue;
         };
-        let Some((tail_sample_tick, end_tail)) =
-            present_at_or_before(tail_history, head_sample.end_tick)
-                .or_else(|| present_at_or_before(tail_history, interpolation_tick))
-                .or_else(|| {
-                    tail_history
-                        .newest_present()
-                        .map(|(tick, tail)| (tick, tail.clone()))
-                })
+        let Some(ConfirmedState::Confirmed(end_tail)) =
+            tail_history.get_state_at(head_sample.end_tick)
         else {
             continue;
         };
+        let end_tail = end_tail.clone();
 
         let interpolated_length = interpolate_tail_length(
             length_sample.start,
@@ -139,8 +133,9 @@ fn interpolate_remote_snakes(
             &interpolated_head,
             &interpolated_tail,
             &interpolated_length,
+            &end_tail,
             tail_history,
-            tail_sample_tick,
+            head_sample.end_tick,
         );
 
         *live_head = interpolated_head;
@@ -193,20 +188,6 @@ fn sample_history_pair<C: Clone>(
     })
 }
 
-fn present_at_or_before<C: Clone>(history: &ConfirmedHistory<C>, tick: Tick) -> Option<(Tick, C)> {
-    let index = (0..history.len())
-        .take_while(|index| {
-            history
-                .get_nth_tick(*index)
-                .is_some_and(|sample| sample <= tick)
-        })
-        .last()?;
-    let (sample_tick, ConfirmedState::Confirmed(value)) = history.get_nth_state(index)? else {
-        return None;
-    };
-    Some((sample_tick, value.clone()))
-}
-
 fn log_diagonal_interpolation(
     entity: Entity,
     interpolation_tick: Tick,
@@ -215,6 +196,7 @@ fn log_diagonal_interpolation(
     interpolated_head: &SnakeHead,
     interpolated_tail: &TailPoints,
     interpolated_length: &TailLength,
+    end_tail: &TailPoints,
     tail_history: &ConfirmedHistory<TailPoints>,
     tail_sample_tick: Tick,
 ) {
@@ -240,6 +222,7 @@ fn log_diagonal_interpolation(
         interpolated_head = ?interpolated_head,
         tail_sample_tick = tail_sample_tick.0,
         tail_history_ticks = ?tail_history_ticks,
+        end_tail_turns = ?end_tail.turns,
         tail_turns = ?interpolated_tail.turns,
         tail_length = interpolated_length.current_size,
         segment_index,
@@ -267,13 +250,7 @@ fn interpolate_snake_on_confirmed_path(
     length: &TailLength,
     fraction: f32,
 ) -> (SnakeHead, TailPoints) {
-    let final_polyline = end_tail.polyline(
-        end,
-        length
-            .current_size
-            .max(length.target_size)
-            .max(INTERPOLATION_PATH_HINT),
-    );
+    let final_polyline = end_tail.polyline(end, length.current_size);
     let head_path = head_path_from_final_polyline(start, end, &final_polyline);
     let interpolated_head = walk_path(&head_path, fraction, *end);
     let interpolated_tail = tail_points_behind_head(&final_polyline, &interpolated_head);
@@ -533,6 +510,16 @@ mod tests {
         history
     }
 
+    fn confirmed_history_at<C: Clone + PartialEq>(
+        samples: impl IntoIterator<Item = (Tick, C)>,
+    ) -> ConfirmedHistory<C> {
+        let mut history = ConfirmedHistory::default();
+        for (tick, value) in samples {
+            history.insert_present(tick, value);
+        }
+        history
+    }
+
     fn assert_vec2_close(actual: Vec2, expected: Vec2) {
         assert!(
             actual.distance(expected) <= GEOMETRY_EPSILON,
@@ -652,6 +639,113 @@ mod tests {
         assert_eq!(
             live_tail.turns,
             VecDeque::from([TailTurn::new(Vec2::new(10.0, 0.0), Direction::Left)])
+        );
+    }
+
+    #[test]
+    fn remote_snake_interpolation_uses_tail_sample_at_head_end_tick() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, interpolate_remote_snakes);
+        insert_timeline(&mut app, Tick(11), 0.0);
+
+        let stale_tail = TailPoints::new(VecDeque::from([TailTurn::new(
+            Vec2::new(-5.0, 1.0),
+            Direction::Down,
+        )]));
+        let exact_tail = TailPoints::new(VecDeque::from([TailTurn::new(
+            Vec2::new(-5.0, 0.0),
+            Direction::Down,
+        )]));
+        let snake = app
+            .world_mut()
+            .spawn((
+                Interpolated,
+                SnakeHead::default(),
+                TailPoints::empty(),
+                TailLength::default(),
+                confirmed_history_at([
+                    (Tick(10), head(Vec2::ZERO, Direction::Right)),
+                    (Tick(12), head(Vec2::new(10.0, 0.0), Direction::Right)),
+                ]),
+                confirmed_history_at([(Tick(0), stale_tail), (Tick(12), exact_tail)]),
+                confirmed_history_at([(Tick(10), length(40.0)), (Tick(12), length(40.0))]),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(snake);
+        let live_head = entity.get::<SnakeHead>().unwrap();
+        let live_tail = entity.get::<TailPoints>().unwrap();
+        let live_length = entity.get::<TailLength>().unwrap();
+        assert_vec2_close(live_head.position, Vec2::new(5.0, 0.0));
+        assert_eq!(
+            live_tail.turns,
+            VecDeque::from([TailTurn::new(Vec2::new(-5.0, 0.0), Direction::Down)])
+        );
+        assert!(
+            first_diagonal_segment(&live_tail.polyline(live_head, live_length.current_size))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn remote_snake_interpolation_preserves_front_turn_near_end_sample() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, interpolate_remote_snakes);
+        insert_timeline(&mut app, Tick(365), 0.9996338);
+
+        let end_tail = TailPoints::new(VecDeque::from([
+            TailTurn::new(Vec2::new(-185.24792, 20.859436), Direction::Down),
+            TailTurn::new(Vec2::new(-185.24792, -54.538353), Direction::Right),
+        ]));
+        let snake = app
+            .world_mut()
+            .spawn((
+                Interpolated,
+                SnakeHead::default(),
+                TailPoints::empty(),
+                TailLength::default(),
+                confirmed_history_at([
+                    (
+                        Tick(364),
+                        head(Vec2::new(-185.24792, 20.009436), Direction::Up),
+                    ),
+                    (
+                        Tick(366),
+                        head(Vec2::new(-184.39792, 20.859436), Direction::Right),
+                    ),
+                ]),
+                confirmed_history_at([
+                    (
+                        Tick(364),
+                        TailPoints::new(VecDeque::from([TailTurn::new(
+                            Vec2::new(-185.24792, -54.538353),
+                            Direction::Right,
+                        )])),
+                    ),
+                    (Tick(366), end_tail),
+                ]),
+                confirmed_history_at([(Tick(364), length(160.0)), (Tick(366), length(160.0))]),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(snake);
+        let live_head = entity.get::<SnakeHead>().unwrap();
+        let live_tail = entity.get::<TailPoints>().unwrap();
+        let live_length = entity.get::<TailLength>().unwrap();
+        assert!(
+            first_diagonal_segment(&live_tail.polyline(live_head, live_length.current_size))
+                .is_none(),
+            "tail should stay axis-aligned: head={live_head:?}, tail={live_tail:?}"
+        );
+        assert_vec2_close(
+            live_tail.turns.front().unwrap().position,
+            Vec2::new(-185.24792, 20.859436),
         );
     }
 }
