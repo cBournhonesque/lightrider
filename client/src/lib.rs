@@ -316,6 +316,8 @@ mod tests {
 
     #[test]
     fn native_clients_load_assets_from_workspace_root() {
-        assert!(std::path::Path::new(&asset_file_path()).join("powerline/sheet.png").exists());
+        assert!(std::path::Path::new(&asset_file_path())
+            .join("powerline/sheet.png")
+            .exists());
     }
 }

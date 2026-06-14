@@ -91,43 +91,45 @@ impl Plugin for ProtocolPlugin {
         })
         .add_direction(NetworkDirection::ServerToClient);
 
-        // Tail visual-correction functions exist but are intentionally not registered yet.
-        // Keep predicted visual correction disabled until the smoothing behavior is validated.
-        app.register_component::<components::snake::SnakeHead>()
-            .add_prediction()
-            .add_should_rollback(components::snake::snake_head_should_rollback)
-            .register_interpolation_fn(components::snake::interpolate_snake_head)
-            .add_custom_interpolation();
-        app.register_component_diff::<components::snake::TailPoints>()
-            .add_prediction_diff()
-            .add_should_rollback(components::snake::tail_points_should_rollback)
-            .add_custom_interpolation_diff();
-        app.register_component::<components::snake::TailLength>()
-            .add_prediction()
-            .add_should_rollback(components::snake::tail_length_should_rollback)
-            .register_interpolation_fn(components::snake::interpolate_tail_length)
-            .add_custom_interpolation();
-        app.register_component::<components::snake::Speed>()
-            .add_prediction()
-            .add_should_rollback(components::snake::speed_should_rollback);
-        app.register_component::<components::snake::Acceleration>()
-            .add_prediction()
-            .add_should_rollback(components::snake::acceleration_should_rollback);
-        app.register_component::<components::snake::FoodBoost>()
-            .add_prediction()
-            .add_should_rollback(components::snake::food_boost_should_rollback);
-        app.register_component::<components::snake::HasPlayer>()
-            .add_prediction()
-            .add_custom_interpolation();
-        app.register_component::<inputs::SnakeInput>()
-            .add_prediction();
-
-        app.register_component::<components::player::Player>();
-        app.register_component::<components::player::PlayerScore>();
-        app.register_component::<components::player::PlayerStatus>();
-        app.register_component::<components::food::FoodMarker>();
-        app.register_component::<components::common::Position>()
-            .add_interpolation_with(components::common::interpolate_position);
-        app.register_component::<components::common::RoomId>();
+        register_components(app);
     }
+}
+
+fn register_components(app: &mut App) {
+    // Tail visual-correction functions exist but are intentionally not registered yet.
+    // Keep predicted visual correction disabled until the smoothing behavior is validated.
+    app.register_component::<components::snake::SnakeHead>()
+        .add_prediction()
+        .add_should_rollback(components::snake::snake_head_should_rollback)
+        .add_custom_interpolation();
+    app.register_component_diff::<components::snake::TailPoints>()
+        .add_prediction_diff()
+        .add_should_rollback(components::snake::tail_points_should_rollback)
+        .add_custom_interpolation_diff();
+    app.register_component::<components::snake::TailLength>()
+        .add_prediction()
+        .add_should_rollback(components::snake::tail_length_should_rollback)
+        .add_custom_interpolation();
+    app.register_component::<components::snake::Speed>()
+        .add_prediction()
+        .add_should_rollback(components::snake::speed_should_rollback);
+    app.register_component::<components::snake::Acceleration>()
+        .add_prediction()
+        .add_should_rollback(components::snake::acceleration_should_rollback);
+    app.register_component::<components::snake::FoodBoost>()
+        .add_prediction()
+        .add_should_rollback(components::snake::food_boost_should_rollback);
+    app.register_component::<components::snake::HasPlayer>()
+        .add_prediction()
+        .add_custom_interpolation();
+    app.register_component::<inputs::SnakeInput>()
+        .add_prediction();
+
+    app.register_component::<components::player::Player>();
+    app.register_component::<components::player::PlayerScore>();
+    app.register_component::<components::player::PlayerStatus>();
+    app.register_component::<components::food::FoodMarker>();
+    app.register_component::<components::common::Position>()
+        .add_interpolation_with(components::common::interpolate_position);
+    app.register_component::<components::common::RoomId>();
 }
