@@ -40,6 +40,7 @@
         spatial_listener_ear_gap: 8.0,
         remote_sound_full_volume_distance: 60.0,
         remote_sound_max_distance: 360.0,
+        remote_one_shot_max_distance: 240.0,
         remote_death_volume: 1.35,
         remote_food_volume: 0.75,
         remote_turn_volume: 1.15,

@@ -300,9 +300,9 @@ matchmaker-build *args: edgegap-context
       --build-arg "MATCHMAKER_RELEASE_OPT_LEVEL=${MATCHMAKER_RELEASE_OPT_LEVEL:-2}" \
       --build-arg "MATCHMAKER_RELEASE_LTO=${MATCHMAKER_RELEASE_LTO:-thin}" \
       --build-arg "MATCHMAKER_RELEASE_CODEGEN_UNITS=${MATCHMAKER_RELEASE_CODEGEN_UNITS:-8}" \
-      --build-arg "WEB_CARGO_JOBS=${WEB_CARGO_JOBS:-2}" \
+      --build-arg "WEB_CARGO_JOBS=${WEB_CARGO_JOBS:-1}" \
       --build-arg "WEB_CARGO_INCREMENTAL=${WEB_CARGO_INCREMENTAL:-0}" \
-      --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-s}" \
+      --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-1}" \
       --build-arg "WEB_RELEASE_LTO=${WEB_RELEASE_LTO:-false}" \
       --build-arg "WEB_RELEASE_CODEGEN_UNITS=${WEB_RELEASE_CODEGEN_UNITS:-16}" \
       --build-arg "LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=$lightyear_matchmaker_manifest_sha" \

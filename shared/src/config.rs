@@ -182,6 +182,7 @@ pub struct SoundConfig {
     pub spatial_listener_ear_gap: f32,
     pub remote_sound_full_volume_distance: f32,
     pub remote_sound_max_distance: f32,
+    pub remote_one_shot_max_distance: f32,
     pub remote_death_volume: f32,
     pub remote_food_volume: f32,
     pub remote_turn_volume: f32,
@@ -210,6 +211,7 @@ impl Default for SoundConfig {
             spatial_listener_ear_gap: 8.0,
             remote_sound_full_volume_distance: 60.0,
             remote_sound_max_distance: 360.0,
+            remote_one_shot_max_distance: 240.0,
             remote_death_volume: 1.35,
             remote_food_volume: 0.75,
             remote_turn_volume: 1.15,
@@ -503,6 +505,7 @@ mod tests {
         assert_eq!(config.sound.electro_loop_volume, 0.85);
         assert_eq!(config.sound.remote_sound_full_volume_distance, 60.0);
         assert_eq!(config.sound.remote_sound_max_distance, 360.0);
+        assert_eq!(config.sound.remote_one_shot_max_distance, 240.0);
         assert_eq!(config.sound.remote_turn_volume, 1.15);
         assert_eq!(config.sound.remote_proximity_boost_volume, 0.85);
         assert_eq!(config.sound.remote_death_volume, 1.35);

@@ -1,8 +1,9 @@
 use bevy::ecs::query::Or;
 use bevy::prelude::*;
 use bevy_seedling::prelude::{
-    sample_effects, AudioSample, EffectsQuery, SampleEffects, SamplePlayer, SeedlingPlugin,
-    SpatialBasicNode, SpatialListener2D, SpatialScale, Volume, VolumeNode,
+    sample_effects, AudioSample, DefaultPoolSize, EffectsQuery, FirewheelConfig, SampleEffects,
+    SamplePlayer, SeedlingPlugin, SpatialBasicNode, SpatialListener2D, SpatialScale, Volume,
+    VolumeNode,
 };
 use lightyear::prelude::{Controlled, Interpolated, Predicted, Replicated};
 use shared::config::{GameConfig, MovementConfig, SoundConfig};
@@ -20,6 +21,17 @@ const FOOD_GRAB_SOUND: &str = "powerline/sounds/foodgrab.ogg";
 const LINE_LOOP_SOUND: &str = "powerline/sounds/lineloop.ogg";
 const LINE_FAST_LOOP_SOUND: &str = "powerline/sounds/lineloopfast.ogg";
 const ELECTRO_LOOP_SOUND: &str = "powerline/sounds/electroloop.ogg";
+const SILENT_VOLUME_EPSILON: f32 = 0.001;
+const VOLUME_UPDATE_EPSILON: f32 = 0.005;
+const REMOTE_LOOP_POSITION_UPDATE_DISTANCE: f32 = 8.0;
+const MAX_REMOTE_SPEED_LOOP_SNAKES: usize = 2;
+const MAX_ONE_SHOT_SOUNDS_PER_FRAME: usize = 6;
+const FIREWHEEL_CHANNEL_CAPACITY: u32 = 4096;
+const FIREWHEEL_EVENT_QUEUE_CAPACITY: usize = 1024;
+const FIREWHEEL_IMMEDIATE_EVENT_CAPACITY: usize = 4096;
+const FIREWHEEL_SCHEDULED_EVENT_CAPACITY: usize = 4096;
+const SAMPLE_POOL_MIN_SIZE: usize = 2;
+const SAMPLE_POOL_MAX_SIZE: usize = 8;
 
 pub(crate) struct SoundPlugin;
 
@@ -54,6 +66,11 @@ struct ProximityBoostSoundState {
     active: HashSet<Entity>,
 }
 
+#[derive(Resource, Default)]
+struct OneShotSoundBudget {
+    spawned: usize,
+}
+
 #[derive(Default)]
 struct RemoteSpeedLoops {
     line_loop: Option<Entity>,
@@ -79,17 +96,33 @@ struct ListenerSnapshot {
     room: RoomId,
 }
 
+#[derive(Clone, Copy)]
+struct RemoteLoopCandidate {
+    snake: Entity,
+    position: Vec2,
+    line_volume: f32,
+    fast_volume: f32,
+    electro_volume: f32,
+    distance: f32,
+}
+
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(SeedlingPlugin::default());
+        app.add_plugins(SeedlingPlugin {
+            config: firewheel_config(),
+            ..default()
+        });
+        app.insert_resource(DefaultPoolSize(SAMPLE_POOL_MIN_SIZE..=SAMPLE_POOL_MAX_SIZE));
         app.init_resource::<PowerlineSounds>();
         app.init_resource::<LocalSpeedLoopState>();
         app.init_resource::<RemoteSpeedLoopState>();
         app.init_resource::<TurnSoundState>();
         app.init_resource::<ProximityBoostSoundState>();
+        app.init_resource::<OneShotSoundBudget>();
         app.add_systems(
             Update,
             (
+                reset_one_shot_sound_budget,
                 sync_spatial_listener,
                 play_turn_sounds,
                 play_proximity_boost_sounds,
@@ -101,6 +134,20 @@ impl Plugin for SoundPlugin {
                 .chain(),
         );
     }
+}
+
+fn firewheel_config() -> FirewheelConfig {
+    FirewheelConfig {
+        channel_capacity: FIREWHEEL_CHANNEL_CAPACITY,
+        event_queue_capacity: FIREWHEEL_EVENT_QUEUE_CAPACITY,
+        immediate_event_capacity: FIREWHEEL_IMMEDIATE_EVENT_CAPACITY,
+        scheduled_event_capacity: FIREWHEEL_SCHEDULED_EVENT_CAPACITY,
+        ..default()
+    }
+}
+
+fn reset_one_shot_sound_budget(mut budget: ResMut<OneShotSoundBudget>) {
+    budget.spawned = 0;
 }
 
 impl FromWorld for PowerlineSounds {
@@ -155,6 +202,7 @@ fn play_turn_sounds(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<TurnSoundState>,
+    mut budget: ResMut<OneShotSoundBudget>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     local_snakes: Query<(Entity, &SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     remote_snakes: Query<
@@ -192,6 +240,7 @@ fn play_turn_sounds(
                 None,
                 volume,
                 &config.sound,
+                &mut budget,
             );
         }
     }
@@ -224,6 +273,7 @@ fn play_turn_sounds(
             Some(head.position),
             volume,
             &config.sound,
+            &mut budget,
         );
     }
 
@@ -235,6 +285,7 @@ fn play_proximity_boost_sounds(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<ProximityBoostSoundState>,
+    mut budget: ResMut<OneShotSoundBudget>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     local_snakes: Query<(Entity, &Acceleration, &FoodBoost), (With<Controlled>, With<TailPoints>)>,
     controlled_heads: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
@@ -268,6 +319,7 @@ fn play_proximity_boost_sounds(
                     None,
                     volume,
                     &config.sound,
+                    &mut budget,
                 );
             }
         }
@@ -300,6 +352,7 @@ fn play_proximity_boost_sounds(
                 Some(head.position),
                 volume,
                 &config.sound,
+                &mut budget,
             );
         }
     }
@@ -311,6 +364,7 @@ fn play_confirmed_death_sounds(
     mut commands: Commands,
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
+    mut budget: ResMut<OneShotSoundBudget>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
@@ -335,6 +389,7 @@ fn play_confirmed_death_sounds(
             source_position,
             volume,
             &config.sound,
+            &mut budget,
         );
     }
 }
@@ -343,6 +398,7 @@ fn play_confirmed_food_sounds(
     mut commands: Commands,
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
+    mut budget: ResMut<OneShotSoundBudget>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     snakes: Query<(&SnakeHead, &RoomId)>,
@@ -366,6 +422,7 @@ fn play_confirmed_food_sounds(
                 None,
                 volume,
                 &config.sound,
+                &mut budget,
             );
             continue;
         }
@@ -378,8 +435,11 @@ fn play_confirmed_food_sounds(
             Ok(_) => continue,
             Err(_) => collision.head_position,
         };
-        let attenuation =
-            distance_attenuation(source_position.distance(listener.position), &config.sound);
+        let distance = source_position.distance(listener.position);
+        if !within_remote_one_shot_radius(distance, &config.sound) {
+            continue;
+        }
+        let attenuation = distance_attenuation(distance, &config.sound);
         let volume = config.sound.master_volume
             * config.sound.food_volume
             * config.sound.remote_food_volume
@@ -390,6 +450,7 @@ fn play_confirmed_food_sounds(
             Some(source_position),
             volume,
             &config.sound,
+            &mut budget,
         );
     }
 }
@@ -490,7 +551,7 @@ fn update_remote_speed_loops(
         return;
     };
 
-    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
     for (snake, head, room, speed, acceleration, food_boost) in &remote_snakes {
         if *room != listener.room {
             continue;
@@ -502,7 +563,6 @@ fn update_remote_speed_loops(
                     proximity_boost_active(acceleration.0, food_boost.0, &config.movement)
                 });
 
-        seen.insert(snake);
         let source_position = head.position;
         let distance = source_position.distance(listener.position);
         let (line_volume, fast_volume) =
@@ -515,15 +575,38 @@ fn update_remote_speed_loops(
         } else {
             0.0
         };
-        let loops = state.loops.entry(snake).or_default();
+
+        if line_volume <= SILENT_VOLUME_EPSILON
+            && fast_volume <= SILENT_VOLUME_EPSILON
+            && electro_volume <= SILENT_VOLUME_EPSILON
+        {
+            continue;
+        }
+
+        candidates.push(RemoteLoopCandidate {
+            snake,
+            position: source_position,
+            line_volume,
+            fast_volume,
+            electro_volume,
+            distance,
+        });
+    }
+
+    candidates.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+
+    let mut seen = HashSet::new();
+    for candidate in candidates.into_iter().take(MAX_REMOTE_SPEED_LOOP_SNAKES) {
+        seen.insert(candidate.snake);
+        let loops = state.loops.entry(candidate.snake).or_default();
 
         update_remote_speed_loop(
             &mut commands,
             &mut loops.line_loop,
-            snake,
+            candidate.snake,
             sounds.line_loop.clone(),
-            source_position,
-            line_volume,
+            candidate.position,
+            candidate.line_volume,
             &config.sound,
             &sample_effects,
             &mut transforms,
@@ -532,10 +615,10 @@ fn update_remote_speed_loops(
         update_remote_speed_loop(
             &mut commands,
             &mut loops.line_fast_loop,
-            snake,
+            candidate.snake,
             sounds.line_fast_loop.clone(),
-            source_position,
-            fast_volume,
+            candidate.position,
+            candidate.fast_volume,
             &config.sound,
             &sample_effects,
             &mut transforms,
@@ -544,10 +627,10 @@ fn update_remote_speed_loops(
         update_remote_speed_loop(
             &mut commands,
             &mut loops.electro_loop,
-            snake,
+            candidate.snake,
             sounds.electro_loop.clone(),
-            source_position,
-            electro_volume,
+            candidate.position,
+            candidate.electro_volume,
             &config.sound,
             &sample_effects,
             &mut transforms,
@@ -579,10 +662,17 @@ fn update_plain_loop<C: Component>(
     sample_effects: &Query<&SampleEffects, With<C>>,
     volume_nodes: &mut Query<&mut VolumeNode>,
 ) {
+    if volume <= SILENT_VOLUME_EPSILON {
+        if let Some(existing) = entity.take() {
+            despawn_loop(commands, Some(existing));
+        }
+        return;
+    }
+
     if let Some(existing) = *entity {
         if let Ok(effects) = sample_effects.get(existing) {
             if let Ok(mut volume_node) = volume_nodes.get_effect_mut(effects) {
-                volume_node.volume = seedling_volume(volume);
+                set_volume_if_changed(&mut volume_node, volume);
                 return;
             }
         }
@@ -590,10 +680,6 @@ fn update_plain_loop<C: Component>(
             commands.entity(existing).despawn();
         }
         *entity = None;
-    }
-
-    if volume <= 0.0 {
-        return;
     }
 
     *entity = Some(
@@ -622,13 +708,25 @@ fn update_remote_speed_loop(
     transforms: &mut Query<&mut Transform, With<RemoteSpeedLoopSound>>,
     volume_nodes: &mut Query<&mut VolumeNode>,
 ) {
+    if volume <= SILENT_VOLUME_EPSILON || !sound_config.spatial_audio {
+        if let Some(existing) = entity.take() {
+            despawn_loop(commands, Some(existing));
+        }
+        return;
+    }
+
     if let Some(existing) = *entity {
         if let Ok(mut transform) = transforms.get_mut(existing) {
-            transform.translation = position.extend(0.0);
+            let translation = position.extend(0.0);
+            if transform.translation.distance_squared(translation)
+                >= REMOTE_LOOP_POSITION_UPDATE_DISTANCE * REMOTE_LOOP_POSITION_UPDATE_DISTANCE
+            {
+                transform.translation = translation;
+            }
         }
         if let Ok(effects) = sample_effects.get(existing) {
             if let Ok(mut volume_node) = volume_nodes.get_effect_mut(effects) {
-                volume_node.volume = seedling_volume(volume);
+                set_volume_if_changed(&mut volume_node, volume);
                 return;
             }
         }
@@ -636,10 +734,6 @@ fn update_remote_speed_loop(
             commands.entity(existing).despawn();
         }
         *entity = None;
-    }
-
-    if volume <= 0.0 || !sound_config.spatial_audio {
-        return;
     }
 
     *entity = Some(
@@ -670,10 +764,12 @@ fn spawn_one_shot(
     source_position: Option<Vec2>,
     volume: f32,
     sound_config: &SoundConfig,
+    budget: &mut OneShotSoundBudget,
 ) {
-    if volume <= 0.0 {
+    if volume <= SILENT_VOLUME_EPSILON || budget.spawned >= MAX_ONE_SHOT_SOUNDS_PER_FRAME {
         return;
     }
+    budget.spawned += 1;
 
     let player = SamplePlayer::new(sound).with_volume(seedling_volume(volume));
     if let Some(source_position) = source_position.filter(|_| sound_config.spatial_audio) {
@@ -698,6 +794,13 @@ fn seedling_volume(volume: f32) -> Volume {
         0.0
     };
     Volume::Linear(volume)
+}
+
+fn set_volume_if_changed(volume_node: &mut VolumeNode, volume: f32) {
+    let volume = seedling_volume(volume);
+    if (volume_node.volume.linear() - volume.linear()).abs() >= VOLUME_UPDATE_EPSILON {
+        volume_node.volume = volume;
+    }
 }
 
 fn seedling_spatial_scale(sound_config: &SoundConfig) -> SpatialScale {
@@ -847,9 +950,12 @@ fn remote_event_volume(
     remote_multiplier: f32,
     sound: &SoundConfig,
 ) -> f32 {
-    base_volume
-        * remote_multiplier
-        * distance_attenuation(source_position.distance(listener.position), sound)
+    let distance = source_position.distance(listener.position);
+    if !within_remote_one_shot_radius(distance, sound) {
+        return 0.0;
+    }
+
+    base_volume * remote_multiplier * distance_attenuation(distance, sound)
 }
 
 fn death_sound_volume(
@@ -874,8 +980,12 @@ fn death_sound_volume(
         return 0.0;
     }
 
-    base * sound.remote_death_volume
-        * distance_attenuation(source_position.distance(listener.position), sound)
+    let distance = source_position.distance(listener.position);
+    if !within_remote_one_shot_radius(distance, sound) {
+        return 0.0;
+    }
+
+    base * sound.remote_death_volume * distance_attenuation(distance, sound)
 }
 
 fn speed_loop_volumes(
@@ -942,6 +1052,13 @@ fn distance_attenuation(distance: f32, sound: &SoundConfig) -> f32 {
 
     let ratio = 1.0 - ((distance - full_volume_distance) / (max_distance - full_volume_distance));
     ratio.clamp(0.0, 1.0)
+}
+
+fn within_remote_one_shot_radius(distance: f32, sound: &SoundConfig) -> bool {
+    let max_distance = sound
+        .remote_one_shot_max_distance
+        .max(sound.remote_sound_full_volume_distance);
+    distance <= max_distance
 }
 
 fn normalized_range(value: f32, start: f32, end: f32) -> f32 {
@@ -1076,5 +1193,29 @@ mod tests {
 
         assert_eq!(nearby, base_volume * sound.remote_turn_volume);
         assert_eq!(far, 0.0);
+    }
+
+    #[test]
+    fn remote_event_volume_is_silent_outside_one_shot_radius() {
+        let sound = SoundConfig {
+            remote_one_shot_max_distance: 120.0,
+            remote_sound_max_distance: 360.0,
+            ..default()
+        };
+        let listener = ListenerSnapshot {
+            position: Vec2::ZERO,
+            room: RoomId(1),
+        };
+
+        assert_eq!(
+            remote_event_volume(
+                Vec2::new(180.0, 0.0),
+                listener,
+                0.5,
+                sound.remote_turn_volume,
+                &sound,
+            ),
+            0.0
+        );
     }
 }

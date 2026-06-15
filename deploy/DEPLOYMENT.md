@@ -779,7 +779,7 @@ Open:
 https://45.79.138.102.sslip.io/
 ```
 
-The matchmaker/control image build defaults to a balanced 32G+ RAM profile: two Cargo jobs, thin LTO for native control binaries, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1`.
+The matchmaker/control image build defaults to a conservative profile: two Cargo jobs for native matchmaker code, one Cargo job for the WASM web client, thin LTO for native control binaries, low web optimization, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1 WEB_RELEASE_OPT_LEVEL=0`.
 
 `MATCHMAKER_CARGO_INCREMENTAL=1` and `WEB_CARGO_INCREMENTAL=1` are available as opt-in build args, but they are not a substitute for Podman layer caching. A changed source tree still invalidates the image build layer unless the builder can reuse cached layers or cache mounts. For repeated deployment attempts, prefer building once locally, pushing the image, and using `SKIP_IMAGE_BUILD=1` for the VPS install.
 
@@ -824,7 +824,7 @@ NO_CACHE=1 just matchmaker-build <tag>
 On a larger machine you can opt into a heavier build:
 
 ```bash
-MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 just matchmaker-build <tag>
+MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 WEB_RELEASE_OPT_LEVEL=s just matchmaker-build <tag>
 ```
 
 Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup. The template also rotates an empty or default `NATS_PASSWORD=lightrider` into a random password because production startup refuses default `lightrider`/`lightrider` NATS credentials.

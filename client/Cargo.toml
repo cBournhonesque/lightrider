@@ -44,7 +44,6 @@ bevy = { workspace = true, features = [
 ] }
 bevy_seedling.workspace = true
 clap.workspace = true
-bevy-inspector-egui.workspace = true
 parry2d = "0.13"
 derive_more = { version = "0.99", features = ["add", "mul"] }
 cfg-if = "1.0.0"
