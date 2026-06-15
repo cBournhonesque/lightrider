@@ -213,6 +213,11 @@ mod wasm {
                 matchmaker_url: params
                     .get("matchmaker_url")
                     .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        params
+                            .get("matchmaker")
+                            .and_then(|route| routed_matchmaker_url(&route))
+                    })
                     .or_else(|| bootstrap.matchmaker_url.clone())
                     .unwrap_or_else(default_matchmaker_url),
                 matchmaker_game: params
@@ -286,6 +291,29 @@ mod wasm {
     }
 
     fn default_matchmaker_url() -> String {
+        format!("{}/matchmaker/ws", same_origin_matchmaker_base_url())
+    }
+
+    fn routed_matchmaker_url(route: &str) -> Option<String> {
+        let route = route.trim().trim_matches('/').to_ascii_lowercase();
+        if route.is_empty() {
+            return None;
+        }
+        if route == "default" || route == "root" {
+            return Some(default_matchmaker_url());
+        }
+        if !route.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        }) {
+            return None;
+        }
+        Some(format!(
+            "{}/matchmaker/{route}/ws",
+            same_origin_matchmaker_base_url()
+        ))
+    }
+
+    fn same_origin_matchmaker_base_url() -> String {
         let location = window_location();
         let protocol = match location.protocol().as_deref() {
             Ok("https:") => "wss",
@@ -294,7 +322,7 @@ mod wasm {
         let host = location
             .host()
             .expect("browser location host is unavailable");
-        format!("{protocol}://{host}/matchmaker/ws")
+        format!("{protocol}://{host}")
     }
 
     fn parse_room_param(value: Option<String>) -> RoomJoinMode {

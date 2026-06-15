@@ -8639,7 +8639,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "bevy-inspector-egui",
  "bevy_enhanced_input",
  "bevy_turborand",
  "cfg-if",

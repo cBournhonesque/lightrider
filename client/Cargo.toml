@@ -34,7 +34,14 @@ serde.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-bevy.workspace = true
+bevy = { workspace = true, features = [
+    "2d_bevy_render",
+    "3d_bevy_render",
+    "bevy_core_pipeline",
+    "picking",
+    "ui_api",
+    "ui_bevy_render",
+] }
 bevy_seedling.workspace = true
 clap.workspace = true
 bevy-inspector-egui.workspace = true

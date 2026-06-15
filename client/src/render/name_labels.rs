@@ -55,6 +55,9 @@ fn sync_name_label_roots(
             &SnakeHead,
             Option<&mut Transform>,
             Option<&GlobalTransform>,
+            Option<&Visibility>,
+            Option<&InheritedVisibility>,
+            Option<&ViewVisibility>,
         ),
         (
             With<TailPoints>,
@@ -62,7 +65,16 @@ fn sync_name_label_roots(
         ),
     >,
 ) {
-    for (snake, head, transform, global_transform) in &mut snakes {
+    for (
+        snake,
+        head,
+        transform,
+        global_transform,
+        visibility,
+        inherited_visibility,
+        view_visibility,
+    ) in &mut snakes
+    {
         let translation = head.position.extend(0.0);
         if let Some(mut transform) = transform {
             transform.translation = translation;
@@ -76,6 +88,18 @@ fn sync_name_label_roots(
 
         if global_transform.is_none() {
             commands.entity(snake).insert(GlobalTransform::default());
+        }
+
+        if visibility != Some(&Visibility::Inherited) {
+            commands.entity(snake).insert(Visibility::Inherited);
+        }
+        if inherited_visibility.is_none() {
+            commands
+                .entity(snake)
+                .insert(InheritedVisibility::default());
+        }
+        if view_visibility.is_none() {
+            commands.entity(snake).insert(ViewVisibility::default());
         }
     }
 }
@@ -172,6 +196,10 @@ fn update_name_labels(
                     TextColor(label_color(layer, color)),
                     TextLayout::new_with_justify(Justify::Left),
                     Transform::from_translation(label_local_translation(layer)),
+                    GlobalTransform::default(),
+                    Visibility::Inherited,
+                    InheritedVisibility::default(),
+                    ViewVisibility::default(),
                 ));
             });
         }
@@ -276,5 +304,57 @@ mod tests {
         history.insert(Tick(10), ConfirmedState::Confirmed(HasPlayer(player)));
 
         assert_eq!(snake_owner(None, Some(&history)), Some(player));
+    }
+
+    #[test]
+    fn update_name_labels_spawns_visible_text_children() {
+        let mut app = App::new();
+        app.add_systems(Update, (sync_name_label_roots, update_name_labels).chain());
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeHead {
+                    position: Vec2::new(10.0, 20.0),
+                    ..default()
+                },
+                TailPoints::empty(),
+            ))
+            .id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Player {
+                    id: lightyear::prelude::PeerId::Netcode(1),
+                    name: "Alice".to_string(),
+                    snake: Some(snake),
+                },
+                PlayerStatus::Alive,
+            ))
+            .id();
+        app.world_mut().entity_mut(snake).insert(HasPlayer(player));
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Visibility>(snake),
+            Some(&Visibility::Inherited)
+        );
+        assert!(app.world().get::<InheritedVisibility>(snake).is_some());
+        assert!(app.world().get::<ViewVisibility>(snake).is_some());
+
+        let mut labels = app
+            .world_mut()
+            .query::<(&NameLabel, &Text2d, &ChildOf, &Visibility)>();
+        let labels = labels.iter(app.world()).collect::<Vec<_>>();
+
+        assert_eq!(labels.len(), NameLabelLayer::ALL.len());
+        for (label, text, parent, visibility) in labels {
+            assert_eq!(label.player, player);
+            assert_eq!(label.snake, snake);
+            assert_eq!(text.0, "Alice");
+            assert_eq!(parent.parent(), snake);
+            assert_eq!(*visibility, Visibility::Inherited);
+        }
     }
 }

@@ -44,9 +44,7 @@ pub(crate) enum LightriderMatchmakerState {
 impl Plugin for LightriderMatchmakerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LightyearMatchmakerClientPlugin::new(
-            MatchmakerClientConfig {
-                websocket_url: self.config.matchmaker_url.clone(),
-            },
+            MatchmakerClientConfig::new(self.config.matchmaker_url.clone()),
         ))
         .insert_resource(self.config.clone())
         .init_resource::<LightriderMatchmakerState>()

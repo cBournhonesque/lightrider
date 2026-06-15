@@ -27,15 +27,9 @@ anyhow = { version = "1.0.75", features = [] }
 tracing = "0.1"
 tracing-subscriber = "0.3.17"
 bevy = { version = "0.18", default-features = false, features = [
-  "2d_bevy_render",
-  "3d_bevy_render",
-  "bevy_core_pipeline",
   "default_app",
   "default_platform",
-  "picking",
   "scene",
-  "ui_api",
-  "ui_bevy_render",
 ] }
 bevy_seedling = { version = "0.7.2", default-features = false, features = [
   "ogg",

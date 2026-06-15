@@ -19,6 +19,14 @@ path = "src/bin/main.rs"
 [features]
 default = []
 profile-chrome = ["bevy/trace_chrome", "bevy/detailed_trace"]
+render = [
+    "bevy/2d_bevy_render",
+    "bevy/3d_bevy_render",
+    "bevy/bevy_core_pipeline",
+    "bevy/picking",
+    "bevy/ui_api",
+    "bevy/ui_bevy_render",
+]
 lightyear-matchmaker = [
     "dep:lightyear_matchmaker_bevy_server",
     "dep:lightyear_matchmaker_core",
@@ -38,7 +46,6 @@ tracing-subscriber.workspace = true
 bevy.workspace = true
 clap.workspace = true
 bevy_turborand.workspace = true
-bevy-inspector-egui.workspace = true
 parry2d = "0.13.6"
 derive_more = { version = "0.99", features = ["add", "mul"] }
 cfg-if = "1.0.0"

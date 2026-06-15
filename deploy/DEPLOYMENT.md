@@ -1077,7 +1077,7 @@ Expected flow:
 8. Browser connects to the Edgegap external game port over WebTransport.
 9. Game server logs a Lightyear connect event and handles the requested room mode.
 
-The first-pass browser shell accepts URL parameters `name`, `room`, `matchmaker_url`, `matchmaker_game`, and `matchmaker_version`. `room` can be `auto`, `new`, a four-letter private room code, or a numeric room id.
+The first-pass browser shell accepts URL parameters `name`, `room`, `matchmaker`, `matchmaker_url`, `matchmaker_game`, and `matchmaker_version`. `matchmaker=local`, `matchmaker=edgegap`, and `matchmaker=gameflow` select same-origin routed matchmakers such as `/matchmaker/edgegap/ws`; `matchmaker_url` remains the explicit override. `room` can be `auto`, `new`, a four-letter private room code, or a numeric room id.
 
 Useful native token-path test:
 

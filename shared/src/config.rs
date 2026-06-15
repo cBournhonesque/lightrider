@@ -208,8 +208,8 @@ impl Default for SoundConfig {
             spatial_audio: true,
             spatial_scale: 0.02,
             spatial_listener_ear_gap: 8.0,
-            remote_sound_full_volume_distance: 120.0,
-            remote_sound_max_distance: 900.0,
+            remote_sound_full_volume_distance: 60.0,
+            remote_sound_max_distance: 360.0,
             remote_death_volume: 1.35,
             remote_food_volume: 0.75,
             remote_turn_volume: 1.15,
@@ -501,7 +501,8 @@ mod tests {
         assert_eq!(config.sound.turn_volume, 0.16);
         assert_eq!(config.sound.proximity_boost_volume, 0.2);
         assert_eq!(config.sound.electro_loop_volume, 0.85);
-        assert_eq!(config.sound.remote_sound_max_distance, 900.0);
+        assert_eq!(config.sound.remote_sound_full_volume_distance, 60.0);
+        assert_eq!(config.sound.remote_sound_max_distance, 360.0);
         assert_eq!(config.sound.remote_turn_volume, 1.15);
         assert_eq!(config.sound.remote_proximity_boost_volume, 0.85);
         assert_eq!(config.sound.remote_death_volume, 1.35);
