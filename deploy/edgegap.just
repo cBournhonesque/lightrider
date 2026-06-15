@@ -34,6 +34,11 @@ edgegap-context:
     else
       : > .edgegap-build/context/host-ca-certificates.crt
     fi
+    cargo metadata \
+      --manifest-path .edgegap-build/context/lightyear-matchmaker/Cargo.toml \
+      --no-deps \
+      --format-version 1 \
+      >/dev/null
 
 edgegap-login:
     #!/usr/bin/env bash
@@ -83,6 +88,16 @@ edgegap-build *args: edgegap-context
       esac
     done
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-server:$tag"
+    lightyear_matchmaker_manifest_sha="$(
+      find .edgegap-build/context/lightyear-matchmaker \
+        \( -name Cargo.toml -o -name Cargo.lock \) \
+        -type f \
+        -print0 |
+      sort -z |
+      xargs -0 sha256sum |
+      sha256sum |
+      awk '{print $1}'
+    )"
     build_cmd=(podman build --layers)
     if [[ "${NO_CACHE:-0}" == "1" ]]; then
       build_cmd+=(--no-cache)
@@ -119,6 +134,7 @@ edgegap-build *args: edgegap-context
       --build-arg "SERVER_RELEASE_OPT_LEVEL=${SERVER_RELEASE_OPT_LEVEL:-3}" \
       --build-arg "SERVER_RELEASE_LTO=${SERVER_RELEASE_LTO:-false}" \
       --build-arg "SERVER_RELEASE_CODEGEN_UNITS=${SERVER_RELEASE_CODEGEN_UNITS:-16}" \
+      --build-arg "LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=$lightyear_matchmaker_manifest_sha" \
       -f .edgegap-build/context/lightrider/deploy/Dockerfile.server \
       -t "$image" \
       .edgegap-build/context
@@ -236,6 +252,16 @@ matchmaker-build *args: edgegap-context
       esac
     done
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:$tag"
+    lightyear_matchmaker_manifest_sha="$(
+      find .edgegap-build/context/lightyear-matchmaker \
+        \( -name Cargo.toml -o -name Cargo.lock \) \
+        -type f \
+        -print0 |
+      sort -z |
+      xargs -0 sha256sum |
+      sha256sum |
+      awk '{print $1}'
+    )"
     # Defaults are balanced for a 32G+ build machine. Drop the env values to
     # 1/false/16 if rustc is OOM-killed on a smaller host.
     build_cmd=(podman build --layers)
@@ -279,6 +305,7 @@ matchmaker-build *args: edgegap-context
       --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-s}" \
       --build-arg "WEB_RELEASE_LTO=${WEB_RELEASE_LTO:-false}" \
       --build-arg "WEB_RELEASE_CODEGEN_UNITS=${WEB_RELEASE_CODEGEN_UNITS:-16}" \
+      --build-arg "LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=$lightyear_matchmaker_manifest_sha" \
       -f .edgegap-build/context/lightrider/deploy/Dockerfile.matchmaker \
       -t "$image" \
       .edgegap-build/context

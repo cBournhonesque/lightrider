@@ -36,13 +36,16 @@ WORKDIR /src/lightrider
 
 FROM chef AS planner
 
+ARG LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=unknown
+
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
 COPY bevy_replicon /src/bevy_replicon
 COPY lightrider /src/lightrider
 
 WORKDIR /src/lightyear-matchmaker
-RUN cargo chef prepare --recipe-path /tmp/lightyear-matchmaker-recipe.json
+RUN printf '%s\n' "${LIGHTYEAR_MATCHMAKER_MANIFEST_SHA}" > /tmp/lightyear-matchmaker-manifest-sha && \
+    cargo chef prepare --recipe-path /tmp/lightyear-matchmaker-recipe.json
 
 WORKDIR /src/lightrider
 RUN cargo chef prepare --recipe-path /tmp/lightrider-web-recipe.json
