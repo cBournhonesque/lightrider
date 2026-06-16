@@ -42,21 +42,30 @@ pub(crate) struct BotTargetOverrides {
 
 impl BotTargetOverrides {
     pub(crate) fn set_target(&mut self, config: &GameConfig, room: RoomId, count: usize) -> usize {
-        let count = clamp_bot_target(config, count);
+        let count = clamp_bot_target(config, count, 0);
         self.per_room.insert(room, count);
         count
     }
 
-    pub(crate) fn target_for_room(&self, config: &GameConfig, room: RoomId) -> usize {
-        let default_target = if config.bots.enabled {
-            config.bots.target_count_per_room
+    pub(crate) fn target_for_room(
+        &self,
+        config: &GameConfig,
+        room: RoomId,
+        human_count: usize,
+    ) -> usize {
+        let target = if let Some(override_target) = self.per_room.get(&room).copied() {
+            override_target
+        } else if config.bots.enabled {
+            config.bots.target_count_per_room.max(
+                config
+                    .bots
+                    .minimum_total_players_per_room
+                    .saturating_sub(human_count),
+            )
         } else {
             0
         };
-        clamp_bot_target(
-            config,
-            self.per_room.get(&room).copied().unwrap_or(default_target),
-        )
+        clamp_bot_target(config, target, human_count)
     }
 
     fn is_empty(&self) -> bool {
@@ -108,9 +117,14 @@ fn maintain_bots(
         .iter()
         .map(|(entity, player, room)| (entity, player.id, player.snake, *room))
         .collect::<Vec<_>>();
-    let rooms = directory.iter().collect::<Vec<_>>();
-    for room in &rooms {
-        let target = targets.target_for_room(&config, room.game_room);
+    let rooms = directory
+        .metrics()
+        .map(|metrics| (metrics.game_room, metrics.human_count))
+        .collect::<HashMap<_, _>>();
+    let assignments = directory.iter().collect::<Vec<_>>();
+    for room in &assignments {
+        let human_count = rooms.get(&room.game_room).copied().unwrap_or(0);
+        let target = targets.target_for_room(&config, room.game_room, human_count);
         let mut existing = bot_snapshots
             .iter()
             .filter(|(_, _, _, bot_room)| *bot_room == room.game_room)
@@ -146,7 +160,8 @@ fn maintain_bots(
             .iter()
             .filter(|(_, _, _, bot_room)| bot_room == room)
             .count();
-        if room_bot_count > targets.target_for_room(&config, *room) {
+        let human_count = rooms.get(room).copied().unwrap_or(0);
+        if room_bot_count > targets.target_for_room(&config, *room, human_count) {
             continue;
         }
         if player.snake.is_some() && *status == PlayerStatus::Alive {
@@ -180,8 +195,13 @@ fn maintain_bots(
     }
 }
 
-pub(crate) fn clamp_bot_target(config: &GameConfig, count: usize) -> usize {
-    count.min(config.rooms.max_players_per_room)
+pub(crate) fn clamp_bot_target(config: &GameConfig, count: usize, human_count: usize) -> usize {
+    count.min(
+        config
+            .rooms
+            .max_players_per_room
+            .saturating_sub(human_count),
+    )
 }
 
 fn spawn_bot<'a>(
@@ -311,8 +331,10 @@ mod tests {
         let mut config = GameConfig::default();
         config.rooms.max_players_per_room = 8;
 
-        assert_eq!(clamp_bot_target(&config, 7), 7);
-        assert_eq!(clamp_bot_target(&config, 80), 8);
+        assert_eq!(clamp_bot_target(&config, 7, 0), 7);
+        assert_eq!(clamp_bot_target(&config, 80, 0), 8);
+        assert_eq!(clamp_bot_target(&config, 7, 3), 5);
+        assert_eq!(clamp_bot_target(&config, 7, 8), 0);
     }
 
     #[test]
@@ -323,8 +345,41 @@ mod tests {
         let mut targets = BotTargetOverrides::default();
         let room = RoomId(2);
 
-        assert_eq!(targets.target_for_room(&config, room), 0);
+        assert_eq!(targets.target_for_room(&config, room, 0), 0);
         assert_eq!(targets.set_target(&config, room, 3), 3);
-        assert_eq!(targets.target_for_room(&config, room), 3);
+        assert_eq!(targets.target_for_room(&config, room, 0), 3);
+    }
+
+    #[test]
+    fn default_bot_target_fills_room_to_minimum_total_players() {
+        let mut config = GameConfig::default();
+        config.rooms.max_players_per_room = 8;
+        config.bots.enabled = true;
+        config.bots.target_count_per_room = 0;
+        config.bots.minimum_total_players_per_room = 5;
+        let targets = BotTargetOverrides::default();
+        let room = RoomId(2);
+
+        assert_eq!(targets.target_for_room(&config, room, 0), 5);
+        assert_eq!(targets.target_for_room(&config, room, 1), 4);
+        assert_eq!(targets.target_for_room(&config, room, 4), 1);
+        assert_eq!(targets.target_for_room(&config, room, 5), 0);
+        assert_eq!(targets.target_for_room(&config, room, 8), 0);
+    }
+
+    #[test]
+    fn configured_bot_target_is_a_floor_over_dynamic_fill() {
+        let mut config = GameConfig::default();
+        config.rooms.max_players_per_room = 8;
+        config.bots.enabled = true;
+        config.bots.target_count_per_room = 2;
+        config.bots.minimum_total_players_per_room = 5;
+        let targets = BotTargetOverrides::default();
+        let room = RoomId(2);
+
+        assert_eq!(targets.target_for_room(&config, room, 0), 5);
+        assert_eq!(targets.target_for_room(&config, room, 3), 2);
+        assert_eq!(targets.target_for_room(&config, room, 5), 2);
+        assert_eq!(targets.target_for_room(&config, room, 7), 1);
     }
 }

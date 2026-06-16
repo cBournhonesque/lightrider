@@ -22,6 +22,11 @@ pub(crate) struct ClientConnectionConfig {
     pub(crate) mode: ClientConnectionMode,
 }
 
+#[derive(Resource, Clone, Debug, Default)]
+pub(crate) struct ClientConnectionStatus {
+    pub(crate) disconnect_reason: Option<String>,
+}
+
 #[derive(Clone)]
 pub(crate) enum ClientConnectionMode {
     Direct {
@@ -73,8 +78,10 @@ impl Plugin for ClientConnectionPlugin {
             .tick_duration();
         app.add_plugins(ClientPlugins { tick_duration });
         app.insert_resource(self.config.clone());
+        app.init_resource::<ClientConnectionStatus>();
         app.add_systems(Startup, spawn_client);
         app.add_systems(Update, disconnect_when_prediction_budget_exceeded);
+        app.add_observer(clear_disconnect_reason_on_connect);
         app.add_observer(apply_transport_compression);
     }
 }
@@ -148,37 +155,82 @@ fn disconnect_when_prediction_budget_exceeded(
     mut commands: Commands,
     game_config: Res<GameConfig>,
     tick_duration: Res<TickDuration>,
+    mut connection_status: ResMut<ClientConnectionStatus>,
     clients: Query<(Entity, &Link), (With<Client>, With<Connected>)>,
 ) {
     let input_delay = &game_config.network.input_delay;
     for (entity, link) in &clients {
-        let required_prediction_ticks =
-            required_prediction_ticks(link.stats, tick_duration.0, input_delay);
-        if required_prediction_ticks <= input_delay.maximum_predicted_ticks {
+        let budget = prediction_budget(link.stats, tick_duration.0, input_delay);
+        if budget.input_delay_ticks <= input_delay.maximum_input_delay_ticks {
             continue;
         }
 
+        let reason = format!(
+            "Disconnected because network latency exceeded the prediction budget. \
+             RTT {:.1}ms, jitter {:.1}ms, effective latency {} ticks, input delay needed {} ticks \
+             but max allowed input delay is {} ticks, predicted ticks {} / {}.",
+            link.stats.rtt.as_secs_f64() * 1000.0,
+            link.stats.jitter.as_secs_f64() * 1000.0,
+            budget.effective_rtt_ticks,
+            budget.input_delay_ticks,
+            input_delay.maximum_input_delay_ticks,
+            budget.predicted_ticks,
+            input_delay.maximum_predicted_ticks,
+        );
         warn!(
             entity = ?entity,
             rtt_ms = link.stats.rtt.as_secs_f64() * 1000.0,
             jitter_ms = link.stats.jitter.as_secs_f64() * 1000.0,
-            required_prediction_ticks,
+            effective_rtt_ticks = budget.effective_rtt_ticks,
+            input_delay_ticks = budget.input_delay_ticks,
+            predicted_ticks = budget.predicted_ticks,
             maximum_predicted_ticks = input_delay.maximum_predicted_ticks,
             maximum_input_delay_before_prediction_ticks = input_delay
                 .maximum_input_delay_before_prediction_ticks,
+            maximum_input_delay_ticks = input_delay.maximum_input_delay_ticks,
+            reason = %reason,
             "disconnecting client because latency exceeds prediction budget"
         );
+        connection_status.disconnect_reason = Some(reason);
         commands.trigger(Disconnect { entity });
     }
 }
 
-fn required_prediction_ticks(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PredictionBudget {
+    effective_rtt_ticks: u16,
+    input_delay_ticks: u16,
+    predicted_ticks: u16,
+}
+
+fn prediction_budget(
     link_stats: LinkStats,
     tick_duration: Duration,
     input_delay: &InputDelayConfig,
-) -> u16 {
-    effective_rtt_ticks(link_stats, tick_duration)
-        .saturating_sub(input_delay.maximum_input_delay_before_prediction_ticks)
+) -> PredictionBudget {
+    let effective_rtt_ticks = effective_rtt_ticks(link_stats, tick_duration);
+    let input_delay_ticks = adaptive_input_delay_ticks(effective_rtt_ticks, input_delay);
+    PredictionBudget {
+        effective_rtt_ticks,
+        input_delay_ticks,
+        predicted_ticks: effective_rtt_ticks.saturating_sub(input_delay_ticks),
+    }
+}
+
+fn adaptive_input_delay_ticks(effective_rtt_ticks: u16, input_delay: &InputDelayConfig) -> u16 {
+    if effective_rtt_ticks <= input_delay.minimum_input_delay_ticks {
+        input_delay.minimum_input_delay_ticks
+    } else if effective_rtt_ticks <= input_delay.maximum_input_delay_before_prediction_ticks {
+        effective_rtt_ticks
+    } else if effective_rtt_ticks
+        <= input_delay
+            .maximum_input_delay_before_prediction_ticks
+            .saturating_add(input_delay.maximum_predicted_ticks)
+    {
+        input_delay.maximum_input_delay_before_prediction_ticks
+    } else {
+        effective_rtt_ticks.saturating_sub(input_delay.maximum_predicted_ticks)
+    }
 }
 
 fn effective_rtt_ticks(link_stats: LinkStats, tick_duration: Duration) -> u16 {
@@ -201,6 +253,16 @@ fn ceil_duration_ticks(duration: Duration, tick_duration: Duration) -> u16 {
     ticks.try_into().unwrap_or(u16::MAX)
 }
 
+fn clear_disconnect_reason_on_connect(
+    trigger: On<Add, Connected>,
+    clients: Query<(), With<Client>>,
+    mut connection_status: ResMut<ClientConnectionStatus>,
+) {
+    if clients.get(trigger.entity).is_ok() {
+        connection_status.disconnect_reason = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,41 +270,71 @@ mod tests {
     const THIRTY_TWO_HZ_TICK: Duration = Duration::from_nanos(1_000_000_000 / 32);
 
     #[test]
-    fn default_input_delay_covers_roughly_sixty_ms_then_predicts() {
+    fn default_input_delay_delays_then_predicts_then_delays_more() {
         let input_delay = InputDelayConfig::balanced();
 
         assert_eq!(input_delay.minimum_input_delay_ticks, 0);
-        assert_eq!(input_delay.maximum_input_delay_before_prediction_ticks, 2);
-        assert_eq!(input_delay.maximum_predicted_ticks, 8);
+        assert_eq!(input_delay.maximum_input_delay_before_prediction_ticks, 3);
+        assert_eq!(input_delay.maximum_predicted_ticks, 10);
+        assert_eq!(input_delay.maximum_input_delay_ticks, 6);
     }
 
     #[test]
-    fn prediction_budget_allows_eight_ticks_beyond_input_delay() {
+    fn prediction_budget_allows_ten_ticks_beyond_initial_input_delay() {
         let input_delay = InputDelayConfig::balanced();
         let stats = LinkStats {
             // Effective RTT includes Lightyear's default one-tick jitter margin.
-            rtt: THIRTY_TWO_HZ_TICK * 9,
+            rtt: THIRTY_TWO_HZ_TICK * 12,
             jitter: Duration::ZERO,
         };
 
         assert_eq!(
-            required_prediction_ticks(stats, THIRTY_TWO_HZ_TICK, &input_delay),
-            8
+            prediction_budget(stats, THIRTY_TWO_HZ_TICK, &input_delay),
+            PredictionBudget {
+                effective_rtt_ticks: 13,
+                input_delay_ticks: 3,
+                predicted_ticks: 10,
+            }
         );
     }
 
     #[test]
-    fn prediction_budget_exceeds_after_eight_ticks_beyond_input_delay() {
+    fn prediction_budget_adds_more_input_delay_after_ten_predicted_ticks() {
         let input_delay = InputDelayConfig::balanced();
         let stats = LinkStats {
-            rtt: THIRTY_TWO_HZ_TICK * 10,
+            rtt: THIRTY_TWO_HZ_TICK * 15,
             jitter: Duration::ZERO,
         };
 
         assert_eq!(
-            required_prediction_ticks(stats, THIRTY_TWO_HZ_TICK, &input_delay),
-            9
+            prediction_budget(stats, THIRTY_TWO_HZ_TICK, &input_delay),
+            PredictionBudget {
+                effective_rtt_ticks: 16,
+                input_delay_ticks: 6,
+                predicted_ticks: 10,
+            }
         );
+    }
+
+    #[test]
+    fn prediction_budget_exceeds_after_six_total_input_delay_ticks() {
+        let input_delay = InputDelayConfig::balanced();
+        let stats = LinkStats {
+            rtt: THIRTY_TWO_HZ_TICK * 16,
+            jitter: Duration::ZERO,
+        };
+
+        let budget = prediction_budget(stats, THIRTY_TWO_HZ_TICK, &input_delay);
+
+        assert_eq!(
+            budget,
+            PredictionBudget {
+                effective_rtt_ticks: 17,
+                input_delay_ticks: 7,
+                predicted_ticks: 10,
+            }
+        );
+        assert!(budget.input_delay_ticks > input_delay.maximum_input_delay_ticks);
     }
 
     #[test]

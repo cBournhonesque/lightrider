@@ -298,6 +298,7 @@ impl Default for RoomConfig {
 pub struct BotConfig {
     pub enabled: bool,
     pub target_count_per_room: usize,
+    pub minimum_total_players_per_room: usize,
     pub decision_interval_ticks: u32,
     pub max_turns_per_second: u8,
     pub mistake_chance_per_decision_percent: u8,
@@ -306,8 +307,9 @@ pub struct BotConfig {
 impl Default for BotConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             target_count_per_room: 0,
+            minimum_total_players_per_room: 5,
             decision_interval_ticks: 10,
             max_turns_per_second: 6,
             mistake_chance_per_decision_percent: 3,
@@ -511,6 +513,7 @@ pub struct InputDelayConfig {
     pub minimum_input_delay_ticks: u16,
     pub maximum_input_delay_before_prediction_ticks: u16,
     pub maximum_predicted_ticks: u16,
+    pub maximum_input_delay_ticks: u16,
 }
 
 impl Default for InputDelayConfig {
@@ -522,13 +525,15 @@ impl Default for InputDelayConfig {
 impl InputDelayConfig {
     /// Lightrider's balanced input-delay preset.
     ///
-    /// At the default 32Hz simulation rate, this covers roughly 60ms with input delay before
-    /// falling back to prediction. Higher latency predicts up to `maximum_predicted_ticks`.
+    /// At the default 32Hz simulation rate, this covers roughly 90ms with input delay before
+    /// falling back to prediction. Higher latency predicts up to `maximum_predicted_ticks`,
+    /// then adds more input delay up to `maximum_input_delay_ticks`.
     pub const fn balanced() -> Self {
         Self {
             minimum_input_delay_ticks: 0,
-            maximum_input_delay_before_prediction_ticks: 2,
-            maximum_predicted_ticks: 8,
+            maximum_input_delay_before_prediction_ticks: 3,
+            maximum_predicted_ticks: 10,
+            maximum_input_delay_ticks: 6,
         }
     }
 }

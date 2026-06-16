@@ -58,6 +58,7 @@ fn handle_admin_logins(
     config: Res<GameConfig>,
     targets: Res<BotTargetOverrides>,
     bot_players: Query<&RoomId, (With<Player>, With<BotMarker>)>,
+    human_players: Query<&RoomId, (With<Player>, Without<BotMarker>)>,
     mut sender: ServerMultiMessageSender,
     mut clients: Query<
         (
@@ -87,7 +88,14 @@ fn handle_admin_logins(
                 } else {
                     "admin disabled on this server".to_string()
                 },
-                status: admin_status(room, &config, &targets, &bot_players, accepted),
+                status: admin_status(
+                    room,
+                    &config,
+                    &targets,
+                    &bot_players,
+                    &human_players,
+                    accepted,
+                ),
             };
             send_admin_response(&mut sender, server, remote_id.0, response);
         }
@@ -99,6 +107,7 @@ fn handle_admin_commands(
     config: Res<GameConfig>,
     mut targets: ResMut<BotTargetOverrides>,
     bot_players: Query<&RoomId, (With<Player>, With<BotMarker>)>,
+    human_players: Query<&RoomId, (With<Player>, Without<BotMarker>)>,
     mut sender: ServerMultiMessageSender,
     mut clients: Query<
         (
@@ -126,6 +135,7 @@ fn handle_admin_commands(
                             &config,
                             &targets,
                             &bot_players,
+                            &human_players,
                             false,
                         ),
                     },
@@ -141,7 +151,14 @@ fn handle_admin_commands(
                     AdminResponse {
                         accepted: false,
                         message: "admin command needs an assigned room".to_string(),
-                        status: admin_status(None, &config, &targets, &bot_players, true),
+                        status: admin_status(
+                            None,
+                            &config,
+                            &targets,
+                            &bot_players,
+                            &human_players,
+                            true,
+                        ),
                     },
                 );
                 continue;
@@ -160,7 +177,14 @@ fn handle_admin_commands(
                 AdminResponse {
                     accepted: true,
                     message,
-                    status: admin_status(Some(room), &config, &targets, &bot_players, true),
+                    status: admin_status(
+                        Some(room),
+                        &config,
+                        &targets,
+                        &bot_players,
+                        &human_players,
+                        true,
+                    ),
                 },
             );
         }
@@ -172,6 +196,7 @@ fn admin_status(
     config: &GameConfig,
     targets: &BotTargetOverrides,
     bot_players: &Query<&RoomId, (With<Player>, With<BotMarker>)>,
+    human_players: &Query<&RoomId, (With<Player>, Without<BotMarker>)>,
     authenticated: bool,
 ) -> AdminStatus {
     let Some(room) = room else {
@@ -180,6 +205,10 @@ fn admin_status(
             ..default()
         };
     };
+    let human_count = human_players
+        .iter()
+        .filter(|human_room| **human_room == room)
+        .count();
     AdminStatus {
         authenticated,
         room: Some(room),
@@ -189,7 +218,7 @@ fn admin_status(
                 .filter(|bot_room| **bot_room == room)
                 .count(),
         ),
-        target_bot_count: saturating_u16(targets.target_for_room(config, room)),
+        target_bot_count: saturating_u16(targets.target_for_room(config, room, human_count)),
     }
 }
 

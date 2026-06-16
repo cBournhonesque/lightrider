@@ -855,6 +855,14 @@ https://45.79.138.102.sslip.io/
 
 The matchmaker and web-client image builds default to conservative profiles: two Cargo jobs for native matchmaker code, one Cargo job for the WASM web client, thin or disabled LTO, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1 WEB_RELEASE_OPT_LEVEL=0`.
 
+For a smaller browser download on a larger builder, use a size profile for the web-client image:
+
+```bash
+WEB_RELEASE_OPT_LEVEL=s WEB_RELEASE_LTO=thin WEB_RELEASE_CODEGEN_UNITS=1 WEB_CARGO_JOBS=1 just webclient-build <tag>
+```
+
+The web-client image content-hashes the generated `.wasm`, pre-gzips web artifacts, serves hashed WASM with a long immutable browser cache, and keeps `index.html`/`bootstrap.js` revalidated so deployments can point clients at a new WASM hash.
+
 `MATCHMAKER_CARGO_INCREMENTAL=1` and `WEB_CARGO_INCREMENTAL=1` are available as opt-in build args, but they are not a substitute for Podman layer caching. A changed source tree still invalidates the image build layer unless the builder can reuse cached layers or cache mounts. For repeated deployment attempts, prefer building once locally, pushing the image, and using `SKIP_IMAGE_BUILD=1` for the VPS install.
 
 The image build also installs the `wasm32-unknown-unknown` Rust target after copying the repo, so the target is installed for the active `rust-toolchain.toml` override. If you build the browser client directly outside Docker and see `can't find crate for 'core'`, install the target locally:
@@ -911,10 +919,13 @@ After install:
 ssh root@45.79.138.102
 systemctl status lightrider-matchmaker --no-pager
 systemctl status lightrider-webclient --no-pager
+systemctl status lightrider-static-server --no-pager
 journalctl -u lightrider-matchmaker -f
 journalctl -u lightrider-webclient -f
+journalctl -u lightrider-static-server -f
 podman logs lightrider-matchmaker
 podman logs lightrider-webclient
+podman logs lightrider-static-server
 ```
 
 The installer publishes without HTTPS:

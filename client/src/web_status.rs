@@ -3,6 +3,7 @@ use lightyear::connection::client::Connected;
 use lightyear::prelude::Client;
 
 use crate::matchmaker::LightriderMatchmakerState;
+use crate::network::config::ClientConnectionStatus;
 
 pub(crate) struct WebStatusPlugin;
 
@@ -27,12 +28,16 @@ impl Plugin for WebStatusPlugin {
 
 fn sync_web_status(
     state: Option<Res<LightriderMatchmakerState>>,
+    connection_status: Option<Res<ClientConnectionStatus>>,
     connected_clients: Query<(), (With<Client>, With<Connected>)>,
     mut wait_mode: Local<DeploymentWaitMode>,
     mut last_status: Local<Option<String>>,
 ) {
     let status = web_status_text(
         state.as_deref(),
+        connection_status
+            .as_deref()
+            .and_then(|status| status.disconnect_reason.as_deref()),
         connected_clients.iter().next().is_some(),
         &mut wait_mode,
     );
@@ -46,11 +51,16 @@ fn sync_web_status(
 
 fn web_status_text(
     state: Option<&LightriderMatchmakerState>,
+    disconnect_reason: Option<&str>,
     connected: bool,
     wait_mode: &mut DeploymentWaitMode,
 ) -> Option<String> {
     if connected {
         return None;
+    }
+
+    if let Some(reason) = disconnect_reason {
+        return Some(reason.to_string());
     }
 
     let Some(state) = state else {
@@ -123,6 +133,7 @@ mod tests {
                 Some(&LightriderMatchmakerState::Waiting(
                     "routing to existing deployment abc".to_string()
                 )),
+                None,
                 false,
                 &mut mode,
             ),
@@ -136,6 +147,7 @@ mod tests {
                 Some(&LightriderMatchmakerState::Waiting(
                     "creating new deployment".to_string()
                 )),
+                None,
                 false,
                 &mut mode,
             ),
@@ -153,10 +165,30 @@ mod tests {
                 Some(&LightriderMatchmakerState::Waiting(
                     "creating new deployment".to_string()
                 )),
+                None,
                 true,
                 &mut mode,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn status_shows_disconnect_reason_while_disconnected() {
+        let mut mode = DeploymentWaitMode::Creating;
+
+        assert_eq!(
+            web_status_text(
+                Some(&LightriderMatchmakerState::Waiting(
+                    "creating new deployment".to_string()
+                )),
+                Some("Disconnected because network latency exceeded the prediction budget."),
+                false,
+                &mut mode,
+            ),
+            Some(
+                "Disconnected because network latency exceeded the prediction budget.".to_string()
+            )
         );
     }
 }

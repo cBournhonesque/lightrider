@@ -50,8 +50,44 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    gzip on;
+    gzip_static on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_types
+        application/javascript
+        application/wasm
+        application/octet-stream
+        application/json
+        image/svg+xml
+        text/css
+        text/javascript
+        text/plain;
+
 ${matchmaker_location}    location / {
         try_files \$uri \$uri/ /index.html;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    location = /bootstrap.js {
+        add_header Cache-Control "no-cache";
+    }
+
+    location ~* ^/pkg/.+\\.wasm$ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    location /pkg/ {
+        add_header Cache-Control "no-cache";
+    }
+
+    location /assets/ {
+        add_header Cache-Control "public, max-age=86400";
     }
 }
 NGINX

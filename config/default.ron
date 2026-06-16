@@ -67,8 +67,9 @@
         max_players_per_room: 50,
     ),
     bots: (
-        enabled: false,
+        enabled: true,
         target_count_per_room: 0,
+        minimum_total_players_per_room: 5,
         decision_interval_ticks: 10,
         max_turns_per_second: 6,
         mistake_chance_per_decision_percent: 3,
@@ -99,12 +100,13 @@
             metrics_interval_seconds: 5.0,
             update_interval_ticks: 1,
         ),
-        // Input delay: cover roughly 60ms at 32Hz with delay first,
-        // then predict up to 8 additional ticks for remaining latency.
+        // Input delay: delay up to 3 ticks first, predict up to 10 ticks,
+        // then add more input delay up to 6 total ticks before disconnecting.
         input_delay: (
             minimum_input_delay_ticks: 0,
-            maximum_input_delay_before_prediction_ticks: 2,
-            maximum_predicted_ticks: 8,
+            maximum_input_delay_before_prediction_ticks: 3,
+            maximum_predicted_ticks: 10,
+            maximum_input_delay_ticks: 6,
         ),
         interpolation_delay: (
             min_delay_ms: 5,

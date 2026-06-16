@@ -11,6 +11,7 @@
     bots: (
         enabled: false,
         target_count_per_room: 0,
+        minimum_total_players_per_room: 5,
     ),
     sound: (
         enabled: false,

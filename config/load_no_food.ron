@@ -69,6 +69,7 @@
     bots: (
         enabled: false,
         target_count_per_room: 0,
+        minimum_total_players_per_room: 5,
         decision_interval_ticks: 10,
         max_turns_per_second: 6,
         mistake_chance_per_decision_percent: 3,
@@ -100,8 +101,9 @@
         ),
         input_delay: (
             minimum_input_delay_ticks: 0,
-            maximum_input_delay_before_prediction_ticks: 2,
-            maximum_predicted_ticks: 8,
+            maximum_input_delay_before_prediction_ticks: 3,
+            maximum_predicted_ticks: 10,
+            maximum_input_delay_ticks: 6,
         ),
         lag_compensation: (
             enabled: false,

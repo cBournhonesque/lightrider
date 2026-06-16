@@ -91,6 +91,15 @@ RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
     cp /src/lightrider/web/index.html /tmp/lightrider-web/index.html && \
     mkdir -p /tmp/lightrider-web/assets && \
     cp -R /src/lightrider/assets/. /tmp/lightrider-web/assets/ && \
+    wasm_file=/tmp/lightrider-web/pkg/lightrider-web_bg.wasm && \
+    wasm_hash="$(sha256sum "${wasm_file}" | cut -c1-16)" && \
+    hashed_wasm="/tmp/lightrider-web/pkg/lightrider-web_bg.${wasm_hash}.wasm" && \
+    mv "${wasm_file}" "${hashed_wasm}" && \
+    sed -i "s/lightrider-web_bg\\.wasm/lightrider-web_bg.${wasm_hash}.wasm/g" \
+        /tmp/lightrider-web/pkg/lightrider-web.js && \
+    find /tmp/lightrider-web -type f \
+        \( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.json' \) \
+        -exec gzip -9 -k {} \; && \
     rm -rf /src/lightrider/target /usr/local/cargo/git /usr/local/cargo/registry
 
 FROM debian:bookworm-slim AS runtime
