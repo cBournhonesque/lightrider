@@ -10,7 +10,7 @@ _remote-pull-service service image_env image_name *args:
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{ static-default-host }}"
-    tag=""
+    tag="${TAG:-}"
     image=""
     ssh_port="{{ static-default-ssh-port }}"
     ssh_key=""
@@ -636,7 +636,7 @@ control-host-deploy *args:
     vps_host="{{ static-default-host }}"
     ssh_port="{{ static-default-ssh-port }}"
     ssh_key=""
-    tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
+    tag="${TAG:-$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
     edgegap_version=""
     web_domain=""
     enable_https=""

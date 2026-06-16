@@ -572,7 +572,7 @@ if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
 "
   fi
   install -d -m 755 /etc/caddy/lightrider-routes
-  : > /etc/caddy/lightrider-routes/00-empty.caddy
+  rm -f /etc/caddy/lightrider-routes/00-empty.caddy
   if [[ -n "$LIGHTRIDER_MATCHMAKER_ROUTE" ]]; then
     route_file="/etc/caddy/lightrider-routes/10-${service_name}-${LIGHTRIDER_MATCHMAKER_ROUTE}.caddy"
     cat > "$route_file" <<EOF
