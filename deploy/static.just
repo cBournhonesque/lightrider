@@ -233,10 +233,12 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
       GAMEFLOW_API_KEY_ENV
       GAMEFLOW_API_KEY_PATH
     )
-    declare -A caller_deploy_values=()
     for var in "${caller_deploy_vars[@]}"; do
       if [[ "${!var+x}" == "x" ]]; then
-        caller_deploy_values[$var]="${!var}"
+        printf -v "caller_deploy_has_$var" '%s' "1"
+        printf -v "caller_deploy_value_$var" '%s' "${!var}"
+      else
+        printf -v "caller_deploy_has_$var" '%s' "0"
       fi
     done
     if [[ -f "{{ file }}" && "${FORCE:-0}" != "1" ]]; then
@@ -273,8 +275,10 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
         unset LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE
       fi
       for var in "${caller_deploy_vars[@]}"; do
-        if [[ "${caller_deploy_values[$var]+x}" == "x" ]]; then
-          printf -v "$var" '%s' "${caller_deploy_values[$var]}"
+        caller_has_var="caller_deploy_has_$var"
+        caller_value_var="caller_deploy_value_$var"
+        if [[ "${!caller_has_var}" == "1" ]]; then
+          printf -v "$var" '%s' "${!caller_value_var}"
         else
           unset "$var"
         fi
