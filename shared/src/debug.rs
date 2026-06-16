@@ -116,12 +116,25 @@ pub fn runtime_log_plugin(config: &GameConfig, base_filter: &str) -> LogPlugin {
     } else {
         Level::INFO
     };
-    plugin.filter = if capture_lightyear_debug {
+    let filter = if capture_lightyear_debug {
         format!("{base_filter},lightyear_debug=trace")
     } else {
         base_filter.to_string()
     };
+    plugin.filter = merged_runtime_filter(&filter);
     plugin
+}
+
+fn merged_runtime_filter(base_filter: &str) -> String {
+    let Ok(env_filter) = std::env::var("RUST_LOG") else {
+        return base_filter.to_string();
+    };
+    let env_filter = env_filter.trim();
+    if env_filter.is_empty() {
+        base_filter.to_string()
+    } else {
+        format!("{base_filter},{env_filter}")
+    }
 }
 
 struct DebugJsonLayer {

@@ -2,10 +2,11 @@
 
 This document is the operational checklist for running Lightrider locally and for deploying the current Bevygap/Edgegap production shape.
 
-The current production shape uses two images:
+The current production shape uses three images:
 
 - `lightrider-server`: the Edgegap game-server image. It runs the Bevy/Lightyear server with Bevygap enabled.
-- `lightrider-matchmaker`: the public control/web image. It bundles NATS, `bevygap_matchmaker`, `bevygap_matchmaker_httpd`, nginx, and the browser WASM client files.
+- `lightrider-matchmaker`: the matchmaker/control image. It bundles NATS and `lightyear_matchmaker_server`.
+- `lightrider-webclient`: the static browser client image. It serves the WASM client files with nginx.
 
 The same `lightrider-server` image can also run as an optional static game server on the control VPS. That lets US public traffic use the VPS first, then fall back to Edgegap when the static deployment is full or above policy limits. Private/specific room codes ignore location so invited players can reach the room even when they are outside the static deployment's preferred region.
 
@@ -422,7 +423,7 @@ Then include the path when generating the control-host env:
 
 ```bash
 BEVYGAP_GEOIP_DB=/etc/lightrider/GeoLite2-Country.mmdb \
-  just deploy-web-server-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
+  just control-host-deploy-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
 ```
 
 The control-host generated env enables the static server by default through `LIGHTRIDER_RUN_STATIC_SERVER=1`. Set `LIGHTRIDER_RUN_STATIC_SERVER=0` before the deploy command to run only the matchmaker/web/NATS service.
@@ -547,13 +548,13 @@ Choose a tag. Prefer an immutable tag such as a git SHA or date:
 tag="$(git rev-parse --short HEAD)"
 ```
 
-Build both images:
+Build all three images:
 
 ```bash
 just prod-images-build "$tag"
 ```
 
-Push both images:
+Push all three images:
 
 ```bash
 just prod-images-push "$tag"
@@ -564,6 +565,7 @@ The recipes produce:
 ```text
 registry.edgegap.com/<project>/lightrider-server:<tag>
 registry.edgegap.com/<project>/lightrider-matchmaker:<tag>
+registry.edgegap.com/<project>/lightrider-webclient:<tag>
 ```
 
 You can build or push separately:
@@ -573,6 +575,8 @@ just edgegap-build "$tag"
 just edgegap-push "$tag"
 just matchmaker-build "$tag"
 just matchmaker-push "$tag"
+just webclient-build "$tag"
+just webclient-push "$tag"
 ```
 
 One-line local build-and-push, with optional Podman resource limits:
@@ -581,16 +585,16 @@ One-line local build-and-push, with optional Podman resource limits:
 just prod-images-build-push "$tag" memory=24g cpus=8
 ```
 
-The matchmaker/control image can be built on any machine that has this repo, Podman, and registry credentials. It does not need to be built on the VPS. The common path is:
+The deployable images can be built on any machine that has this repo, Podman, and registry credentials. They do not need to be built on the VPS. The common path is:
 
 ```bash
-just matchmaker-build-push "$tag"
-SKIP_IMAGE_BUILD=1 just deploy-web-server host=<vps-ip> tag="$tag"
+just prod-images-build-push "$tag"
+SKIP_IMAGE_BUILD=1 just control-host-deploy host=<vps-ip> tag="$tag"
 ```
 
 That builds and pushes to the Edgegap container registry locally, then makes the VPS pull and run the already-pushed image.
 
-Both production Dockerfiles use `cargo-chef` to cache Rust dependencies as separate image layers. The build context includes `lightrider`, `bevygap`, and `lightyear`. Lightrider source-only edits should mostly hit final app build layers; sibling path dependencies are copied into cook stages so Cargo can resolve them, so source edits in `bevygap` or `lightyear` can still invalidate dependency layers. The first build is still slow, but rebuilds after ordinary Lightrider source edits should reuse more cached dependency work.
+All production Dockerfiles use `cargo-chef` to cache Rust dependencies as separate image layers. The build context includes `lightrider`, `lightyear`, `lightyear-matchmaker`, and `bevy_replicon`. Lightrider source-only edits should mostly hit final app build layers; sibling path dependency edits can still invalidate dependency layers. The first build is still slow, but rebuilds after ordinary Lightrider source edits should reuse more cached dependency work.
 
 Local production image builds use Podman layer caching by default through `podman build --layers`, plus the `cargo-chef` dependency layers in the Dockerfiles. Keep `NO_CACHE=1` for cases where the build cache is known stale. Direct non-container Rust builds still use the repo's local incremental Cargo profile for iteration, but the production image default keeps `CARGO_INCREMENTAL=0` to avoid large incremental state inside image layers.
 
@@ -598,7 +602,7 @@ The image build context also includes the host CA bundle as `host-ca-certificate
 
 #### GitHub Release Image Builds
 
-The workflow [.github/workflows/release-images.yml](/spare/ssd/cbournhonesque/src/other/lightrider/.github/workflows/release-images.yml) builds and pushes both production images only when a GitHub Release is published. It does not run on every push.
+The workflow [.github/workflows/release-images.yml](/spare/ssd/cbournhonesque/src/other/lightrider/.github/workflows/release-images.yml) builds and pushes all three production images only when a GitHub Release is published. It does not run on every push.
 
 Required GitHub Actions secrets:
 
@@ -653,18 +657,19 @@ The workflow pushes:
 ```text
 registry.edgegap.com/<project>/lightrider-server:<release-tag>
 registry.edgegap.com/<project>/lightrider-matchmaker:<release-tag>
+registry.edgegap.com/<project>/lightrider-webclient:<release-tag>
 ```
 
-After the workflow succeeds, the VPS can pull the already-built control image:
+After the workflow succeeds, the VPS can pull the already-built control stack images:
 
 ```bash
-just deploy-web-server-pull <vps-ip> <release-tag>
+just control-host-deploy-pull <vps-ip> <release-tag>
 ```
 
 If SSH needs an explicit identity file, pass it as a kwarg:
 
 ```bash
-just deploy-web-server-pull host=<vps-ip> tag=<release-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
+just control-host-deploy-pull host=<vps-ip> tag=<release-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
 ```
 
 The Edgegap app version still needs to be synced separately with the same tag and the correct NATS/netcode env:
@@ -682,10 +687,35 @@ just matchmaker-build "$tag" memory=24g cpus=8
 or through the one-command deploy wrapper:
 
 ```bash
-just deploy-web-server host=<vps-ip> tag="$tag" memory=24g cpus=8
+just control-host-deploy host=<vps-ip> tag="$tag" memory=24g cpus=8
 ```
 
-`podman build` supports `--memory` directly but not `--cpus`; the recipe maps integer `cpus=N` to `--cpu-period 100000 --cpu-quota N00000`. You can also pass `cpu_quota=<quota>` or `cpuset_cpus=0-7` directly.
+`podman build` supports `--memory` and `--memory-swap` directly but not `--cpus`; the recipe maps integer `cpus=N` to `--cpu-period 100000 --cpu-quota N00000`. You can also pass `memory_swap=-1`, `cpu_quota=<quota>`, or `cpuset_cpus=0-7` directly.
+
+The `memory=...` kwarg is a Podman build-container cgroup limit. It does not
+increase the memory available to Podman. On macOS/Windows, also check the
+Podman machine limit with `podman machine inspect` and raise it with
+`podman machine set --memory <MiB>` if needed. On Linux, make sure rootless
+Podman has working cgroup memory delegation. If the build still gets SIGKILLed
+with `memory=24g`, either the Podman VM/host does not actually have that much
+free memory, or the Rust/link workload exceeded the cap. Use lower parallelism
+first:
+
+```bash
+MATCHMAKER_CARGO_JOBS=1 \
+MATCHMAKER_RELEASE_LTO=false \
+MATCHMAKER_RELEASE_CODEGEN_UNITS=16 \
+WEB_CARGO_JOBS=1 \
+WEB_RELEASE_OPT_LEVEL=0 \
+just prod-images-build-push "$tag" memory=24g cpus=4
+```
+
+If the host has swap configured and you want to confirm whether a hard memory
+cap is the immediate problem, try:
+
+```bash
+just matchmaker-build "$tag" memory=24g memory_swap=-1 cpus=2
+```
 
 If disk pressure is high:
 
@@ -693,17 +723,18 @@ If disk pressure is high:
 just clean-edgegap-cache
 ```
 
-### 4. Run The Matchmaker/Control Image
+### 4. Run The Control Stack
 
-Run this image on a public host. A VPS is the simplest first option.
+Run the matchmaker and web-client images on a public host. A VPS is the simplest first option.
 
-The image exposes:
+The control stack exposes:
 
-- `8080/tcp`: nginx static WASM client and `/matchmaker/*` WebSocket proxy.
+- `80/tcp` or `443/tcp`: public web client.
+- `3000/tcp`: matchmaker WebSocket in no-HTTPS smoke tests; with HTTPS it is bound to localhost behind Caddy.
 - `4222/tcp`: NATS for Edgegap game servers.
 - `8222/tcp`: NATS monitoring. Keep this private if possible.
 
-Production should serve the web client over HTTPS. The image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context. A public `http://<vps-ip>` page can load the UI and call the matchmaker, but it cannot complete the browser WebTransport game connection.
+Production should serve the web client over HTTPS. The web-client image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context. A public `http://<vps-ip>` page can load the UI and call the matchmaker, but it cannot complete the browser WebTransport game connection.
 
 With a real domain, create an `A` record pointing at the VPS public IP, for example:
 
@@ -711,39 +742,82 @@ With a real domain, create an `A` record pointing at the VPS public IP, for exam
 play.example.com A 45.79.138.102
 ```
 
-Then deploy with `domain=play.example.com`. The installer installs Caddy, serves the Lightrider control container only on `127.0.0.1:8080`, obtains/renews a Let's Encrypt certificate, exposes public `80/tcp` and `443/tcp`, and configures the browser bootstrap/matchmaker CORS for `https://play.example.com` and `wss://play.example.com/matchmaker/ws`.
+Then deploy with `domain=play.example.com`. The installer installs Caddy, serves the web-client container only on `127.0.0.1:8080`, serves the matchmaker container only on `127.0.0.1:3000`, obtains/renews a Let's Encrypt certificate, exposes public `80/tcp` and `443/tcp`, and configures the browser bootstrap/matchmaker CORS for `https://play.example.com` and `wss://play.example.com/matchmaker/ws`.
 
 If you do not have a domain yet, a temporary wildcard DNS name such as `45.79.138.102.sslip.io` can be used the same way.
 
 #### Automated VPS Setup
 
-For the current VPS control host, the repo provides a one-command installer. It installs Podman on the host, logs into the Edgegap registry, pulls the `lightrider-matchmaker` image, creates a systemd service, maps public web traffic to the bundled nginx server, exposes NATS for Edgegap game servers, and persists NATS data under `/var/lib/lightrider/nats`.
+For the current VPS control host, the repo provides a one-command installer. It installs Podman on the host, logs into the Edgegap registry, pulls `lightrider-matchmaker` and `lightrider-webclient`, creates separate systemd services, routes public web traffic to the web-client service, exposes NATS for game servers, and persists NATS data under `/var/lib/lightrider/nats`.
+
+Use these recipes for distinct deployment scopes:
+
+| Recipe | Scope | Builds/pushes locally? | Pulls on VPS? | Creates/updates systemd/env? |
+| --- | --- | --- | --- | --- |
+| `control-host-deploy` | Whole control host: matchmaker, webclient, optional static game server | Yes | Yes | Yes |
+| `control-host-deploy-pull` | Whole control host using already-pushed images | No | Yes | Yes |
+| `control-host-pull-game-server` | Existing `lightrider-static-server` service only | No | Yes, game-server only | No |
+| `control-host-pull-matchmaker` | Existing `lightrider-matchmaker` service only | No | Yes, matchmaker only | No |
+| `control-host-pull-webclient` | Existing `lightrider-webclient` service only | No | Yes, webclient only | No |
+| `web-server-install` | Low-level installer step used by `control-host-deploy*` | No | Yes, remotely | Yes |
+
+The `static-server-pull-*` and `deploy-web-server*` names are legacy aliases for these clearer `control-host-*` recipes.
+
+Recipe layering:
+
+```text
+control-host-deploy
+  prod-images-build-push
+    prod-images-build
+      edgegap-build        # game-server image
+      matchmaker-build     # matchmaker/NATS image
+      webclient-build      # browser client image
+    prod-images-push
+  web-server-env-template  # writes local secrets/web-server.env
+  web-server-env-check     # validates that env file
+  web-server-install       # uploads env+installer, then remote VPS pulls images and writes systemd
+  web-server-health        # checks public web endpoint
+
+control-host-deploy-pull
+  control-host-deploy with SKIP_IMAGE_BUILD=1
+
+control-host-pull-game-server
+  _remote-pull-service     # pull/restart only lightrider-static-server
+
+control-host-pull-matchmaker
+  _remote-pull-service     # pull/restart only lightrider-matchmaker
+
+control-host-pull-webclient
+  _remote-pull-service     # pull/restart only lightrider-webclient
+```
+
+The `web-server-*` recipes are lower-level building blocks. Use them directly only when you are debugging or intentionally bypassing part of the high-level flow.
 
 On your local machine, run the whole build/push/install flow with one command:
 
 ```bash
-just deploy-web-server host=45.79.138.102
+just control-host-deploy host=45.79.138.102
 ```
 
-This defaults to host `45.79.138.102`, SSH port `22`, tag `git rev-parse --short HEAD`, and env file `secrets/web-server.env`. It builds and pushes the matchmaker image, writes the ignored web-server env file, uploads the installer/env to the VPS, starts the service, deletes the temporary uploaded env file, and checks `http://45.79.138.102/`.
+This defaults to host `45.79.138.102`, SSH port `22`, tag `git rev-parse --short HEAD`, and env file `secrets/web-server.env`. It builds and pushes the production images, writes the ignored web-server env file, uploads the installer/env to the VPS, starts the services, deletes the temporary uploaded env file, and checks `http://45.79.138.102/`.
 
 Equivalent explicit form:
 
 ```bash
 tag="$(git rev-parse --short HEAD)"
-just deploy-web-server host=45.79.138.102 ssh_port=22 tag="$tag" env=secrets/web-server.env
+just control-host-deploy host=45.79.138.102 ssh_port=22 tag="$tag" env=secrets/web-server.env
 ```
 
 If the VPS key is not loaded in your SSH agent or default identities, pass it explicitly:
 
 ```bash
-just deploy-web-server host=45.79.138.102 ssh_port=22 ssh_key=~/.ssh/lightrider_linode_ed25519 tag="$tag" env=secrets/web-server.env
+just control-host-deploy host=45.79.138.102 ssh_port=22 ssh_key=~/.ssh/lightrider_linode_ed25519 tag="$tag" env=secrets/web-server.env
 ```
 
 For HTTPS, pass a domain:
 
 ```bash
-just deploy-web-server \
+just control-host-deploy \
   host=45.79.138.102 \
   domain=play.example.com \
   tag="$tag" \
@@ -754,7 +828,7 @@ just deploy-web-server \
 To reuse an already pushed image:
 
 ```bash
-just deploy-web-server-pull \
+just control-host-deploy-pull \
   host=45.79.138.102 \
   tag=dev \
   edgegap_version=webtest-20260529-110706 \
@@ -765,7 +839,7 @@ just deploy-web-server-pull \
 Temporary no-domain HTTPS using `sslip.io`:
 
 ```bash
-just deploy-web-server-pull \
+just control-host-deploy-pull \
   host=45.79.138.102 \
   tag=dev \
   edgegap_version=dev \
@@ -779,7 +853,7 @@ Open:
 https://45.79.138.102.sslip.io/
 ```
 
-The matchmaker/control image build defaults to a conservative profile: two Cargo jobs for native matchmaker code, one Cargo job for the WASM web client, thin LTO for native control binaries, low web optimization, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1 WEB_RELEASE_OPT_LEVEL=0`.
+The matchmaker and web-client image builds default to conservative profiles: two Cargo jobs for native matchmaker code, one Cargo job for the WASM web client, thin or disabled LTO, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1 WEB_RELEASE_OPT_LEVEL=0`.
 
 `MATCHMAKER_CARGO_INCREMENTAL=1` and `WEB_CARGO_INCREMENTAL=1` are available as opt-in build args, but they are not a substitute for Podman layer caching. A changed source tree still invalidates the image build layer unless the builder can reuse cached layers or cache mounts. For repeated deployment attempts, prefer building once locally, pushing the image, and using `SKIP_IMAGE_BUILD=1` for the VPS install.
 
@@ -792,27 +866,27 @@ rustup target add wasm32-unknown-unknown
 If the image is already pushed and you only want to reinstall/update the VPS service, skip the local build:
 
 ```bash
-SKIP_IMAGE_BUILD=1 just deploy-web-server host=45.79.138.102 tag=<already-pushed-tag>
+SKIP_IMAGE_BUILD=1 just control-host-deploy host=45.79.138.102 tag=<already-pushed-tag>
 ```
 
 Equivalent wrapper:
 
 ```bash
-just deploy-web-server-pull host=45.79.138.102 tag=<already-pushed-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
+just control-host-deploy-pull host=45.79.138.102 tag=<already-pushed-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
 ```
 
 The Docker image tag and Edgegap app-version name can differ. This matters when the Edgegap organization has reached its app-version limit. Reuse an existing Edgegap app version by passing `edgegap_version=...`:
 
 ```bash
 just edgegap-release-sync dev 45.79.138.102:4222 lightrider webtest-20260529-110706
-just deploy-web-server-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
+just control-host-deploy-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
 ```
 
 If the service fails to become healthy, the installer prints recent `journalctl` output. The service intentionally keeps the failed container around so these commands are useful:
 
 ```bash
 ssh -i ~/.ssh/lightrider_linode_ed25519 root@45.79.138.102 \
-  'systemctl status lightrider-matchmaker --no-pager; journalctl -u lightrider-matchmaker -n 160 --no-pager; podman logs lightrider-matchmaker || true'
+  'systemctl status lightrider-matchmaker --no-pager; systemctl status lightrider-webclient --no-pager; journalctl -u lightrider-matchmaker -n 160 --no-pager; journalctl -u lightrider-webclient -n 160 --no-pager; podman logs lightrider-matchmaker || true; podman logs lightrider-webclient || true'
 ```
 
 If a stale container build cache appears to keep an old Rust target/toolchain layer, force a clean image build:
@@ -824,25 +898,29 @@ NO_CACHE=1 just matchmaker-build <tag>
 On a larger machine you can opt into a heavier build:
 
 ```bash
-MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 WEB_RELEASE_OPT_LEVEL=s just matchmaker-build <tag>
+MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 WEB_RELEASE_OPT_LEVEL=s just prod-images-build <tag>
 ```
 
 Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup. The template also rotates an empty or default `NATS_PASSWORD=lightrider` into a random password because production startup refuses default `lightrider`/`lightrider` NATS credentials.
 
-The remote script is [deploy/setup_web_server_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/deploy/setup_web_server_host.sh). The installed systemd service is `lightrider-matchmaker`.
+The remote script is [deploy/setup_web_server_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/deploy/setup_web_server_host.sh). The installed control services are `lightrider-matchmaker` and `lightrider-webclient`.
 
 After install:
 
 ```bash
 ssh root@45.79.138.102
 systemctl status lightrider-matchmaker --no-pager
+systemctl status lightrider-webclient --no-pager
 journalctl -u lightrider-matchmaker -f
+journalctl -u lightrider-webclient -f
 podman logs lightrider-matchmaker
+podman logs lightrider-webclient
 ```
 
 The installer publishes without HTTPS:
 
-- `80/tcp`: web client and `/matchmaker/ws`.
+- `80/tcp`: web client.
+- `3000/tcp`: matchmaker WebSocket (`/ws`) for no-HTTPS smoke tests.
 - `4222/tcp`: NATS for Edgegap game servers.
 - `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
 - `7777/udp`: optional static Lightrider game server when `LIGHTRIDER_RUN_STATIC_SERVER=1`.
@@ -850,7 +928,8 @@ The installer publishes without HTTPS:
 With `domain=...`, the installer publishes:
 
 - `80/tcp` and `443/tcp`: Caddy HTTPS reverse proxy for the web client and `/matchmaker/ws`.
-- `127.0.0.1:8080/tcp`: private container upstream, not public.
+- `127.0.0.1:8080/tcp`: private web-client upstream, not public.
+- `127.0.0.1:3000/tcp`: private matchmaker upstream, not public.
 - `4222/tcp`: NATS for Edgegap game servers.
 - `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
 - `7777/udp`: optional static Lightrider game server when `LIGHTRIDER_RUN_STATIC_SERVER=1`.
@@ -861,14 +940,14 @@ The `4222/tcp` NATS port is publicly reachable if the VPS firewall allows it. Th
 
 The first setup uses `NATS_ALLOW_INSECURE=1` because there is no domain/TLS yet. This is acceptable for a smoke test but should become TLS plus firewall restrictions before wider use.
 
-Example direct container run for initial testing before NATS TLS is configured:
+Example direct matchmaker container run for initial testing before NATS TLS is configured:
 
 ```bash
 source secrets/edgegap.env
 source secrets/prod-netcode.env
 
 podman run -d --name lightrider-matchmaker \
-  -p 8080:8080 \
+  -p 3000:3000 \
   -p 4222:4222 \
   -p 127.0.0.1:8222:8222 \
   -v lightrider-nats-data:/data/nats \
@@ -886,6 +965,17 @@ podman run -d --name lightrider-matchmaker \
   -e NATS_PASSWORD=<strong-nats-password> \
   -e MATCHMAKER_CORS=https://<your-domain> \
   registry.edgegap.com/<project>/lightrider-matchmaker:"$tag"
+```
+
+The browser files are served by the separate web-client image:
+
+```bash
+podman run -d --name lightrider-webclient \
+  -p 8080:8080 \
+  -e LIGHTRIDER_MATCHMAKER_URL=ws://<your-host>:3000/ws \
+  -e LIGHTRIDER_MATCHMAKER_GAME=lightrider \
+  -e LIGHTRIDER_MATCHMAKER_VERSION="$tag" \
+  registry.edgegap.com/<project>/lightrider-webclient:"$tag"
 ```
 
 `NATS_ALLOW_INSECURE=1` is an explicit temporary override. Remove it for production NATS TLS.
@@ -923,7 +1013,7 @@ This helper copies the current Caddy certificate/key into `/etc/lightrider` for 
 
 If the optional VPS static game server is enabled, the same helper updates it to use `NATS_HOST=<domain>:4222` with secure NATS as well.
 
-If using NATS TLS inside the matchmaker image, put the certificate files under `/etc/lightrider` on the VPS because that directory is mounted read-only into the container. Then set these values in `secrets/web-server.env` or export them before running `just deploy-web-server...` so the template writes them:
+If using NATS TLS inside the matchmaker image, put the certificate files under `/etc/lightrider` on the VPS because that directory is mounted read-only into the container. Then set these values in `secrets/web-server.env` or export them before running `just control-host-deploy...` so the template writes them:
 
 ```bash
 NATS_TLS_CERT=/etc/lightrider/nats-cert.pem
@@ -946,7 +1036,8 @@ If Edgegap game servers connect to public NATS with TLS, configure their trust w
 Health checks:
 
 ```bash
-curl -fsS http://<matchmaker-host>:8080/
+curl -fsS http://<web-host>/
+curl -fsS http://<matchmaker-host>:3000/health
 curl -fsS http://<matchmaker-host>:8222/healthz
 ```
 
@@ -954,9 +1045,9 @@ Container logs to inspect:
 
 ```bash
 podman logs lightrider-matchmaker
+podman logs lightrider-webclient
 podman exec lightrider-matchmaker tail -n 200 /var/log/nats.log
-podman exec lightrider-matchmaker tail -n 200 /var/log/bevygap_matchmaker.log
-podman exec lightrider-matchmaker tail -n 200 /var/log/bevygap_matchmaker_httpd.log
+podman exec lightrider-matchmaker tail -n 200 /var/log/lightyear_matchmaker_server.log
 ```
 
 ### 5. Configure The Edgegap Game-Server App Version

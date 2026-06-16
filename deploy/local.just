@@ -334,11 +334,11 @@ load-local *args:
     LOAD_NET_INTERFACES="$net_interfaces" tools/load_sampler.sh "$run_dir" "$pids_file" "$sample_interval" &
     sampler_pid="$!"
     if [[ "$server_trace" == "true" ]]; then
-      RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
+      RUST_LOG="warn,lightrider::interest=info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/server.ndjson" \
         "$target_dir/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
         > "$run_dir/server.log" 2>&1 &
     else
-      RUST_LOG="warn" \
+      RUST_LOG="warn,lightrider::interest=info" \
         "$target_dir/$bin_dir/lightrider-server" --headless --port "$port" --config "$config" \
         > "$run_dir/server.log" 2>&1 &
     fi

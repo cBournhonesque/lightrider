@@ -143,6 +143,44 @@ impl TailSpatialIndex {
         segments
     }
 
+    pub fn segments_intersecting_aabb(
+        &self,
+        room: RoomId,
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+    ) -> Vec<&TailSegment> {
+        let (min_x, max_x) = (min_x.min(max_x), min_x.max(max_x));
+        let (min_y, max_y) = (min_y.min(max_y), min_y.max(max_y));
+        let mut segments = Vec::new();
+
+        for cell in self.cell(min_x)..=self.cell(max_x) {
+            if let Some(bucket) = self.vertical.get(&(room, cell)) {
+                segments.extend(
+                    bucket.iter().filter(|segment| {
+                        ranges_overlap(segment.min_y, segment.max_y, min_y, max_y)
+                    }),
+                );
+            }
+        }
+        for cell in self.cell(min_y)..=self.cell(max_y) {
+            if let Some(bucket) = self.horizontal.get(&(room, cell)) {
+                segments.extend(
+                    bucket.iter().filter(|segment| {
+                        ranges_overlap(segment.min_x, segment.max_x, min_x, max_x)
+                    }),
+                );
+            }
+        }
+        segments.extend(self.diagonal.iter().filter(|segment| {
+            segment.room == room
+                && ranges_overlap(segment.min_x, segment.max_x, min_x, max_x)
+                && ranges_overlap(segment.min_y, segment.max_y, min_y, max_y)
+        }));
+        segments
+    }
+
     pub fn segment_count(&self) -> usize {
         self.vertical.values().map(Vec::len).sum::<usize>()
             + self.horizontal.values().map(Vec::len).sum::<usize>()
@@ -207,6 +245,25 @@ impl FoodSpatialIndex {
         results.sort_by(|left, right| compare_food_by_distance_then_entity(center, left, right));
         results
     }
+
+    pub fn within_aabb(
+        &self,
+        room: RoomId,
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+    ) -> Vec<FoodPoint> {
+        let Some(tree) = self.rooms.get(&room) else {
+            return Vec::new();
+        };
+        let (min_x, max_x) = (min_x.min(max_x), min_x.max(max_x));
+        let (min_y, max_y) = (min_y.min(max_y), min_y.max(max_y));
+        let mut results = Vec::new();
+        tree.within_aabb(min_x, max_x, min_y, max_y, &mut results);
+        results.sort_by(compare_food_by_entity);
+        results
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -225,6 +282,19 @@ impl FoodKdTree {
         let radius_squared = radius * radius;
         if let Some(root) = &self.root {
             root.within_radius(center, radius_squared, results);
+        }
+    }
+
+    fn within_aabb(
+        &self,
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+        results: &mut Vec<FoodPoint>,
+    ) {
+        if let Some(root) = &self.root {
+            root.within_aabb(min_x, max_x, min_y, max_y, results);
         }
     }
 }
@@ -256,6 +326,37 @@ impl FoodKdNode {
         if delta_squared <= radius_squared {
             if let Some(far) = far {
                 far.within_radius(center, radius_squared, results);
+            }
+        }
+    }
+
+    fn within_aabb(
+        &self,
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+        results: &mut Vec<FoodPoint>,
+    ) {
+        if self.point.position.x >= min_x
+            && self.point.position.x <= max_x
+            && self.point.position.y >= min_y
+            && self.point.position.y <= max_y
+        {
+            results.push(self.point);
+        }
+
+        let min_axis = if self.axis == 0 { min_x } else { min_y };
+        let max_axis = if self.axis == 0 { max_x } else { max_y };
+        let point_axis = axis_value(self.point.position, self.axis);
+        if min_axis <= point_axis {
+            if let Some(left) = &self.left {
+                left.within_aabb(min_x, max_x, min_y, max_y, results);
+            }
+        }
+        if max_axis >= point_axis {
+            if let Some(right) = &self.right {
+                right.within_aabb(min_x, max_x, min_y, max_y, results);
             }
         }
     }
@@ -296,6 +397,10 @@ fn compare_food_by_distance_then_entity(
         .distance_squared(center)
         .total_cmp(&right.position.distance_squared(center))
         .then_with(|| left.entity.to_bits().cmp(&right.entity.to_bits()))
+}
+
+fn compare_food_by_entity(left: &FoodPoint, right: &FoodPoint) -> Ordering {
+    left.entity.to_bits().cmp(&right.entity.to_bits())
 }
 
 fn axis_value(position: Vec2, axis: usize) -> f32 {
@@ -349,6 +454,34 @@ mod tests {
     }
 
     #[test]
+    fn tail_index_queries_segments_intersecting_aabb() {
+        let snake = Entity::from_bits(1);
+        let room = RoomId(7);
+        let tail = tail([
+            (Vec2::new(10.0, 50.0), Direction::Up),
+            (Vec2::new(10.0, 0.0), Direction::Up),
+            (Vec2::new(-20.0, 0.0), Direction::Left),
+            (Vec2::new(-30.0, -10.0), Direction::Down),
+        ]);
+        let index = TailSpatialIndex::from_tails([(snake, room, &tail)]);
+
+        let found = index.segments_intersecting_aabb(room, 12.0, -25.0, 5.0, -5.0);
+        assert_eq!(found.len(), 3);
+        assert!(found
+            .iter()
+            .any(|segment| segment.orientation == SegmentOrientation::Vertical));
+        assert!(found
+            .iter()
+            .any(|segment| segment.orientation == SegmentOrientation::Horizontal));
+        assert!(found
+            .iter()
+            .any(|segment| segment.orientation == SegmentOrientation::Diagonal));
+        assert!(index
+            .segments_intersecting_aabb(RoomId(8), 12.0, -25.0, 5.0, -5.0)
+            .is_empty());
+    }
+
+    #[test]
     fn food_index_returns_near_food_in_deterministic_order() {
         let room = RoomId(1);
         let far = Entity::from_bits(1);
@@ -382,6 +515,50 @@ mod tests {
         assert_eq!(
             found.iter().map(|point| point.entity).collect::<Vec<_>>(),
             vec![near_low_entity, near_high_entity]
+        );
+    }
+
+    #[test]
+    fn food_index_returns_food_inside_aabb() {
+        let room = RoomId(1);
+        let outside_x = Entity::from_bits(1);
+        let inside_high_entity = Entity::from_bits(5);
+        let inside_low_entity = Entity::from_bits(3);
+        let outside_y = Entity::from_bits(4);
+        let other_room = Entity::from_bits(2);
+        let index = FoodSpatialIndex::from_food([
+            FoodPoint {
+                entity: outside_x,
+                room,
+                position: Vec2::new(20.0, 0.0),
+            },
+            FoodPoint {
+                entity: inside_high_entity,
+                room,
+                position: Vec2::new(1.0, 5.0),
+            },
+            FoodPoint {
+                entity: inside_low_entity,
+                room,
+                position: Vec2::new(-1.0, -5.0),
+            },
+            FoodPoint {
+                entity: outside_y,
+                room,
+                position: Vec2::new(0.0, 20.0),
+            },
+            FoodPoint {
+                entity: other_room,
+                room: RoomId(2),
+                position: Vec2::ZERO,
+            },
+        ]);
+
+        let found = index.within_aabb(room, -2.0, 2.0, -6.0, 6.0);
+
+        assert_eq!(
+            found.iter().map(|point| point.entity).collect::<Vec<_>>(),
+            vec![inside_low_entity, inside_high_entity]
         );
     }
 }

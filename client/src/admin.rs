@@ -3,6 +3,7 @@ use bevy::input::ButtonState;
 use bevy::prelude::*;
 use lightyear::connection::client::Connected;
 use lightyear::prelude::{Client, MessageReceiver, MessageSender, PredictionMetrics};
+use lightyear_tools::ui::debug::{DebugUIPlugin, MetricsPanelSettings};
 use shared::network::protocol::prelude::*;
 
 use crate::render::ui_style;
@@ -53,6 +54,12 @@ pub(crate) struct ClientAdminPlugin;
 impl Plugin for ClientAdminPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AdminUiState>();
+        app.insert_resource(MetricsPanelSettings {
+            enabled: false,
+            window_len: 50,
+            alpha: 0.62,
+        });
+        app.add_plugins(DebugUIPlugin);
         app.add_systems(Startup, spawn_admin_ui);
         app.add_systems(
             Update,
@@ -360,6 +367,7 @@ fn receive_admin_responses(
 fn update_admin_view(
     state: Res<AdminUiState>,
     metrics: Option<Res<PredictionMetrics>>,
+    mut debug_panel: Option<ResMut<MetricsPanelSettings>>,
     mut unlock_roots: Query<&mut Visibility, (With<AdminUnlockRoot>, Without<AdminPanelRoot>)>,
     mut panel_roots: Query<&mut Visibility, (With<AdminPanelRoot>, Without<AdminUnlockRoot>)>,
     mut texts: ParamSet<(
@@ -382,6 +390,12 @@ fn update_admin_view(
         } else {
             Visibility::Hidden
         };
+    }
+    if let Some(settings) = debug_panel.as_mut() {
+        let enabled = state.panel_visible && state.unlocked;
+        if settings.enabled != enabled {
+            settings.enabled = enabled;
+        }
     }
     if let Ok(mut text) = texts.p0().single_mut() {
         text.0 = format!("Password: {}", "*".repeat(state.password.chars().count()));

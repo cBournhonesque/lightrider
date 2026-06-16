@@ -21,6 +21,7 @@ impl Plugin for ConfigPlugin {
         app.register_type::<RespawnConfig>();
         app.register_type::<NetworkConfig>();
         app.register_type::<NetworkCompression>();
+        app.register_type::<NetworkInterestConfig>();
         app.register_type::<InputDelayConfig>();
         app.register_type::<InterpolationDelayConfig>();
         app.register_type::<LagCompensationConfig>();
@@ -74,6 +75,14 @@ impl GameConfig {
             .with_context(|| format!("failed to read game config {}", path.display()))?;
         Self::from_ron_str(&source)
             .with_context(|| format!("failed to load game config {}", path.display()))
+    }
+
+    pub fn normal_camera_scale_for_tail_length(&self, tail_length: f32) -> f32 {
+        let min_scale = self.render.normal_camera_scale.max(0.1);
+        let max_scale = self.render.normal_camera_max_scale.max(min_scale);
+        let growth = (tail_length - self.movement.starting_tail_length).max(0.0);
+        (min_scale + growth * self.render.normal_camera_growth_per_tail_length.max(0.0))
+            .clamp(min_scale, max_scale)
     }
 }
 
@@ -348,6 +357,7 @@ pub struct NetworkConfig {
     pub server_port: u16,
     pub replication_send_hz: u16,
     pub compression: NetworkCompression,
+    pub interest: NetworkInterestConfig,
     pub input_delay: InputDelayConfig,
     pub interpolation_delay: InterpolationDelayConfig,
     pub lag_compensation: LagCompensationConfig,
@@ -363,6 +373,7 @@ impl Default for NetworkConfig {
             server_port: 5000,
             replication_send_hz: 16,
             compression: NetworkCompression::default(),
+            interest: NetworkInterestConfig::default(),
             input_delay: InputDelayConfig::default(),
             interpolation_delay: InterpolationDelayConfig::default(),
             lag_compensation: LagCompensationConfig::default(),
@@ -383,6 +394,70 @@ impl NetworkConfig {
         };
         Duration::from_nanos(1_000_000_000 / u64::from(send_hz))
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
+#[serde(default)]
+pub struct NetworkInterestConfig {
+    pub enabled: bool,
+    pub fallback_screen_width: u32,
+    pub fallback_screen_height: u32,
+    pub max_screen_width: u32,
+    pub max_screen_height: u32,
+    pub view_margin: f32,
+    pub hysteresis_margin: f32,
+    pub update_interval_ticks: u32,
+    pub metrics_interval_seconds: f32,
+}
+
+impl Default for NetworkInterestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            fallback_screen_width: 1920,
+            fallback_screen_height: 1080,
+            max_screen_width: 3840,
+            max_screen_height: 2160,
+            view_margin: 200.0,
+            hysteresis_margin: 250.0,
+            update_interval_ticks: 1,
+            metrics_interval_seconds: 5.0,
+        }
+    }
+}
+
+impl NetworkInterestConfig {
+    pub fn fallback_screen_size(&self) -> UVec2 {
+        self.clamp_screen_size(self.fallback_screen_width, self.fallback_screen_height)
+    }
+
+    pub fn clamp_screen_size(&self, width: u32, height: u32) -> UVec2 {
+        UVec2::new(
+            width.max(1).min(self.max_screen_width.max(1)),
+            height.max(1).min(self.max_screen_height.max(1)),
+        )
+    }
+
+    pub fn enter_half_extents(&self, screen_size: UVec2, camera_scale: f32) -> Vec2 {
+        screen_half_extents(screen_size, camera_scale) + Vec2::splat(self.view_margin.max(0.0))
+    }
+
+    pub fn leave_half_extents(&self, screen_size: UVec2, camera_scale: f32) -> Vec2 {
+        self.enter_half_extents(screen_size, camera_scale)
+            + Vec2::splat(self.hysteresis_margin.max(0.0))
+    }
+
+    pub fn update_interval_ticks(&self) -> u32 {
+        self.update_interval_ticks.max(1)
+    }
+
+    pub fn metrics_interval_seconds(&self) -> f32 {
+        self.metrics_interval_seconds.max(0.1)
+    }
+}
+
+fn screen_half_extents(screen_size: UVec2, camera_scale: f32) -> Vec2 {
+    Vec2::new(screen_size.x as f32, screen_size.y as f32) * camera_scale.max(0.1) * 0.5
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Reflect)]
@@ -526,6 +601,7 @@ mod tests {
         assert_eq!(config.network.server_port, 5000);
         assert_eq!(config.network.replication_send_hz, 16);
         assert_eq!(config.network.compression, NetworkCompression::Disabled);
+        assert_eq!(config.network.interest, NetworkInterestConfig::default());
         assert_eq!(
             config.network.replication_send_interval(),
             Duration::from_nanos(62_500_000)

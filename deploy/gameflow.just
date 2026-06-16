@@ -5,8 +5,21 @@ deploy-help:
     Deployment entry points:
       just prod-images-build-push tag=<tag>
       just edgegap-release-sync tag=<tag> nats_host=<host:4222> app=lightrider version=<edgegap-version>
-      just deploy-web-server host=<vps-host> tag=<tag> [domain=<domain>] [https=1]
-      just deploy-web-server-pull host=<vps-host> tag=<already-pushed-tag>
+      just control-host-deploy host=<vps-host> tag=<tag> [domain=<domain>] [https=1]
+      just control-host-deploy-pull host=<vps-host> tag=<already-pushed-tag>
+      just control-host-pull-game-server host=<vps-host> tag=<already-pushed-tag>
+
+    Recipe layering:
+      control-host-deploy
+        -> prod-images-build-push
+        -> web-server-env-template
+        -> web-server-env-check
+        -> web-server-install
+        -> web-server-health
+      control-host-deploy-pull
+        -> control-host-deploy with SKIP_IMAGE_BUILD=1
+      control-host-pull-{game-server,matchmaker,webclient}
+        -> pull/restart one existing systemd service only
 
     GameFlow-compatible aliases:
       just gameflow-build tag=<tag>
@@ -38,10 +51,10 @@ gameflow-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app="lightr
     just edgegap-release-sync "{{ tag }}" "{{ nats_host }}" "{{ app }}" "{{ version }}"
 
 gameflow-deploy-host *args:
-    just deploy-web-server {{ args }}
+    just control-host-deploy {{ args }}
 
 gameflow-deploy-host-pull *args:
-    just deploy-web-server-pull {{ args }}
+    just control-host-deploy-pull {{ args }}
 
 gameflow-smoke-local seconds="8" config="config/test.ron" port="7777" matchmaker_port="3000" client_id="3001" release="false":
     just lightyear-matchmaker-local-smoke "{{ seconds }}" "{{ config }}" "{{ port }}" "{{ matchmaker_port }}" "{{ client_id }}" "{{ release }}"

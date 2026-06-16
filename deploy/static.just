@@ -1,18 +1,25 @@
-# Pull one image on the static/control VPS and restart the corresponding
-# systemd service. Public wrappers below choose the image/service pair.
+static-default-host := "45.79.138.102"
+static-default-env := "secrets/web-server.env"
+static-default-ssh-port := "22"
+static-default-service := "lightrider-matchmaker"
+static-default-sslip-domain := "45.79.138.102.sslip.io"
+
+# Internal helper: on the VPS, pull one already-pushed image, update one
+# systemd service's image env line, and optionally restart only that service.
 _remote-pull-service service image_env image_name *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    host=""
+    host="{{ static-default-host }}"
     tag=""
     image=""
-    ssh_port="22"
+    ssh_port="{{ static-default-ssh-port }}"
     ssh_key=""
-    env_file="secrets/web-server.env"
+    env_file="{{ static-default-env }}"
     service_name=""
     route=""
     web_upstream_port=""
     caddy_default_upstream_port=""
+    matchmaker_public_port=""
     nats_port=""
     nats_monitor_port=""
     manage_static_server=""
@@ -34,6 +41,7 @@ _remote-pull-service service image_env image_name *args:
         matchmaker_route=*) route="${arg#matchmaker_route=}" ;;
         web_upstream_port=*) web_upstream_port="${arg#web_upstream_port=}" ;;
         caddy_default_upstream_port=*) caddy_default_upstream_port="${arg#caddy_default_upstream_port=}" ;;
+        matchmaker_public_port=*) matchmaker_public_port="${arg#matchmaker_public_port=}" ;;
         nats_port=*) nats_port="${arg#nats_port=}" ;;
         nats_public_port=*) nats_port="${arg#nats_public_port=}" ;;
         nats_monitor_port=*) nats_monitor_port="${arg#nats_monitor_port=}" ;;
@@ -59,7 +67,7 @@ _remote-pull-service service image_env image_name *args:
       esac
     done
     if [[ -z "$host" ]]; then
-      echo "usage: just static-server-pull-{game-server,matchmaker} host=<vps-ip-or-host> [tag=<tag>|image=<image>] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key] [restart=1]" >&2
+      echo "usage: just control-host-pull-{game-server,matchmaker,webclient} host=<vps-ip-or-host> [tag=<tag>|image=<image>] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key] [restart=1]" >&2
       exit 2
     fi
     if [[ -f "$env_file" ]]; then
@@ -132,111 +140,58 @@ _remote-pull-service service image_env image_name *args:
     REMOTE
     echo "Pulled $image on $host for {{ service }}"
 
-# Pull and restart the static game-server service on the control/static VPS.
-static-server-pull-game-server *args:
+# Does not install services or update web/matchmaker.
+# Pull game-server image on the VPS and restart only `lightrider-static-server`.
+control-host-pull-game-server *args:
     just _remote-pull-service lightrider-static-server LIGHTRIDER_STATIC_SERVER_IMAGE lightrider-server {{ args }}
 
-# Pull and restart the matchmaker/control service on the control/static VPS.
-static-server-pull-matchmaker *args:
+# Does not install services or update web/game-server.
+# Pull matchmaker image on the VPS and restart only `lightrider-matchmaker`.
+control-host-pull-matchmaker *args:
     just _remote-pull-service lightrider-matchmaker LIGHTRIDER_MATCHMAKER_IMAGE lightrider-matchmaker {{ args }}
 
-# Pull both images on the control/static VPS. Matchmaker restarts first because
-# it owns NATS in the current single-container control-host layout.
+# Does not install services or update matchmaker/game-server.
+# Pull web-client image on the VPS and restart only `lightrider-webclient`.
+control-host-pull-webclient *args:
+    just _remote-pull-service lightrider-webclient LIGHTRIDER_WEBCLIENT_IMAGE lightrider-webclient {{ args }}
+
+# Does not regenerate env files or create missing systemd units.
+# Pull all images on the VPS and restart existing services only.
+control-host-pull-all *args:
+    just control-host-pull-matchmaker {{ args }}
+    just control-host-pull-webclient {{ args }}
+    just control-host-pull-game-server {{ args }}
+
+# Legacy name for `control-host-pull-game-server`.
+static-server-pull-game-server *args:
+    just control-host-pull-game-server {{ args }}
+
+# Legacy name for `control-host-pull-matchmaker`.
+static-server-pull-matchmaker *args:
+    just control-host-pull-matchmaker {{ args }}
+
+# Legacy name for `control-host-pull-webclient`.
+static-server-pull-webclient *args:
+    just control-host-pull-webclient {{ args }}
+
+# Legacy name for `control-host-pull-all`.
 static-server-pull-all *args:
-    just static-server-pull-matchmaker {{ args }}
-    just static-server-pull-game-server {{ args }}
+    just control-host-pull-all {{ args }}
 
+# Reuses the main deploy flow with SKIP_IMAGE_BUILD=1; parsing lives there.
+# Full control-host install/update using already-pushed images.
+control-host-deploy-pull *args:
+    SKIP_IMAGE_BUILD=1 just control-host-deploy {{ args }}
+
+# Legacy name for `control-host-deploy-pull`.
 deploy-web-server-pull *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    host=""
-    tag=""
-    edgegap_version=""
-    web_domain=""
-    enable_https=""
-    ssh_port="22"
-    ssh_key=""
-    env_file="secrets/web-server.env"
-    service_name=""
-    route=""
-    web_upstream_port=""
-    caddy_default_upstream_port=""
-    nats_port=""
-    nats_monitor_port=""
-    manage_static_server=""
-    run_static_server=""
-    allocation_source=""
-    positional=0
-    for arg in {{ args }}; do
-      case "$arg" in
-        host=*) host="${arg#host=}" ;;
-        tag=*) tag="${arg#tag=}" ;;
-        edgegap_version=*) edgegap_version="${arg#edgegap_version=}" ;;
-        version=*) edgegap_version="${arg#version=}" ;;
-        domain=*) web_domain="${arg#domain=}" ;;
-        web_domain=*) web_domain="${arg#web_domain=}" ;;
-        https=*) enable_https="${arg#https=}" ;;
-        enable_https=*) enable_https="${arg#enable_https=}" ;;
-        ssh_port=*) ssh_port="${arg#ssh_port=}" ;;
-        ssh_key=*) ssh_key="${arg#ssh_key=}" ;;
-        env=*) env_file="${arg#env=}" ;;
-        service_name=*) service_name="${arg#service_name=}" ;;
-        route=*) route="${arg#route=}" ;;
-        matchmaker_route=*) route="${arg#matchmaker_route=}" ;;
-        web_upstream_port=*) web_upstream_port="${arg#web_upstream_port=}" ;;
-        caddy_default_upstream_port=*) caddy_default_upstream_port="${arg#caddy_default_upstream_port=}" ;;
-        nats_port=*) nats_port="${arg#nats_port=}" ;;
-        nats_public_port=*) nats_port="${arg#nats_public_port=}" ;;
-        nats_monitor_port=*) nats_monitor_port="${arg#nats_monitor_port=}" ;;
-        nats_monitor_public_port=*) nats_monitor_port="${arg#nats_monitor_public_port=}" ;;
-        manage_static_server=*) manage_static_server="${arg#manage_static_server=}" ;;
-        run_static_server=*) run_static_server="${arg#run_static_server=}" ;;
-        allocation_source=*) allocation_source="${arg#allocation_source=}" ;;
-        *)
-          case "$positional" in
-            0) host="$arg" ;;
-            1) tag="$arg" ;;
-            2) ssh_port="$arg" ;;
-            3) env_file="$arg" ;;
-            4) ssh_key="$arg" ;;
-            5) edgegap_version="$arg" ;;
-            6) web_domain="$arg" ;;
-            *)
-              echo "unexpected extra argument for deploy-web-server-pull: $arg" >&2
-              exit 2
-              ;;
-          esac
-          positional=$((positional + 1))
-          ;;
-      esac
-    done
-    if [[ -z "$host" || -z "$tag" ]]; then
-      echo "usage: just deploy-web-server-pull <vps-ip-or-host> <tag> [ssh_port] [env] [ssh_key] [edgegap_version] [domain]" >&2
-      echo "   or: just deploy-web-server-pull host=<vps-ip-or-host> tag=<tag> [edgegap_version=<version>] [domain=play.example.com] [https=1] [ssh_port=22] [env=secrets/web-server.env] [ssh_key=~/.ssh/key] [service_name=<name>] [route=<name>] [web_upstream_port=<port>] [nats_port=<port>]" >&2
-      exit 2
-    fi
-    args=(
-      host="$host"
-      ssh_port="$ssh_port"
-      ssh_key="$ssh_key"
-      tag="$tag"
-      edgegap_version="$edgegap_version"
-      domain="$web_domain"
-      https="$enable_https"
-      env="$env_file"
-    )
-    if [[ -n "$service_name" ]]; then args+=(service_name="$service_name"); fi
-    if [[ -n "$route" ]]; then args+=(route="$route"); fi
-    if [[ -n "$web_upstream_port" ]]; then args+=(web_upstream_port="$web_upstream_port"); fi
-    if [[ -n "$caddy_default_upstream_port" ]]; then args+=(caddy_default_upstream_port="$caddy_default_upstream_port"); fi
-    if [[ -n "$nats_port" ]]; then args+=(nats_port="$nats_port"); fi
-    if [[ -n "$nats_monitor_port" ]]; then args+=(nats_monitor_port="$nats_monitor_port"); fi
-    if [[ -n "$manage_static_server" ]]; then args+=(manage_static_server="$manage_static_server"); fi
-    if [[ -n "$run_static_server" ]]; then args+=(run_static_server="$run_static_server"); fi
-    if [[ -n "$allocation_source" ]]; then args+=(allocation_source="$allocation_source"); fi
-    SKIP_IMAGE_BUILD=1 just deploy-web-server "${args[@]}"
+    just control-host-deploy-pull {{ args }}
 
-web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" host="45.79.138.102" edgegap_version="":
+# It resolves image tags, matchmaker/game versions, NATS settings, Caddy/web
+# settings, static-server settings, and persistent netcode identity. The file
+# is intentionally in secrets/ by default because it contains private keys.
+# Lower-level: generate the local env file consumed by `web-server-install`.
+web-server-env-template tag=edgegap-default-tag file=static-default-env host=static-default-host edgegap_version="":
     #!/usr/bin/env bash
     set -euo pipefail
     # Keep caller-provided deployment overrides distinct from values sourced out
@@ -364,7 +319,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       default_matchmaker_url="wss://${web_domain}/matchmaker/ws"
     else
       default_matchmaker_cors="http://{{ host }}"
-      default_matchmaker_url=""
+      default_matchmaker_url="ws://{{ host }}:${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT:-3000}/ws"
     fi
     mkdir -p "$(dirname "{{ file }}")"
     write_env() {
@@ -376,6 +331,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       echo "# This file is shell-sourced locally, then converted to a container env file on the VPS."
       echo "# Keep LIGHTRIDER_PROTOCOL_ID/LIGHTRIDER_PRIVATE_KEY in sync with the game-server image."
       write_env LIGHTRIDER_MATCHMAKER_IMAGE "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-matchmaker:{{ tag }}"
+      write_env LIGHTRIDER_WEBCLIENT_IMAGE "${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}/${EDGEGAP_REGISTRY_PROJECT:-lightyear-6qgcf4w4mrq7}/lightrider-webclient:{{ tag }}"
       write_env LIGHTRIDER_MATCHMAKER_TAG "{{ tag }}"
       write_env LIGHTRIDER_MATCHMAKER_GAME "$matchmaker_game"
       write_env LIGHTRIDER_MATCHMAKER_VERSION "$matchmaker_version"
@@ -398,6 +354,7 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
       write_env LIGHTRIDER_WEB_DOMAIN "$web_domain"
       write_env LIGHTRIDER_WEB_UPSTREAM_PORT "${LIGHTRIDER_WEB_UPSTREAM_PORT:-8080}"
       write_env LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT "${LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT:-8080}"
+      write_env LIGHTRIDER_MATCHMAKER_PUBLIC_PORT "${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT:-3000}"
       write_env LIGHTRIDER_MATCHMAKER_ROUTE "${LIGHTRIDER_MATCHMAKER_ROUTE:-}"
       write_env LIGHTRIDER_NATS_PUBLIC_PORT "${LIGHTRIDER_NATS_PUBLIC_PORT:-4222}"
       write_env LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT "${LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT:-8222}"
@@ -430,7 +387,10 @@ web-server-env-template tag=edgegap-default-tag file="secrets/web-server.env" ho
     chmod 600 "{{ file }}"
     echo "Wrote {{ file }}"
 
-web-server-env-check file="secrets/web-server.env":
+# This catches missing image names, unsafe default NATS credentials, invalid
+# netcode identity, missing provider secrets, and HTTPS bootstrap mistakes.
+# Lower-level: validate a generated deployment env before VPS upload.
+web-server-env-check file=static-default-env:
     #!/usr/bin/env bash
     set -euo pipefail
     test -f "{{ file }}" || {
@@ -455,6 +415,7 @@ web-server-env-check file="secrets/web-server.env":
     }
 
     require_var LIGHTRIDER_MATCHMAKER_IMAGE
+    require_var LIGHTRIDER_WEBCLIENT_IMAGE
     require_var LIGHTRIDER_MATCHMAKER_TAG
     require_var LIGHTRIDER_PROTOCOL_ID
     require_var LIGHTRIDER_PRIVATE_KEY
@@ -495,14 +456,17 @@ web-server-env-check file="secrets/web-server.env":
         exit 1
       fi
     fi
-    if [[ "$LIGHTRIDER_MATCHMAKER_IMAGE" == registry.edgegap.com/* || "${LIGHTRIDER_STATIC_SERVER_IMAGE:-}" == registry.edgegap.com/* ]]; then
+    if [[ "$LIGHTRIDER_MATCHMAKER_IMAGE" == registry.edgegap.com/* || "$LIGHTRIDER_WEBCLIENT_IMAGE" == registry.edgegap.com/* || "${LIGHTRIDER_STATIC_SERVER_IMAGE:-}" == registry.edgegap.com/* ]]; then
       require_var EDGEGAP_REGISTRY_USERNAME
       require_var EDGEGAP_REGISTRY_TOKEN
     fi
 
     echo "web-server env ok: {{ file }}"
 
-web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.env" ssh_key="" service_name="lightrider-matchmaker":
+# run the remote installer. The remote installer pulls images, writes systemd
+# units, starts/restarts services, and removes the temporary uploaded env file.
+# Lower-level: upload env+installer to the VPS and run remote setup.
+web-server-install host=static-default-host ssh_port=static-default-ssh-port env=static-default-env ssh_key="" service_name=static-default-service:
     #!/usr/bin/env bash
     set -euo pipefail
     test -f "{{ env }}" || {
@@ -530,19 +494,23 @@ web-server-install host="45.79.138.102" ssh_port="22" env="secrets/web-server.en
     scp "${scp_opts[@]}" "{{ env }}" "root@{{ host }}:$remote_dir/web-server.env"
     ssh "${ssh_opts[@]}" "root@{{ host }}" "bash '$remote_dir/setup_web_server_host.sh' --env-file '$remote_dir/web-server.env' --service-name '{{ service_name }}'; rm -f '$remote_dir/web-server.env'"
 
-web-server-health host="45.79.138.102" scheme="http":
+# Lower-level: minimal post-deploy HTTP(S) check for the public web endpoint.
+web-server-health host=static-default-host scheme="http":
     #!/usr/bin/env bash
     set -euo pipefail
     url="{{ scheme }}://{{ host }}/"
     curl -fsSL --max-time 30 "$url" >/dev/null
     echo "web ok: $url"
 
+# Reuse Caddy's certificate for NATS TLS after HTTPS is already working.
+# This updates matchmaker/static-server env files on the VPS and restarts
+# services so game servers can connect to NATS with TLS.
 web-server-enable-nats-tls-from-caddy *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    host="45.79.138.102"
-    domain="45.79.138.102.sslip.io"
-    ssh_port="22"
+    host="{{ static-default-host }}"
+    domain="{{ static-default-sslip-domain }}"
+    ssh_port="{{ static-default-ssh-port }}"
     ssh_key=""
     positional=0
     for arg in {{ args }}; do
@@ -654,27 +622,33 @@ web-server-enable-nats-tls-from-caddy *args:
     fi
     REMOTE
 
-deploy-web-server *args:
+# generates the deploy env, installs/updates the VPS services, and runs a web
+# health check. Pass SKIP_IMAGE_BUILD=1 or use `control-host-deploy-pull` when
+# images are already pushed.
+# Full control-host deploy flow: build/push, generate env, install, health-check.
+control-host-deploy *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    vps_host=""
-    ssh_port="22"
+    vps_host="{{ static-default-host }}"
+    ssh_port="{{ static-default-ssh-port }}"
     ssh_key=""
     tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
     edgegap_version=""
     web_domain=""
     enable_https=""
-    env_file="secrets/web-server.env"
-    service_name="lightrider-matchmaker"
+    env_file="{{ static-default-env }}"
+    service_name="{{ static-default-service }}"
     route=""
     web_upstream_port=""
     caddy_default_upstream_port=""
+    matchmaker_public_port=""
     nats_port=""
     nats_monitor_port=""
     manage_static_server=""
     run_static_server=""
     allocation_source=""
     build_memory=""
+    build_memory_swap=""
     build_cpus=""
     build_cpu_quota=""
     build_cpuset_cpus=""
@@ -698,6 +672,7 @@ deploy-web-server *args:
         matchmaker_route=*) route="${arg#matchmaker_route=}" ;;
         web_upstream_port=*) web_upstream_port="${arg#web_upstream_port=}" ;;
         caddy_default_upstream_port=*) caddy_default_upstream_port="${arg#caddy_default_upstream_port=}" ;;
+        matchmaker_public_port=*) matchmaker_public_port="${arg#matchmaker_public_port=}" ;;
         nats_port=*) nats_port="${arg#nats_port=}" ;;
         nats_public_port=*) nats_port="${arg#nats_public_port=}" ;;
         nats_monitor_port=*) nats_monitor_port="${arg#nats_monitor_port=}" ;;
@@ -707,6 +682,8 @@ deploy-web-server *args:
         allocation_source=*) allocation_source="${arg#allocation_source=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
         build_memory=*) build_memory="${arg#build_memory=}" ;;
+        memory_swap=*) build_memory_swap="${arg#memory_swap=}" ;;
+        build_memory_swap=*) build_memory_swap="${arg#build_memory_swap=}" ;;
         cpus=*) build_cpus="${arg#cpus=}" ;;
         build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
         cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
@@ -732,8 +709,8 @@ deploy-web-server *args:
       esac
     done
     if [[ -z "$vps_host" ]]; then
-      echo "usage: just deploy-web-server host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [domain=<domain>] [https=1] [env=<file>] [service_name=<name>] [route=<name>] [web_upstream_port=<port>] [nats_port=<port>]" >&2
-      echo "example: just deploy-web-server host=45.79.138.102 domain=play.example.com" >&2
+      echo "usage: just control-host-deploy host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [domain=<domain>] [https=1] [env=<file>] [service_name=<name>] [route=<name>] [web_upstream_port=<port>] [nats_port=<port>]" >&2
+      echo "example: just control-host-deploy host=45.79.138.102 domain=play.example.com" >&2
       exit 2
     fi
     if [[ -z "$enable_https" && -n "$web_domain" ]]; then
@@ -741,9 +718,9 @@ deploy-web-server *args:
     fi
     enable_https="${enable_https:-0}"
     if [[ "${SKIP_IMAGE_BUILD:-0}" == "1" ]]; then
-      echo "Skipping matchmaker image build/push; assuming tag $tag is already pushed."
+      echo "Skipping image build/push; assuming tag $tag is already pushed."
     else
-      just matchmaker-build-push "$tag" "$build_memory" "$build_cpus" "$build_cpu_quota" "$build_cpuset_cpus"
+      just prod-images-build-push "$tag" "$build_memory" memory_swap="$build_memory_swap" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
     fi
     if [[ -z "$web_upstream_port" ]]; then
       if [[ "$service_name" == "lightrider-matchmaker" ]]; then
@@ -754,6 +731,7 @@ deploy-web-server *args:
       fi
     fi
     caddy_default_upstream_port="${caddy_default_upstream_port:-8080}"
+    matchmaker_public_port="${matchmaker_public_port:-3000}"
     nats_port="${nats_port:-4222}"
     nats_monitor_port="${nats_monitor_port:-8222}"
     env_args=(
@@ -761,6 +739,7 @@ deploy-web-server *args:
       LIGHTRIDER_WEB_DOMAIN="$web_domain"
       LIGHTRIDER_WEB_UPSTREAM_PORT="$web_upstream_port"
       LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT="$caddy_default_upstream_port"
+      LIGHTRIDER_MATCHMAKER_PUBLIC_PORT="$matchmaker_public_port"
       LIGHTRIDER_MATCHMAKER_ROUTE="$route"
       LIGHTRIDER_NATS_PUBLIC_PORT="$nats_port"
       LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT="$nats_monitor_port"
@@ -783,3 +762,7 @@ deploy-web-server *args:
     else
       just web-server-health "$vps_host" http
     fi
+
+# Legacy name for `control-host-deploy`.
+deploy-web-server *args:
+    just control-host-deploy {{ args }}

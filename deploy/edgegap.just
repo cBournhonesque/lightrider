@@ -1,9 +1,11 @@
+# Remove Podman builder cache layers. Use only when build cache is stale or
+# disk pressure is high; the next production image build will be slower.
 clean-edgegap-cache:
     podman builder prune -f
 
-# Stage the multi-repo image build context used by both game-server and
-# matchmaker images. The Dockerfiles expect these sibling directories under
-# .edgegap-build/context.
+# Stage the multi-repo image build context used by the game-server,
+# matchmaker, and web-client images. The Dockerfiles expect these sibling
+# directories under .edgegap-build/context.
 edgegap-context:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -40,6 +42,7 @@ edgegap-context:
       --format-version 1 \
       >/dev/null
 
+# Log in to the registry configured by secrets/edgegap.env.
 edgegap-login:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -51,95 +54,7 @@ edgegap-login:
 # Build the deployable game-server image. The historical recipe name is kept
 # because it also builds the image used by Edgegap app versions.
 edgegap-build *args: edgegap-context
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source secrets/edgegap.env
-    tag="{{ edgegap-default-tag }}"
-    build_memory=""
-    build_cpus=""
-    build_cpu_quota=""
-    build_cpuset_cpus=""
-    positional=0
-    for arg in {{ args }}; do
-      case "$arg" in
-        tag=*) tag="${arg#tag=}" ;;
-        memory=*) build_memory="${arg#memory=}" ;;
-        build_memory=*) build_memory="${arg#build_memory=}" ;;
-        cpus=*) build_cpus="${arg#cpus=}" ;;
-        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
-        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
-        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
-        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
-        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
-        *)
-          case "$positional" in
-            0) tag="$arg" ;;
-            1) build_memory="$arg" ;;
-            2) build_cpus="$arg" ;;
-            3) build_cpu_quota="$arg" ;;
-            4) build_cpuset_cpus="$arg" ;;
-            *)
-              echo "unexpected extra argument: $arg" >&2
-              exit 2
-              ;;
-          esac
-          positional=$((positional + 1))
-          ;;
-      esac
-    done
-    image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-server:$tag"
-    lightyear_matchmaker_manifest_sha="$(
-      find .edgegap-build/context/lightyear-matchmaker \
-        \( -name Cargo.toml -o -name Cargo.lock \) \
-        -type f \
-        -print0 |
-      sort -z |
-      xargs -0 sha256sum |
-      sha256sum |
-      awk '{print $1}'
-    )"
-    build_cmd=(podman build --layers)
-    if [[ "${NO_CACHE:-0}" == "1" ]]; then
-      build_cmd+=(--no-cache)
-    fi
-    build_memory="${PODMAN_BUILD_MEMORY:-$build_memory}"
-    build_cpus="${PODMAN_BUILD_CPUS:-$build_cpus}"
-    build_cpu_quota="${PODMAN_BUILD_CPU_QUOTA:-$build_cpu_quota}"
-    build_cpuset_cpus="${PODMAN_BUILD_CPUSET_CPUS:-$build_cpuset_cpus}"
-    if [[ -n "${PODMAN_CACHE_FROM:-}" ]]; then
-      build_cmd+=(--cache-from "$PODMAN_CACHE_FROM")
-    fi
-    if [[ -n "${PODMAN_CACHE_TO:-}" ]]; then
-      build_cmd+=(--cache-to "$PODMAN_CACHE_TO")
-    fi
-    if [[ -n "$build_memory" ]]; then
-      build_cmd+=(--memory "$build_memory")
-    fi
-    if [[ -n "$build_cpus" ]]; then
-      if [[ ! "$build_cpus" =~ ^[0-9]+$ ]]; then
-        echo "edgegap-build cpus must be an integer because podman build has no --cpus flag; got '$build_cpus'" >&2
-        exit 2
-      fi
-      build_cmd+=(--cpu-period 100000 --cpu-quota "$((build_cpus * 100000))")
-    fi
-    if [[ -n "$build_cpu_quota" ]]; then
-      build_cmd+=(--cpu-quota "$build_cpu_quota")
-    fi
-    if [[ -n "$build_cpuset_cpus" ]]; then
-      build_cmd+=(--cpuset-cpus "$build_cpuset_cpus")
-    fi
-    "${build_cmd[@]}" \
-      --build-arg "SERVER_CARGO_JOBS=${SERVER_CARGO_JOBS:-2}" \
-      --build-arg "SERVER_CARGO_INCREMENTAL=${SERVER_CARGO_INCREMENTAL:-0}" \
-      --build-arg "SERVER_RELEASE_OPT_LEVEL=${SERVER_RELEASE_OPT_LEVEL:-3}" \
-      --build-arg "SERVER_RELEASE_LTO=${SERVER_RELEASE_LTO:-false}" \
-      --build-arg "SERVER_RELEASE_CODEGEN_UNITS=${SERVER_RELEASE_CODEGEN_UNITS:-16}" \
-      --build-arg "LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=$lightyear_matchmaker_manifest_sha" \
-      -f .edgegap-build/context/lightrider/deploy/Dockerfile.server \
-      -t "$image" \
-      .edgegap-build/context
-    echo "$image" > .edgegap-build/server-image.txt
-    echo "Built $image"
+    deploy/build_image.sh server {{ args }}
 
 edgegap-push tag=edgegap-default-tag: edgegap-login
     #!/usr/bin/env bash
@@ -154,6 +69,7 @@ edgegap-build-push *args:
     set -euo pipefail
     tag="{{ edgegap-default-tag }}"
     build_memory=""
+    build_memory_swap=""
     build_cpus=""
     build_cpu_quota=""
     build_cpuset_cpus=""
@@ -163,6 +79,8 @@ edgegap-build-push *args:
         tag=*) tag="${arg#tag=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
         build_memory=*) build_memory="${arg#build_memory=}" ;;
+        memory_swap=*) build_memory_swap="${arg#memory_swap=}" ;;
+        build_memory_swap=*) build_memory_swap="${arg#build_memory_swap=}" ;;
         cpus=*) build_cpus="${arg#cpus=}" ;;
         build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
         cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
@@ -185,7 +103,7 @@ edgegap-build-push *args:
           ;;
       esac
     done
-    just edgegap-build tag="$tag" memory="$build_memory" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
+    just edgegap-build tag="$tag" memory="$build_memory" memory_swap="$build_memory_swap" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
     just edgegap-push "$tag"
 
 # Clear aliases for the game-server image path. These call the older
@@ -214,104 +132,11 @@ edgegap-app-sync tag=edgegap-default-tag version="dev" app="lightrider":
 edgegap-app-verify tag=edgegap-default-tag version="dev" app="lightrider":
     deploy/edgegap_app_version.sh verify --app "{{ app }}" --version "{{ version }}" --tag "{{ tag }}"
 
+# Build only the matchmaker/control image: NATS + lightyear_matchmaker_server.
 matchmaker-build *args: edgegap-context
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source secrets/edgegap.env
-    tag="{{ edgegap-default-tag }}"
-    build_memory=""
-    build_cpus=""
-    build_cpu_quota=""
-    build_cpuset_cpus=""
-    positional=0
-    for arg in {{ args }}; do
-      case "$arg" in
-        tag=*) tag="${arg#tag=}" ;;
-        memory=*) build_memory="${arg#memory=}" ;;
-        build_memory=*) build_memory="${arg#build_memory=}" ;;
-        cpus=*) build_cpus="${arg#cpus=}" ;;
-        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
-        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
-        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
-        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
-        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
-        *)
-          case "$positional" in
-            0) tag="$arg" ;;
-            1) build_memory="$arg" ;;
-            2) build_cpus="$arg" ;;
-            3) build_cpu_quota="$arg" ;;
-            4) build_cpuset_cpus="$arg" ;;
-            *)
-              echo "unexpected extra argument: $arg" >&2
-              exit 2
-              ;;
-          esac
-          positional=$((positional + 1))
-          ;;
-      esac
-    done
-    image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:$tag"
-    lightyear_matchmaker_manifest_sha="$(
-      find .edgegap-build/context/lightyear-matchmaker \
-        \( -name Cargo.toml -o -name Cargo.lock \) \
-        -type f \
-        -print0 |
-      sort -z |
-      xargs -0 sha256sum |
-      sha256sum |
-      awk '{print $1}'
-    )"
-    # Defaults are balanced for a 32G+ build machine. Drop the env values to
-    # 1/false/16 if rustc is OOM-killed on a smaller host.
-    build_cmd=(podman build --layers)
-    if [[ "${NO_CACHE:-0}" == "1" ]]; then
-      build_cmd+=(--no-cache)
-    fi
-    build_memory="${PODMAN_BUILD_MEMORY:-$build_memory}"
-    build_cpus="${PODMAN_BUILD_CPUS:-$build_cpus}"
-    build_cpu_quota="${PODMAN_BUILD_CPU_QUOTA:-$build_cpu_quota}"
-    build_cpuset_cpus="${PODMAN_BUILD_CPUSET_CPUS:-$build_cpuset_cpus}"
-    if [[ -n "${PODMAN_CACHE_FROM:-}" ]]; then
-      build_cmd+=(--cache-from "$PODMAN_CACHE_FROM")
-    fi
-    if [[ -n "${PODMAN_CACHE_TO:-}" ]]; then
-      build_cmd+=(--cache-to "$PODMAN_CACHE_TO")
-    fi
-    if [[ -n "$build_memory" ]]; then
-      build_cmd+=(--memory "$build_memory")
-    fi
-    if [[ -n "$build_cpus" ]]; then
-      if [[ ! "$build_cpus" =~ ^[0-9]+$ ]]; then
-        echo "matchmaker-build cpus must be an integer because podman build has no --cpus flag; got '$build_cpus'" >&2
-        exit 2
-      fi
-      build_cmd+=(--cpu-period 100000 --cpu-quota "$((build_cpus * 100000))")
-    fi
-    if [[ -n "$build_cpu_quota" ]]; then
-      build_cmd+=(--cpu-quota "$build_cpu_quota")
-    fi
-    if [[ -n "$build_cpuset_cpus" ]]; then
-      build_cmd+=(--cpuset-cpus "$build_cpuset_cpus")
-    fi
-    "${build_cmd[@]}" \
-      --build-arg "MATCHMAKER_CARGO_JOBS=${MATCHMAKER_CARGO_JOBS:-2}" \
-      --build-arg "MATCHMAKER_CARGO_INCREMENTAL=${MATCHMAKER_CARGO_INCREMENTAL:-0}" \
-      --build-arg "MATCHMAKER_RELEASE_OPT_LEVEL=${MATCHMAKER_RELEASE_OPT_LEVEL:-2}" \
-      --build-arg "MATCHMAKER_RELEASE_LTO=${MATCHMAKER_RELEASE_LTO:-thin}" \
-      --build-arg "MATCHMAKER_RELEASE_CODEGEN_UNITS=${MATCHMAKER_RELEASE_CODEGEN_UNITS:-8}" \
-      --build-arg "WEB_CARGO_JOBS=${WEB_CARGO_JOBS:-1}" \
-      --build-arg "WEB_CARGO_INCREMENTAL=${WEB_CARGO_INCREMENTAL:-0}" \
-      --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-1}" \
-      --build-arg "WEB_RELEASE_LTO=${WEB_RELEASE_LTO:-false}" \
-      --build-arg "WEB_RELEASE_CODEGEN_UNITS=${WEB_RELEASE_CODEGEN_UNITS:-16}" \
-      --build-arg "LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=$lightyear_matchmaker_manifest_sha" \
-      -f .edgegap-build/context/lightrider/deploy/Dockerfile.matchmaker \
-      -t "$image" \
-      .edgegap-build/context
-    echo "$image" > .edgegap-build/matchmaker-image.txt
-    echo "Built $image"
+    deploy/build_image.sh matchmaker {{ args }}
 
+# Push only the matchmaker/control image for an already-built tag.
 matchmaker-push tag=edgegap-default-tag: edgegap-login
     #!/usr/bin/env bash
     set -euo pipefail
@@ -320,11 +145,25 @@ matchmaker-push tag=edgegap-default-tag: edgegap-login
     podman push "$image"
     echo "Pushed $image"
 
+# Build only the static browser client image: nginx + WASM/assets.
+webclient-build *args: edgegap-context
+    deploy/build_image.sh webclient {{ args }}
+
+# Push only the static browser client image for an already-built tag.
+webclient-push tag=edgegap-default-tag: edgegap-login
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source secrets/edgegap.env
+    image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-webclient:{{ tag }}"
+    podman push "$image"
+    echo "Pushed $image"
+
 matchmaker-build-push *args:
     #!/usr/bin/env bash
     set -euo pipefail
     tag="{{ edgegap-default-tag }}"
     build_memory=""
+    build_memory_swap=""
     build_cpus=""
     build_cpu_quota=""
     build_cpuset_cpus=""
@@ -334,6 +173,8 @@ matchmaker-build-push *args:
         tag=*) tag="${arg#tag=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
         build_memory=*) build_memory="${arg#build_memory=}" ;;
+        memory_swap=*) build_memory_swap="${arg#memory_swap=}" ;;
+        build_memory_swap=*) build_memory_swap="${arg#build_memory_swap=}" ;;
         cpus=*) build_cpus="${arg#cpus=}" ;;
         build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
         cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
@@ -356,13 +197,60 @@ matchmaker-build-push *args:
           ;;
       esac
     done
-    just matchmaker-build tag="$tag" memory="$build_memory" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
+    just matchmaker-build tag="$tag" memory="$build_memory" memory_swap="$build_memory_swap" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
     just matchmaker-push "$tag"
 
+webclient-build-push *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{ edgegap-default-tag }}"
+    build_memory=""
+    build_memory_swap=""
+    build_cpus=""
+    build_cpu_quota=""
+    build_cpuset_cpus=""
+    positional=0
+    for arg in {{ args }}; do
+      case "$arg" in
+        tag=*) tag="${arg#tag=}" ;;
+        memory=*) build_memory="${arg#memory=}" ;;
+        build_memory=*) build_memory="${arg#build_memory=}" ;;
+        memory_swap=*) build_memory_swap="${arg#memory_swap=}" ;;
+        build_memory_swap=*) build_memory_swap="${arg#build_memory_swap=}" ;;
+        cpus=*) build_cpus="${arg#cpus=}" ;;
+        build_cpus=*) build_cpus="${arg#build_cpus=}" ;;
+        cpu_quota=*) build_cpu_quota="${arg#cpu_quota=}" ;;
+        build_cpu_quota=*) build_cpu_quota="${arg#build_cpu_quota=}" ;;
+        cpuset_cpus=*) build_cpuset_cpus="${arg#cpuset_cpus=}" ;;
+        build_cpuset_cpus=*) build_cpuset_cpus="${arg#build_cpuset_cpus=}" ;;
+        *)
+          case "$positional" in
+            0) tag="$arg" ;;
+            1) build_memory="$arg" ;;
+            2) build_cpus="$arg" ;;
+            3) build_cpu_quota="$arg" ;;
+            4) build_cpuset_cpus="$arg" ;;
+            *)
+              echo "unexpected extra argument: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
+    just webclient-build tag="$tag" memory="$build_memory" memory_swap="$build_memory_swap" cpus="$build_cpus" cpu_quota="$build_cpu_quota" cpuset_cpus="$build_cpuset_cpus"
+    just webclient-push "$tag"
+
+# Common build limit kwargs are forwarded to each image build.
+# Build all production images locally: game server, matchmaker, and web client.
 prod-images-build *args:
     just edgegap-build {{ args }}
     just matchmaker-build {{ args }}
+    just webclient-build {{ args }}
 
+# Build-resource kwargs are accepted and ignored for build-push arg reuse.
+# Push all production images for a tag.
 prod-images-push *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -371,7 +259,7 @@ prod-images-push *args:
     for arg in {{ args }}; do
       case "$arg" in
         tag=*) tag="${arg#tag=}" ;;
-        memory=*|build_memory=*|cpus=*|build_cpus=*|cpu_quota=*|build_cpu_quota=*|cpuset_cpus=*|build_cpuset_cpus=*)
+        memory=*|build_memory=*|memory_swap=*|build_memory_swap=*|cpus=*|build_cpus=*|cpu_quota=*|build_cpu_quota=*|cpuset_cpus=*|build_cpuset_cpus=*)
           ;;
         *)
           case "$positional" in
@@ -388,7 +276,9 @@ prod-images-push *args:
     done
     just edgegap-push "$tag"
     just matchmaker-push "$tag"
+    just webclient-push "$tag"
 
+# Build then push all production images.
 prod-images-build-push *args:
     just prod-images-build {{ args }}
     just prod-images-push {{ args }}

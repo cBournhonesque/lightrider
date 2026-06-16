@@ -91,6 +91,12 @@ pub struct PlayerNameUpdate {
 #[derive(Message, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayerSpawnRequest;
 
+#[derive(Message, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClientViewportUpdate {
+    pub max_screen_width: u32,
+    pub max_screen_height: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

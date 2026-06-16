@@ -1,0 +1,109 @@
+FROM rustlang/rust:nightly-bookworm AS chef
+
+ARG CARGO_CHEF_VERSION=0.1.77
+
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    RUSTUP_USE_CURL=1
+
+COPY host-ca-certificates.crt /tmp/host-ca-certificates.crt
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        lld \
+        libasound2-dev \
+        libudev-dev \
+        libwayland-dev \
+        libx11-dev \
+        libxcursor-dev \
+        libxi-dev \
+        libxinerama-dev \
+        libxkbcommon-dev \
+        libxrandr-dev \
+        pkg-config && \
+    if [ -s /tmp/host-ca-certificates.crt ]; then \
+        cat /tmp/host-ca-certificates.crt >> /etc/ssl/certs/ca-certificates.crt; \
+    fi && \
+    rm -rf /var/lib/apt/lists/* && \
+    CARGO_BUILD_JOBS=1 cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
+
+WORKDIR /src/lightrider
+
+FROM chef AS planner
+
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+COPY lightrider /src/lightrider
+
+RUN cargo chef prepare --recipe-path /tmp/lightrider-web-recipe.json
+
+FROM chef AS builder
+
+ARG WEB_CARGO_JOBS=1
+ARG WEB_CARGO_INCREMENTAL=0
+ARG WEB_RELEASE_OPT_LEVEL=1
+ARG WEB_RELEASE_LTO=false
+ARG WEB_RELEASE_CODEGEN_UNITS=16
+
+RUN rustup target add wasm32-unknown-unknown && \
+    CARGO_BUILD_JOBS=1 cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
+COPY --from=planner /tmp/lightrider-web-recipe.json /tmp/lightrider-web-recipe.json
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+
+RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${WEB_RELEASE_CODEGEN_UNITS}" \
+    cargo chef cook --release -j "${WEB_CARGO_JOBS}" \
+        --recipe-path /tmp/lightrider-web-recipe.json \
+        --package web_client \
+        --features lightyear-matchmaker \
+        --bin lightrider-web \
+        --target wasm32-unknown-unknown
+
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+COPY lightrider /src/lightrider
+
+RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${WEB_RELEASE_CODEGEN_UNITS}" \
+    cargo build --release -j "${WEB_CARGO_JOBS}" \
+        --package web_client \
+        --features lightyear-matchmaker \
+        --bin lightrider-web \
+        --target wasm32-unknown-unknown && \
+    mkdir -p /tmp/lightrider-web/pkg && \
+    wasm-bindgen \
+        --target web \
+        --out-dir /tmp/lightrider-web/pkg \
+        /src/lightrider/target/wasm32-unknown-unknown/release/lightrider-web.wasm && \
+    cp /src/lightrider/web/index.html /tmp/lightrider-web/index.html && \
+    mkdir -p /tmp/lightrider-web/assets && \
+    cp -R /src/lightrider/assets/. /tmp/lightrider-web/assets/ && \
+    rm -rf /src/lightrider/target /usr/local/cargo/git /usr/local/cargo/registry
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        nginx && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /tmp/lightrider-web /usr/share/nginx/html
+COPY lightrider/deploy/webclient-container-entrypoint.sh /app/webclient-container-entrypoint.sh
+
+EXPOSE 8080/tcp
+
+ENTRYPOINT ["/app/webclient-container-entrypoint.sh"]

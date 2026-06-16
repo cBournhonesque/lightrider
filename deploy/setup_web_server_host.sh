@@ -6,9 +6,9 @@ usage() {
 Usage:
   setup_web_server_host.sh --env-file /path/to/web-server.env [options]
 
-Installs and starts the Lightrider matchmaker/control container on a Debian
-VPS host. The container bundles NATS, nginx, the WASM client, and
-lightyear_matchmaker_server.
+Installs and starts the Lightrider control stack on a Debian VPS host.
+The stack has separate matchmaker/NATS, web-client, and optional static
+game-server containers.
 
 Options:
   --env-file PATH       Shell env file containing Edgegap, registry, NATS, and netcode settings.
@@ -24,6 +24,7 @@ Required env:
   NATS_USER
   NATS_PASSWORD
   LIGHTRIDER_MATCHMAKER_IMAGE or EDGEGAP_REGISTRY_URL/PROJECT plus LIGHTRIDER_MATCHMAKER_TAG
+  LIGHTRIDER_WEBCLIENT_IMAGE or EDGEGAP_REGISTRY_URL/PROJECT plus LIGHTRIDER_MATCHMAKER_TAG
   EDGEGAP_API_KEY or EDGEGAP_API_TOKEN when LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE=edgegap
 
 Useful optional env:
@@ -35,6 +36,7 @@ Useful optional env:
   LIGHTRIDER_WEB_DOMAIN=play.example.com
   LIGHTRIDER_WEB_UPSTREAM_PORT=8080
   LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT=8080
+  LIGHTRIDER_MATCHMAKER_PUBLIC_PORT=3000
   LIGHTRIDER_MATCHMAKER_ROUTE=edgegap
   LIGHTRIDER_CADDY_EMAIL=admin@example.com
   MATCHMAKER_CORS=http://<public-ip-or-domain>
@@ -51,6 +53,7 @@ Useful optional env:
   GAMEFLOW_MODE=fleet
   LIGHTRIDER_RUN_STATIC_SERVER=1
   LIGHTRIDER_MANAGE_STATIC_SERVER=1
+  LIGHTRIDER_WEBCLIENT_IMAGE=<registry>/<project>/lightrider-webclient:<tag>
   LIGHTRIDER_STATIC_SERVER_IMAGE=<registry>/<project>/lightrider-server:<tag>
   LIGHTRIDER_STATIC_PUBLIC_IP=<public-ip>
   LIGHTRIDER_STATIC_PORT=7777
@@ -151,6 +154,7 @@ LIGHTRIDER_ENABLE_HTTPS="${LIGHTRIDER_ENABLE_HTTPS:-0}"
 LIGHTRIDER_WEB_UPSTREAM_PORT="${LIGHTRIDER_WEB_UPSTREAM_PORT:-8080}"
 LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT="${LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT:-8080}"
 LIGHTRIDER_WEB_PUBLIC_PORT="${LIGHTRIDER_WEB_PUBLIC_PORT:-80}"
+LIGHTRIDER_MATCHMAKER_PUBLIC_PORT="${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT:-3000}"
 LIGHTRIDER_MATCHMAKER_ROUTE="${LIGHTRIDER_MATCHMAKER_ROUTE:-}"
 LIGHTRIDER_NATS_PUBLIC_PORT="${LIGHTRIDER_NATS_PUBLIC_PORT:-4222}"
 LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT="${LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT:-8222}"
@@ -190,27 +194,37 @@ if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" && -z "$LIGHTRIDER_WEB_DOMAIN" ]]; then
   exit 1
 fi
 
+if command -v curl >/dev/null 2>&1; then
+  public_ip="$(curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
+else
+  public_ip="$(hostname -I | awk '{print $1}')"
+fi
+LIGHTRIDER_STATIC_PUBLIC_IP="${LIGHTRIDER_STATIC_PUBLIC_IP:-$public_ip}"
+
 if [[ -z "${MATCHMAKER_CORS:-}" ]]; then
   if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
     MATCHMAKER_CORS="https://${LIGHTRIDER_WEB_DOMAIN}"
   else
-    if command -v curl >/dev/null 2>&1; then
-      public_ip="$(curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
-    else
-      public_ip="$(hostname -I | awk '{print $1}')"
-    fi
     MATCHMAKER_CORS="http://${public_ip}"
   fi
 fi
-if [[ -z "${LIGHTRIDER_MATCHMAKER_URL:-}" && "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
-  LIGHTRIDER_MATCHMAKER_URL="wss://${LIGHTRIDER_WEB_DOMAIN}/matchmaker/ws"
+if [[ -z "${LIGHTRIDER_MATCHMAKER_URL:-}" ]]; then
+  if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+    LIGHTRIDER_MATCHMAKER_URL="wss://${LIGHTRIDER_WEB_DOMAIN}/matchmaker/ws"
+  else
+    LIGHTRIDER_MATCHMAKER_URL="ws://${LIGHTRIDER_STATIC_PUBLIC_IP}:${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT}/ws"
+  fi
 fi
-LIGHTRIDER_STATIC_PUBLIC_IP="${LIGHTRIDER_STATIC_PUBLIC_IP:-${public_ip:-$(hostname -I | awk '{print $1}')}}"
 
 if [[ -z "${LIGHTRIDER_MATCHMAKER_IMAGE:-}" ]]; then
   : "${EDGEGAP_REGISTRY_URL:?EDGEGAP_REGISTRY_URL is required when LIGHTRIDER_MATCHMAKER_IMAGE is unset}"
   : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT is required when LIGHTRIDER_MATCHMAKER_IMAGE is unset}"
   LIGHTRIDER_MATCHMAKER_IMAGE="${EDGEGAP_REGISTRY_URL}/${EDGEGAP_REGISTRY_PROJECT}/lightrider-matchmaker:${LIGHTRIDER_MATCHMAKER_TAG}"
+fi
+if [[ -z "${LIGHTRIDER_WEBCLIENT_IMAGE:-}" ]]; then
+  : "${EDGEGAP_REGISTRY_URL:?EDGEGAP_REGISTRY_URL is required when LIGHTRIDER_WEBCLIENT_IMAGE is unset}"
+  : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT is required when LIGHTRIDER_WEBCLIENT_IMAGE is unset}"
+  LIGHTRIDER_WEBCLIENT_IMAGE="${EDGEGAP_REGISTRY_URL}/${EDGEGAP_REGISTRY_PROJECT}/lightrider-webclient:${LIGHTRIDER_MATCHMAKER_TAG}"
 fi
 if [[ -z "${LIGHTRIDER_STATIC_SERVER_IMAGE:-}" ]]; then
   : "${EDGEGAP_REGISTRY_URL:?EDGEGAP_REGISTRY_URL is required when LIGHTRIDER_STATIC_SERVER_IMAGE is unset}"
@@ -224,6 +238,7 @@ required_vars=(
   NATS_USER
   NATS_PASSWORD
   LIGHTRIDER_MATCHMAKER_IMAGE
+  LIGHTRIDER_WEBCLIENT_IMAGE
 )
 if [[ "$LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE" == "edgegap" ]]; then
   required_vars+=(EDGEGAP_API_KEY)
@@ -291,6 +306,7 @@ fi
 
 if [[ "$pull_image" == 1 ]]; then
   podman pull "$LIGHTRIDER_MATCHMAKER_IMAGE"
+  podman pull "$LIGHTRIDER_WEBCLIENT_IMAGE"
   if [[ "$manage_static_server" == 1 && "$run_static_server" == 1 ]]; then
     podman pull "$LIGHTRIDER_STATIC_SERVER_IMAGE"
   fi
@@ -378,6 +394,22 @@ for required_runtime_key in \
   require_env_file_value "$runtime_env" "$required_runtime_key"
 done
 
+web_service_name="lightrider-webclient"
+web_runtime_env="/etc/lightrider/${web_service_name}.env"
+cat > "$web_runtime_env" <<EOF
+LIGHTRIDER_MATCHMAKER_GAME=$LIGHTRIDER_MATCHMAKER_GAME
+LIGHTRIDER_MATCHMAKER_VERSION=$LIGHTRIDER_MATCHMAKER_VERSION
+LIGHTRIDER_MATCHMAKER_URL=$LIGHTRIDER_MATCHMAKER_URL
+WEB_PORT=8080
+EOF
+chmod 600 "$web_runtime_env"
+for required_web_key in \
+  LIGHTRIDER_MATCHMAKER_GAME \
+  LIGHTRIDER_MATCHMAKER_VERSION \
+  LIGHTRIDER_MATCHMAKER_URL; do
+  require_env_file_value "$web_runtime_env" "$required_web_key"
+done
+
 static_runtime_env="/etc/lightrider/lightrider-static-server.env"
 if [[ "$manage_static_server" == 1 && "$run_static_server" == 1 ]]; then
   if [[ -n "${NATS_TLS_CERT:-}" && -n "${NATS_TLS_KEY:-}" ]]; then
@@ -433,9 +465,9 @@ EOF
 fi
 
 service_file="/etc/systemd/system/${service_name}.service"
-web_publish="-p ${LIGHTRIDER_WEB_PUBLIC_PORT}:8080"
+matchmaker_publish="-p ${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT}:3000"
 if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
-  web_publish="-p 127.0.0.1:${LIGHTRIDER_WEB_UPSTREAM_PORT}:8080"
+  matchmaker_publish="-p 127.0.0.1:${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT}:3000"
 fi
 nats_publish="-p ${LIGHTRIDER_NATS_PUBLIC_PORT}:4222"
 nats_monitor_publish="-p 127.0.0.1:${LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT}:8222"
@@ -454,13 +486,41 @@ TimeoutStopSec=30
 ExecStartPre=-/usr/bin/podman rm -f $service_name
 ExecStart=/usr/bin/podman run --name $service_name \\
   --env-file $runtime_env \\
-  $web_publish \\
+  $matchmaker_publish \\
   $nats_publish \\
   $nats_monitor_publish \\
   -v $LIGHTRIDER_NATS_STORE_HOST_DIR:/data/nats \\
   -v /etc/lightrider:/etc/lightrider:ro \\
   \${LIGHTRIDER_MATCHMAKER_IMAGE}
 ExecStop=/usr/bin/podman stop -t 20 $service_name
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+web_service_file="/etc/systemd/system/${web_service_name}.service"
+web_publish="-p ${LIGHTRIDER_WEB_PUBLIC_PORT}:8080"
+if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+  web_publish="-p 127.0.0.1:${LIGHTRIDER_WEB_UPSTREAM_PORT}:8080"
+fi
+cat > "$web_service_file" <<EOF
+[Unit]
+Description=Lightrider web client
+Wants=network-online.target ${service_name}.service
+After=network-online.target ${service_name}.service
+
+[Service]
+Environment=LIGHTRIDER_WEBCLIENT_IMAGE=$LIGHTRIDER_WEBCLIENT_IMAGE
+EnvironmentFile=$web_runtime_env
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+ExecStartPre=-/usr/bin/podman rm -f $web_service_name
+ExecStart=/usr/bin/podman run --name $web_service_name \\
+  --env-file $web_runtime_env \\
+  $web_publish \\
+  \${LIGHTRIDER_WEBCLIENT_IMAGE}
+ExecStop=/usr/bin/podman stop -t 20 $web_service_name
 
 [Install]
 WantedBy=multi-user.target
@@ -514,19 +574,28 @@ if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
   install -d -m 755 /etc/caddy/lightrider-routes
   : > /etc/caddy/lightrider-routes/00-empty.caddy
   if [[ -n "$LIGHTRIDER_MATCHMAKER_ROUTE" ]]; then
-    route_file="/etc/caddy/lightrider-routes/${service_name}.caddy"
+    route_file="/etc/caddy/lightrider-routes/10-${service_name}-${LIGHTRIDER_MATCHMAKER_ROUTE}.caddy"
     cat > "$route_file" <<EOF
 handle /matchmaker/${LIGHTRIDER_MATCHMAKER_ROUTE}/* {
-    uri replace /matchmaker/${LIGHTRIDER_MATCHMAKER_ROUTE}/ /matchmaker/
-    reverse_proxy 127.0.0.1:${LIGHTRIDER_WEB_UPSTREAM_PORT}
+    uri strip_prefix /matchmaker/${LIGHTRIDER_MATCHMAKER_ROUTE}
+    reverse_proxy 127.0.0.1:${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT}
 }
 EOF
   fi
+  default_matchmaker_route_file="/etc/caddy/lightrider-routes/90-${service_name}-default.caddy"
+  cat > "$default_matchmaker_route_file" <<EOF
+handle /matchmaker/* {
+    uri strip_prefix /matchmaker
+    reverse_proxy 127.0.0.1:${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT}
+}
+EOF
   cat > /etc/caddy/Caddyfile <<EOF
 ${caddy_global}${LIGHTRIDER_WEB_DOMAIN} {
     encode zstd gzip
     import /etc/caddy/lightrider-routes/*.caddy
-    reverse_proxy 127.0.0.1:${LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT}
+    handle {
+        reverse_proxy 127.0.0.1:${LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT}
+    }
 }
 EOF
   systemctl enable caddy
@@ -534,12 +603,14 @@ fi
 
 systemctl daemon-reload
 systemctl enable "$service_name"
+systemctl enable "$web_service_name"
 if [[ "$manage_static_server" == 1 && "$run_static_server" == 1 ]]; then
   systemctl enable "$static_service_name"
 fi
 
 if [[ "$start_service" == 1 ]]; then
   systemctl restart "$service_name"
+  systemctl restart "$web_service_name"
   if [[ "$manage_static_server" == 1 && "$run_static_server" == 1 ]]; then
     systemctl restart "$static_service_name"
   fi
@@ -548,6 +619,7 @@ if [[ "$start_service" == 1 ]]; then
   fi
   sleep 2
   systemctl --no-pager --full status "$service_name" || true
+  systemctl --no-pager --full status "$web_service_name" || true
   if [[ "$manage_static_server" == 1 && "$run_static_server" == 1 ]]; then
     systemctl --no-pager --full status "$static_service_name" || true
   fi
@@ -572,6 +644,7 @@ if [[ "$start_service" == 1 ]]; then
     echo
     echo "Recent service logs:"
     journalctl -u "$service_name" -n 120 --no-pager || true
+    journalctl -u "$web_service_name" -n 120 --no-pager || true
     if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
       journalctl -u caddy -n 120 --no-pager || true
     fi
@@ -584,15 +657,19 @@ Lightrider control host setup complete.
 
 Service:
   systemctl status $service_name --no-pager
+  systemctl status $web_service_name --no-pager
   journalctl -u $service_name -f
+  journalctl -u $web_service_name -f
 
 Container logs:
   podman logs $service_name
+  podman logs $web_service_name
   podman exec $service_name tail -n 200 /var/log/nats.log
   podman exec $service_name tail -n 200 /var/log/lightyear_matchmaker_server.log
 
 Published host ports:
-  $([[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]] && echo "80/tcp, 443/tcp  Caddy HTTPS web client + /matchmaker/ws" || echo "${LIGHTRIDER_WEB_PUBLIC_PORT}/tcp    web client + /matchmaker/ws")
+  $([[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]] && echo "80/tcp, 443/tcp  Caddy HTTPS web client + /matchmaker/ws" || echo "${LIGHTRIDER_WEB_PUBLIC_PORT}/tcp    web client")
+  ${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT}/tcp  matchmaker WebSocket $([[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]] && echo "(bound to localhost behind Caddy)" || echo "(direct browser endpoint)")
   ${LIGHTRIDER_NATS_PUBLIC_PORT}/tcp  NATS for game servers
   ${LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT}/tcp  NATS monitoring bound to localhost only
   $([[ "$manage_static_server" == 1 && "$run_static_server" == 1 ]] && echo "${LIGHTRIDER_STATIC_PORT}/udp  static Lightrider game server" || echo "${LIGHTRIDER_STATIC_PORT}/udp  static Lightrider game server not managed by this service")
@@ -602,16 +679,18 @@ Public web URL:
 
 Matchmaker image:
   $LIGHTRIDER_MATCHMAKER_IMAGE
+Web-client image:
+  $LIGHTRIDER_WEBCLIENT_IMAGE
 Static server image:
   $LIGHTRIDER_STATIC_SERVER_IMAGE
 Matchmaker route:
-  $(if [[ -n "$LIGHTRIDER_MATCHMAKER_ROUTE" ]]; then
-      if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
-        echo "wss://${LIGHTRIDER_WEB_DOMAIN}/matchmaker/${LIGHTRIDER_MATCHMAKER_ROUTE}/ws"
-      else
-        echo "ws://${LIGHTRIDER_STATIC_PUBLIC_IP}:${LIGHTRIDER_WEB_PUBLIC_PORT}/matchmaker/${LIGHTRIDER_MATCHMAKER_ROUTE}/ws"
-      fi
+  $(if [[ -n "$LIGHTRIDER_MATCHMAKER_ROUTE" && "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+      echo "wss://${LIGHTRIDER_WEB_DOMAIN}/matchmaker/${LIGHTRIDER_MATCHMAKER_ROUTE}/ws"
     else
-      echo "default /matchmaker/ws"
+      if [[ "$LIGHTRIDER_ENABLE_HTTPS" == "1" ]]; then
+        echo "wss://${LIGHTRIDER_WEB_DOMAIN}/matchmaker/ws"
+      else
+        echo "ws://${LIGHTRIDER_STATIC_PUBLIC_IP}:${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT}/ws"
+      fi
     fi)
 EOF

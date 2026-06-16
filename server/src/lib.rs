@@ -15,6 +15,7 @@ mod bots;
 pub(crate) mod collision;
 mod debug;
 mod food;
+mod interest;
 mod leaderboard;
 #[cfg(feature = "lightyear-matchmaker")]
 mod matchmaker;
@@ -97,6 +98,7 @@ pub async fn app(cli: Cli) -> App {
 
     // rooms
     app.add_plugins(rooms::ServerRoomsPlugin);
+    app.add_plugins(interest::InterestPlugin);
     #[cfg(feature = "lightyear-matchmaker")]
     if cli.matchmaker {
         app.add_plugins(matchmaker::LightriderMatchmakerMetricsPlugin);

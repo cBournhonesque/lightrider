@@ -198,11 +198,7 @@ fn smoothing_factor(smoothing: f32, delta_seconds: f32) -> f32 {
 }
 
 fn normal_camera_scale_for_tail(config: &GameConfig, tail_length: &TailLength) -> f32 {
-    let min_scale = config.render.normal_camera_scale.max(0.1);
-    let max_scale = config.render.normal_camera_max_scale.max(min_scale);
-    let growth = (tail_length.current_size - config.movement.starting_tail_length).max(0.0);
-    (min_scale + growth * config.render.normal_camera_growth_per_tail_length.max(0.0))
-        .clamp(min_scale, max_scale)
+    config.normal_camera_scale_for_tail_length(tail_length.current_size)
 }
 
 impl CameraShake {

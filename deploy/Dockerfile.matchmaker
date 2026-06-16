@@ -14,7 +14,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         clang \
-        curl \
         lld \
         libasound2-dev \
         libudev-dev \
@@ -41,14 +40,10 @@ ARG LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=unknown
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
 COPY bevy_replicon /src/bevy_replicon
-COPY lightrider /src/lightrider
 
 WORKDIR /src/lightyear-matchmaker
 RUN printf '%s\n' "${LIGHTYEAR_MATCHMAKER_MANIFEST_SHA}" > /tmp/lightyear-matchmaker-manifest-sha && \
     cargo chef prepare --recipe-path /tmp/lightyear-matchmaker-recipe.json
-
-WORKDIR /src/lightrider
-RUN cargo chef prepare --recipe-path /tmp/lightrider-web-recipe.json
 
 FROM chef AS builder
 
@@ -57,17 +52,8 @@ ARG MATCHMAKER_CARGO_INCREMENTAL=0
 ARG MATCHMAKER_RELEASE_OPT_LEVEL=2
 ARG MATCHMAKER_RELEASE_LTO=thin
 ARG MATCHMAKER_RELEASE_CODEGEN_UNITS=8
-ARG WEB_CARGO_JOBS=1
-ARG WEB_CARGO_INCREMENTAL=0
-ARG WEB_RELEASE_OPT_LEVEL=1
-ARG WEB_RELEASE_LTO=false
-ARG WEB_RELEASE_CODEGEN_UNITS=16
-
-RUN rustup target add wasm32-unknown-unknown && \
-    CARGO_BUILD_JOBS=1 cargo install wasm-bindgen-cli --version 0.2.122 --locked
 
 COPY --from=planner /tmp/lightyear-matchmaker-recipe.json /tmp/lightyear-matchmaker-recipe.json
-COPY --from=planner /tmp/lightrider-web-recipe.json /tmp/lightrider-web-recipe.json
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
 COPY bevy_replicon /src/bevy_replicon
@@ -83,23 +69,9 @@ RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
         --recipe-path /tmp/lightyear-matchmaker-recipe.json \
         --package lightyear_matchmaker_server
 
-WORKDIR /src/lightrider
-RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
-    CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
-    CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
-    CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${WEB_RELEASE_CODEGEN_UNITS}" \
-    cargo chef cook --release -j "${WEB_CARGO_JOBS}" \
-        --recipe-path /tmp/lightrider-web-recipe.json \
-        --package web_client \
-        --features lightyear-matchmaker \
-        --bin lightrider-web \
-        --target wasm32-unknown-unknown
-
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
 COPY bevy_replicon /src/bevy_replicon
-COPY lightrider /src/lightrider
 
 WORKDIR /src/lightyear-matchmaker
 RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
@@ -112,44 +84,22 @@ RUN CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
         --package lightyear_matchmaker_server \
         --bin lightyear_matchmaker_server && \
     cp /src/lightyear-matchmaker/target/release/lightyear_matchmaker_server /tmp/lightyear_matchmaker_server
-
-WORKDIR /src/lightrider
-RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
-    CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
-    CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
-    CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${WEB_RELEASE_CODEGEN_UNITS}" \
-    cargo build --release -j "${WEB_CARGO_JOBS}" \
-        --package web_client \
-        --features lightyear-matchmaker \
-        --bin lightrider-web \
-        --target wasm32-unknown-unknown && \
-    mkdir -p /tmp/lightrider-web/pkg && \
-    wasm-bindgen \
-        --target web \
-        --out-dir /tmp/lightrider-web/pkg \
-        /src/lightrider/target/wasm32-unknown-unknown/release/lightrider-web.wasm && \
-    cp /src/lightrider/web/index.html /tmp/lightrider-web/index.html && \
-    mkdir -p /tmp/lightrider-web/assets && \
-    cp -R /src/lightrider/assets/. /tmp/lightrider-web/assets/ && \
-    rm -rf /src/lightrider/target /src/lightyear-matchmaker/target /usr/local/cargo/git /usr/local/cargo/registry
+RUN rm -rf /src/lightyear-matchmaker/target /usr/local/cargo/git /usr/local/cargo/registry
 
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
-        curl \
-        nginx && \
+        curl && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=nats /nats-server /app/nats-server
 COPY --from=builder /tmp/lightyear_matchmaker_server /app/lightyear_matchmaker_server
-COPY --from=builder /tmp/lightrider-web /usr/share/nginx/html
 COPY lightrider/deploy/matchmaker-container-entrypoint.sh /app/matchmaker-container-entrypoint.sh
 
-EXPOSE 8080/tcp
+EXPOSE 3000/tcp
 EXPOSE 4222/tcp
 EXPOSE 8222/tcp
 

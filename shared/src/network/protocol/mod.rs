@@ -70,6 +70,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<messages::room::PlayerSpawnRequest>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<messages::room::ClientViewportUpdate>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<messages::admin::AdminLoginRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<messages::admin::AdminCommand>()

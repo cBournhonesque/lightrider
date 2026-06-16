@@ -6,11 +6,15 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 import statistics
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+
+
+FIELD_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([-+0-9.eE]+)")
 
 
 def parse_float(value: str | None) -> float | None:
@@ -121,6 +125,95 @@ def summarize_network(rows: list[dict[str, str]]) -> list[str]:
             f"avg_rx={fmt_mbps(avg_rx)} avg_tx={fmt_mbps(avg_tx)} "
             f"peak_rx={fmt_mbps(max_rx)} peak_tx={fmt_mbps(max_tx)}"
         )
+    return lines
+
+
+def summarize_interest_logs(run_dir: Path) -> list[str]:
+    samples = 0
+    food_visible = 0.0
+    food_total = 0.0
+    remote_snakes_visible = 0.0
+    remote_snakes_total = 0.0
+
+    for path in sorted(run_dir.glob("server*.log")):
+        with path.open(errors="replace") as handle:
+            for line in handle:
+                if "interest visibility sample" not in line:
+                    continue
+                fields = {
+                    key: parse_float(value)
+                    for key, value in FIELD_RE.findall(line)
+                }
+                sample_count = int(fields.get("samples") or 0)
+                if sample_count <= 0:
+                    continue
+                samples += sample_count
+                food_visible += sample_count * (fields.get("food_visible_avg") or 0.0)
+                food_total += sample_count * (fields.get("food_total_avg") or 0.0)
+                remote_snakes_visible += sample_count * (
+                    fields.get("remote_snakes_visible_avg") or 0.0
+                )
+                remote_snakes_total += sample_count * (
+                    fields.get("remote_snakes_total_avg") or 0.0
+                )
+
+    json_samples = 0
+    json_food_visible = 0.0
+    json_food_total = 0.0
+    json_remote_snakes_visible = 0.0
+    json_remote_snakes_total = 0.0
+    for path in sorted(run_dir.rglob("*.ndjson")):
+        with path.open(errors="replace") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("kind") != "interest_visibility_sample":
+                    continue
+                fields = event.get("fields", {})
+                sample_count = int(field_number(event, "samples") or 0)
+                if sample_count <= 0:
+                    continue
+                json_samples += sample_count
+                json_food_visible += sample_count * (
+                    field_number({"fields": fields}, "food_visible_avg") or 0.0
+                )
+                json_food_total += sample_count * (
+                    field_number({"fields": fields}, "food_total_avg") or 0.0
+                )
+                json_remote_snakes_visible += sample_count * (
+                    field_number({"fields": fields}, "remote_snakes_visible_avg") or 0.0
+                )
+                json_remote_snakes_total += sample_count * (
+                    field_number({"fields": fields}, "remote_snakes_total_avg") or 0.0
+                )
+    if json_samples:
+        samples = json_samples
+        food_visible = json_food_visible
+        food_total = json_food_total
+        remote_snakes_visible = json_remote_snakes_visible
+        remote_snakes_total = json_remote_snakes_total
+
+    lines = ["Interest visibility:"]
+    if samples == 0:
+        lines.append("  No interest visibility samples found.")
+        return lines
+
+    food_percent = 100.0 if food_total <= 0.0 else food_visible * 100.0 / food_total
+    remote_snake_percent = (
+        100.0
+        if remote_snakes_total <= 0.0
+        else remote_snakes_visible * 100.0 / remote_snakes_total
+    )
+    lines.append(
+        f"  client_samples={samples} "
+        f"food_visible={food_percent:.1f}% "
+        f"avg_food_visible={food_visible / samples:.1f}/{food_total / samples:.1f} "
+        f"remote_snakes_visible={remote_snake_percent:.1f}% "
+        f"avg_remote_snakes_visible={remote_snakes_visible / samples:.1f}/"
+        f"{remote_snakes_total / samples:.1f}"
+    )
     return lines
 
 
@@ -420,6 +513,8 @@ def main() -> int:
     lines.extend(summarize_processes(read_csv(run_dir / "process_metrics.csv")))
     lines.append("")
     lines.extend(summarize_network(read_csv(run_dir / "network_metrics.csv")))
+    lines.append("")
+    lines.extend(summarize_interest_logs(run_dir))
     lines.append("")
     lines.extend(summarize_traces(run_dir))
     output = "\n".join(lines)

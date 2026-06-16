@@ -78,6 +78,7 @@ fn predict_food_boosts(
             &SnakeHead,
             &RoomId,
             &mut FoodBoost,
+            &mut TailLength,
             &mut RecentlyBoostedFromFood,
         ),
         With<Predicted>,
@@ -93,7 +94,7 @@ fn predict_food_boosts(
         .collect::<Vec<_>>();
     let food_index = FoodSpatialIndex::from_food(candidates.iter().copied());
 
-    for (snake, head, room, mut food_boost, mut recently_boosted) in &mut snakes {
+    for (snake, head, room, mut food_boost, mut tail_length, mut recently_boosted) in &mut snakes {
         recently_boosted.retain_known_food(&candidates);
         let near_food = food_index.within_radius(*room, head.position, config.food.radius);
         if let Some(food) = predict_food_boost_for_snake(
@@ -101,6 +102,7 @@ fn predict_food_boosts(
             head.position,
             *room,
             &mut food_boost,
+            &mut tail_length,
             &mut recently_boosted,
             near_food,
         ) {
@@ -125,6 +127,7 @@ fn predict_food_boost_for_snake(
     head: Vec2,
     room: RoomId,
     food_boost: &mut FoodBoost,
+    tail_length: &mut TailLength,
     recently_boosted: &mut RecentlyBoostedFromFood,
     foods: impl IntoIterator<Item = FoodPoint>,
 ) -> Option<Entity> {
@@ -139,6 +142,7 @@ fn predict_food_boost_for_snake(
         }
         recently_boosted.push(food.entity);
         food_boost.0 += food_boost_acceleration;
+        tail_length.target_size += config.food.tail_growth;
         return Some(food.entity);
     }
     None
@@ -171,6 +175,10 @@ mod tests {
         let food = Entity::from_bits(42);
         let mut recently_boosted = RecentlyBoostedFromFood::default();
         let mut food_boost = FoodBoost::default();
+        let mut tail_length = TailLength {
+            current_size: config.movement.starting_tail_length,
+            target_size: config.movement.starting_tail_length,
+        };
         let candidate = FoodPoint {
             entity: food,
             position: Vec2::new(config.food.radius * 0.5, 0.0),
@@ -183,6 +191,7 @@ mod tests {
                 Vec2::ZERO,
                 RoomId(7),
                 &mut food_boost,
+                &mut tail_length,
                 &mut recently_boosted,
                 [candidate],
             ),
@@ -192,6 +201,10 @@ mod tests {
             food_boost,
             FoodBoost(GameConfig::default().movement.food_boost_acceleration)
         );
+        assert_eq!(
+            tail_length.target_size,
+            config.movement.starting_tail_length + config.food.tail_growth
+        );
 
         assert_eq!(
             predict_food_boost_for_snake(
@@ -199,6 +212,7 @@ mod tests {
                 Vec2::ZERO,
                 RoomId(7),
                 &mut food_boost,
+                &mut tail_length,
                 &mut recently_boosted,
                 [candidate],
             ),
@@ -208,6 +222,10 @@ mod tests {
             food_boost,
             FoodBoost(GameConfig::default().movement.food_boost_acceleration)
         );
+        assert_eq!(
+            tail_length.target_size,
+            config.movement.starting_tail_length + config.food.tail_growth
+        );
     }
 
     #[test]
@@ -215,6 +233,7 @@ mod tests {
         let config = GameConfig::default();
         let mut recently_boosted = RecentlyBoostedFromFood::default();
         let mut food_boost = FoodBoost::default();
+        let mut tail_length = TailLength::default();
 
         assert_eq!(
             predict_food_boost_for_snake(
@@ -222,6 +241,7 @@ mod tests {
                 Vec2::ZERO,
                 RoomId(1),
                 &mut food_boost,
+                &mut tail_length,
                 &mut recently_boosted,
                 [FoodPoint {
                     entity: Entity::from_bits(100),
@@ -232,6 +252,7 @@ mod tests {
             None
         );
         assert_eq!(food_boost, FoodBoost::default());
+        assert_eq!(tail_length, TailLength::default());
     }
 
     #[test]
@@ -239,6 +260,7 @@ mod tests {
         let config = GameConfig::default();
         let mut recently_boosted = RecentlyBoostedFromFood::default();
         let mut food_boost = FoodBoost::default();
+        let mut tail_length = TailLength::default();
 
         assert_eq!(
             predict_food_boost_for_snake(
@@ -246,6 +268,7 @@ mod tests {
                 Vec2::ZERO,
                 RoomId(1),
                 &mut food_boost,
+                &mut tail_length,
                 &mut recently_boosted,
                 [FoodPoint {
                     entity: Entity::from_bits(101),
@@ -256,6 +279,7 @@ mod tests {
             None
         );
         assert_eq!(food_boost, FoodBoost::default());
+        assert_eq!(tail_length, TailLength::default());
     }
 
     #[test]

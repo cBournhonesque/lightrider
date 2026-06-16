@@ -25,8 +25,10 @@ const SILENT_VOLUME_EPSILON: f32 = 0.001;
 const VOLUME_UPDATE_EPSILON: f32 = 0.005;
 const REMOTE_LOOP_POSITION_UPDATE_DISTANCE: f32 = 8.0;
 const MAX_REMOTE_SPEED_LOOP_SNAKES: usize = 2;
-const MAX_ONE_SHOT_SOUNDS_PER_FRAME: usize = 6;
-const FIREWHEEL_CHANNEL_CAPACITY: u32 = 4096;
+const MAX_ONE_SHOT_SOUNDS_PER_FRAME: usize = 2;
+const MAX_ONE_SHOT_SOUND_TOKENS: f32 = 24.0;
+const ONE_SHOT_SOUND_TOKENS_PER_SECOND: f32 = 24.0;
+const FIREWHEEL_CHANNEL_CAPACITY: u32 = 65_536;
 const FIREWHEEL_EVENT_QUEUE_CAPACITY: usize = 1024;
 const FIREWHEEL_IMMEDIATE_EVENT_CAPACITY: usize = 4096;
 const FIREWHEEL_SCHEDULED_EVENT_CAPACITY: usize = 4096;
@@ -68,7 +70,9 @@ struct ProximityBoostSoundState {
 
 #[derive(Resource, Default)]
 struct OneShotSoundBudget {
-    spawned: usize,
+    spawned_this_frame: usize,
+    tokens: f32,
+    last_refill_seconds: Option<f64>,
 }
 
 #[derive(Default)]
@@ -124,10 +128,10 @@ impl Plugin for SoundPlugin {
             (
                 reset_one_shot_sound_budget,
                 sync_spatial_listener,
-                play_turn_sounds,
-                play_proximity_boost_sounds,
                 play_confirmed_death_sounds,
                 play_confirmed_food_sounds,
+                play_turn_sounds,
+                play_proximity_boost_sounds,
                 update_local_speed_loops,
                 update_remote_speed_loops,
             )
@@ -138,6 +142,8 @@ impl Plugin for SoundPlugin {
 
 fn firewheel_config() -> FirewheelConfig {
     FirewheelConfig {
+        initial_node_capacity: 1024,
+        initial_edge_capacity: 2048,
         channel_capacity: FIREWHEEL_CHANNEL_CAPACITY,
         event_queue_capacity: FIREWHEEL_EVENT_QUEUE_CAPACITY,
         immediate_event_capacity: FIREWHEEL_IMMEDIATE_EVENT_CAPACITY,
@@ -146,8 +152,18 @@ fn firewheel_config() -> FirewheelConfig {
     }
 }
 
-fn reset_one_shot_sound_budget(mut budget: ResMut<OneShotSoundBudget>) {
-    budget.spawned = 0;
+fn reset_one_shot_sound_budget(time: Res<Time>, mut budget: ResMut<OneShotSoundBudget>) {
+    budget.spawned_this_frame = 0;
+    let now = time.elapsed_secs_f64();
+    let Some(last_refill_seconds) = budget.last_refill_seconds else {
+        budget.tokens = MAX_ONE_SHOT_SOUND_TOKENS;
+        budget.last_refill_seconds = Some(now);
+        return;
+    };
+    let elapsed = (now - last_refill_seconds).max(0.0) as f32;
+    budget.tokens =
+        (budget.tokens + elapsed * ONE_SHOT_SOUND_TOKENS_PER_SECOND).min(MAX_ONE_SHOT_SOUND_TOKENS);
+    budget.last_refill_seconds = Some(now);
 }
 
 impl FromWorld for PowerlineSounds {
@@ -766,10 +782,14 @@ fn spawn_one_shot(
     sound_config: &SoundConfig,
     budget: &mut OneShotSoundBudget,
 ) {
-    if volume <= SILENT_VOLUME_EPSILON || budget.spawned >= MAX_ONE_SHOT_SOUNDS_PER_FRAME {
+    if volume <= SILENT_VOLUME_EPSILON
+        || budget.spawned_this_frame >= MAX_ONE_SHOT_SOUNDS_PER_FRAME
+        || budget.tokens < 1.0
+    {
         return;
     }
-    budget.spawned += 1;
+    budget.spawned_this_frame += 1;
+    budget.tokens -= 1.0;
 
     let player = SamplePlayer::new(sound).with_volume(seedling_volume(volume));
     if let Some(source_position) = source_position.filter(|_| sound_config.spatial_audio) {

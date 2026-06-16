@@ -19,6 +19,17 @@
         server_port: 5000,
         replication_send_hz: 16,
         compression: Lz4,
+        interest: (
+            enabled: true,
+            fallback_screen_width: 1920,
+            fallback_screen_height: 1080,
+            max_screen_width: 3840,
+            max_screen_height: 2160,
+            view_margin: 200.0,
+            hysteresis_margin: 250.0,
+            metrics_interval_seconds: 5.0,
+            update_interval_ticks: 1,
+        ),
         lag_compensation: (
             enabled: false,
             max_delay_ticks: 10,

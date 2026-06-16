@@ -38,6 +38,7 @@ bevygap = ["lightyear-matchmaker"]
 [dependencies]
 shared = { path = "../shared" }
 lightyear.workspace = true
+bevy_replicon.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 anyhow.workspace = true

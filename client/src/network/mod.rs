@@ -4,11 +4,13 @@ use lightyear::prelude::Client;
 
 use crate::network::inputs::NetworkInputsPlugin;
 use crate::network::interpolation::InterpolationPlugin;
+use crate::network::viewport::ClientViewportPlugin;
 
 pub(crate) mod config;
 mod connect;
 pub(crate) mod inputs;
 mod interpolation;
+mod viewport;
 
 pub(crate) struct NetworkPlugin {
     pub(crate) connection: config::ClientConnectionConfig,
@@ -21,6 +23,7 @@ impl Plugin for NetworkPlugin {
         });
         app.add_plugins(NetworkInputsPlugin);
         app.add_plugins(InterpolationPlugin);
+        app.add_plugins(ClientViewportPlugin);
         app.add_observer(log_connected);
     }
 }

@@ -9,8 +9,7 @@ cleanup() {
     echo "lightrider-matchmaker: entrypoint exiting with status $status" >&2
     for log_file in \
       /var/log/nats.log \
-      /var/log/lightyear_matchmaker_server.log \
-      /var/log/nginx/error.log; do
+      /var/log/lightyear_matchmaker_server.log; do
       if [[ -s "$log_file" ]]; then
         echo "==> $log_file <==" >&2
         tail -n 200 "$log_file" >&2 || true
@@ -35,14 +34,6 @@ truthy() {
   esac
 }
 
-js_string() {
-  local value="${1:-}"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  value="${value//$'\n'/\\n}"
-  printf '"%s"' "$value"
-}
-
 toml_string() {
   local value="${1:-}"
   value="${value//\\/\\\\}"
@@ -56,8 +47,8 @@ nats_monitor_port="${NATS_MONITOR_PORT:-8222}"
 nats_user="${NATS_USER:-lightrider}"
 nats_password="${NATS_PASSWORD:-lightrider}"
 nats_store_dir="${NATS_STORE_DIR:-/data/nats}"
-web_port="${WEB_PORT:-8080}"
 matchmaker_port="${MATCHMAKER_PORT:-3000}"
+matchmaker_bind="${MATCHMAKER_BIND:-0.0.0.0:${matchmaker_port}}"
 app_name="${LIGHTRIDER_MATCHMAKER_GAME:-${EDGEGAP_APP_NAME:-lightrider}}"
 app_version="${LIGHTRIDER_MATCHMAKER_VERSION:-${EDGEGAP_APP_VERSION:-dev}}"
 edgegap_app_name="${EDGEGAP_APP_NAME:-$app_name}"
@@ -104,7 +95,7 @@ if [[ "$production_nats_required" == "1" && "$nats_tls_configured" != "1" && "$a
   exit 1
 fi
 
-mkdir -p "$nats_store_dir" /run/nginx /var/log/nginx
+mkdir -p "$nats_store_dir"
 
 nats_args=(
   /app/nats-server
@@ -145,7 +136,7 @@ fi
 matchmaker_config="/run/lightrider-matchmaker.toml"
 cat > "$matchmaker_config" <<EOF
 [server]
-bind = "127.0.0.1:${matchmaker_port}"
+bind = $(toml_string "$matchmaker_bind")
 
 [game]
 name = $(toml_string "$app_name")
@@ -216,36 +207,4 @@ for _ in $(seq 1 80); do
 done
 curl -fsS "http://127.0.0.1:${matchmaker_port}/health" >/dev/null
 
-rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
-cat > /usr/share/nginx/html/bootstrap.js <<BOOTSTRAP
-window.LIGHTRIDER_BOOTSTRAP = {
-  matchmaker_url: $(js_string "${LIGHTRIDER_MATCHMAKER_URL:-}"),
-  matchmaker_game: $(js_string "$app_name"),
-  matchmaker_version: $(js_string "$app_version")
-};
-BOOTSTRAP
-
-cat > /etc/nginx/conf.d/default.conf <<NGINX
-server {
-    listen ${web_port};
-    server_name _;
-    root /usr/share/nginx/html;
-    index index.html;
-
-    location /matchmaker/ {
-        proxy_pass http://127.0.0.1:${matchmaker_port}/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 300s;
-    }
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-}
-NGINX
-
-nginx -g "daemon off;"
+wait -n "${pids[@]}"

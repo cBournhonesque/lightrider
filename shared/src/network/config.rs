@@ -181,6 +181,7 @@ mod tests {
             input_delay: InputDelayConfig::balanced(),
             interpolation_delay: crate::config::InterpolationDelayConfig::default(),
             lag_compensation: LagCompensationConfig::default(),
+            interest: crate::config::NetworkInterestConfig::default(),
             input_packet_redundancy_ticks: 3,
             replication_send_hz: 16,
             compression: crate::config::NetworkCompression::Disabled,
