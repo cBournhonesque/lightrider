@@ -9,22 +9,22 @@ static-default-sslip-domain := "45.79.138.102.sslip.io"
 _remote-pull-service service image_env image_name *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    host="{{ static-default-host }}"
-    tag="${TAG:-}"
+    host="${LIGHTRIDER_CONTROL_HOST:-${VPS_HOST:-${HOST:-${host:-{{ static-default-host }}}}}}"
+    tag="${TAG:-${tag:-}}"
     image=""
-    ssh_port="{{ static-default-ssh-port }}"
-    ssh_key=""
-    env_file="{{ static-default-env }}"
-    service_name=""
-    route=""
-    web_upstream_port=""
-    caddy_default_upstream_port=""
-    matchmaker_public_port=""
-    nats_port=""
-    nats_monitor_port=""
-    manage_static_server=""
-    run_static_server=""
-    allocation_source=""
+    ssh_port="${LIGHTRIDER_CONTROL_SSH_PORT:-${SSH_PORT:-${ssh_port:-{{ static-default-ssh-port }}}}}"
+    ssh_key="${LIGHTRIDER_CONTROL_SSH_KEY:-${SSH_KEY:-${ssh_key:-}}}"
+    env_file="${LIGHTRIDER_CONTROL_ENV:-${LIGHTRIDER_WEB_SERVER_ENV:-${env:-{{ static-default-env }}}}}"
+    service_name="${LIGHTRIDER_CONTROL_SERVICE_NAME:-${service_name:-}}"
+    route="${LIGHTRIDER_MATCHMAKER_ROUTE:-${route:-}}"
+    web_upstream_port="${LIGHTRIDER_WEB_UPSTREAM_PORT:-${web_upstream_port:-}}"
+    caddy_default_upstream_port="${LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT:-${caddy_default_upstream_port:-}}"
+    matchmaker_public_port="${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT:-${matchmaker_public_port:-}}"
+    nats_port="${LIGHTRIDER_NATS_PUBLIC_PORT:-${nats_port:-}}"
+    nats_monitor_port="${LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT:-${nats_monitor_port:-}}"
+    manage_static_server="${LIGHTRIDER_MANAGE_STATIC_SERVER:-${manage_static_server:-}}"
+    run_static_server="${LIGHTRIDER_RUN_STATIC_SERVER:-${run_static_server:-}}"
+    allocation_source="${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-${allocation_source:-}}"
     restart="1"
     positional=0
     for arg in {{ args }}; do
@@ -213,9 +213,14 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
       caller_nats_namespace="$LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE"
     fi
     caller_deploy_vars=(
+      LIGHTRIDER_ENABLE_HTTPS
+      LIGHTRIDER_WEB_DOMAIN
+      LIGHTRIDER_MATCHMAKER_URL
       LIGHTRIDER_WEB_UPSTREAM_PORT
       LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT
+      LIGHTRIDER_MATCHMAKER_PUBLIC_PORT
       LIGHTRIDER_MATCHMAKER_ROUTE
+      MATCHMAKER_CORS
       LIGHTRIDER_NATS_PUBLIC_PORT
       LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT
       LIGHTRIDER_NATS_STORE_HOST_DIR
@@ -302,11 +307,11 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
     if [[ -n "{{ edgegap_version }}" ]]; then
       LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-${matchmaker_game}_${matchmaker_version}}"
     fi
-    web_domain="${LIGHTRIDER_WEB_DOMAIN:-}"
+    web_domain="${LIGHTRIDER_WEB_DOMAIN:-${DOMAIN:-${WEB_DOMAIN:-${domain:-${web_domain:-}}}}}"
     web_domain="${web_domain#http://}"
     web_domain="${web_domain#https://}"
     web_domain="${web_domain%%/*}"
-    enable_https="${LIGHTRIDER_ENABLE_HTTPS:-}"
+    enable_https="${LIGHTRIDER_ENABLE_HTTPS:-${HTTPS:-${https:-${enable_https:-}}}}"
     if [[ -z "$enable_https" && -n "$web_domain" ]]; then
       enable_https=1
     fi
@@ -633,24 +638,24 @@ web-server-enable-nats-tls-from-caddy *args:
 control-host-deploy *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    vps_host="{{ static-default-host }}"
-    ssh_port="{{ static-default-ssh-port }}"
-    ssh_key=""
-    tag="${TAG:-$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
+    vps_host="${LIGHTRIDER_CONTROL_HOST:-${VPS_HOST:-${HOST:-${host:-{{ static-default-host }}}}}}"
+    ssh_port="${LIGHTRIDER_CONTROL_SSH_PORT:-${SSH_PORT:-${ssh_port:-{{ static-default-ssh-port }}}}}"
+    ssh_key="${LIGHTRIDER_CONTROL_SSH_KEY:-${SSH_KEY:-${ssh_key:-}}}"
+    tag="${TAG:-${tag:-$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}}"
     edgegap_version=""
-    web_domain=""
-    enable_https=""
-    env_file="{{ static-default-env }}"
-    service_name="{{ static-default-service }}"
-    route=""
-    web_upstream_port=""
-    caddy_default_upstream_port=""
-    matchmaker_public_port=""
-    nats_port=""
-    nats_monitor_port=""
-    manage_static_server=""
-    run_static_server=""
-    allocation_source=""
+    web_domain="${LIGHTRIDER_WEB_DOMAIN:-${DOMAIN:-${WEB_DOMAIN:-${domain:-${web_domain:-}}}}}"
+    enable_https="${LIGHTRIDER_ENABLE_HTTPS:-${HTTPS:-${https:-${enable_https:-}}}}"
+    env_file="${LIGHTRIDER_CONTROL_ENV:-${LIGHTRIDER_WEB_SERVER_ENV:-${env:-{{ static-default-env }}}}}"
+    service_name="${LIGHTRIDER_CONTROL_SERVICE_NAME:-${service_name:-{{ static-default-service }}}}"
+    route="${LIGHTRIDER_MATCHMAKER_ROUTE:-${route:-}}"
+    web_upstream_port="${LIGHTRIDER_WEB_UPSTREAM_PORT:-${web_upstream_port:-}}"
+    caddy_default_upstream_port="${LIGHTRIDER_CADDY_DEFAULT_UPSTREAM_PORT:-${caddy_default_upstream_port:-}}"
+    matchmaker_public_port="${LIGHTRIDER_MATCHMAKER_PUBLIC_PORT:-${matchmaker_public_port:-}}"
+    nats_port="${LIGHTRIDER_NATS_PUBLIC_PORT:-${nats_port:-}}"
+    nats_monitor_port="${LIGHTRIDER_NATS_MONITOR_PUBLIC_PORT:-${nats_monitor_port:-}}"
+    manage_static_server="${LIGHTRIDER_MANAGE_STATIC_SERVER:-${manage_static_server:-}}"
+    run_static_server="${LIGHTRIDER_RUN_STATIC_SERVER:-${run_static_server:-}}"
+    allocation_source="${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-${allocation_source:-}}"
     build_memory=""
     build_memory_swap=""
     build_cpus=""
@@ -761,8 +766,10 @@ control-host-deploy *args:
     env "${env_args[@]}" just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
     just web-server-env-check "$env_file"
     just web-server-install "$vps_host" "$ssh_port" "$env_file" "$ssh_key" "$service_name"
-    if [[ "$enable_https" == "1" || "$enable_https" == "true" || "$enable_https" == "yes" ]]; then
-      just web-server-health "$web_domain" https
+    deployed_enable_https="$(awk -F= '$1 == "LIGHTRIDER_ENABLE_HTTPS" { print $2; exit }' "$env_file")"
+    deployed_web_domain="$(awk -F= '$1 == "LIGHTRIDER_WEB_DOMAIN" { print $2; exit }' "$env_file")"
+    if [[ "$deployed_enable_https" == "1" || "$deployed_enable_https" == "true" || "$deployed_enable_https" == "yes" ]]; then
+      just web-server-health "$deployed_web_domain" https
     else
       just web-server-health "$vps_host" http
     fi

@@ -8,14 +8,25 @@ use lightyear::netcode::{ConnectToken, NetcodeClient};
 use lightyear::prelude::client::WebTransportClientIo;
 use lightyear::prelude::*;
 use lightyear_matchmaker_bevy_client::{
-    ConnectionGrantReady, LightyearMatchmakerClientPlugin, MatchmakerClientConfig,
-    MatchmakerClientFailed, RequestPlay,
+    ConnectionGrantReady, MatchmakerClientFailed, RequestPlay,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use lightyear_matchmaker_bevy_client::{
+    LightyearMatchmakerClientPlugin, MatchmakerClientConfig,
+};
+#[cfg(target_arch = "wasm32")]
+use lightyear_matchmaker_bevy_client::{
+    request_play_once, MatchmakerClientErrorInfo, MatchmakerClientResult,
 };
 use lightyear_matchmaker_core::{
     ConnectionGrant, ConnectionGrantKind, RoomSelection as MatchmakerRoomSelection,
 };
 use shared::network::protocol::prelude::RoomJoinMode;
 use std::net::SocketAddr;
+#[cfg(target_arch = "wasm32")]
+use std::sync::{mpsc, Mutex};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 
 use crate::network::config::normalize_certificate_digest;
 
@@ -43,26 +54,46 @@ pub(crate) enum LightriderMatchmakerState {
 
 impl Plugin for LightriderMatchmakerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(LightyearMatchmakerClientPlugin::new(
-            MatchmakerClientConfig::new(self.config.matchmaker_url.clone()),
-        ))
-        .insert_resource(self.config.clone())
-        .init_resource::<LightriderMatchmakerState>()
-        .add_systems(Startup, request_matchmaker_assignment)
-        .add_systems(
-            Update,
-            (connect_matchmaker_assignment, handle_matchmaker_failures),
-        );
+        app.insert_resource(self.config.clone())
+            .init_resource::<LightriderMatchmakerState>();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.add_plugins(LightyearMatchmakerClientPlugin::new(
+                MatchmakerClientConfig::new(self.config.matchmaker_url.clone()),
+            ))
+            .add_systems(Startup, request_matchmaker_assignment)
+            .add_systems(
+                Update,
+                (connect_matchmaker_assignment, handle_matchmaker_failures),
+            );
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.add_message::<ConnectionGrantReady>()
+                .add_message::<MatchmakerClientFailed>()
+                .add_systems(Startup, request_matchmaker_assignment_once)
+                .add_systems(
+                    Update,
+                    (
+                        drain_matchmaker_assignment_once,
+                        connect_matchmaker_assignment,
+                        handle_matchmaker_failures,
+                    )
+                        .chain(),
+                );
+        }
     }
 }
 
-fn request_matchmaker_assignment(
-    config: Res<LightriderMatchmakerConfig>,
-    mut requests: MessageWriter<RequestPlay>,
-    mut state: ResMut<LightriderMatchmakerState>,
-) {
+fn build_matchmaker_request(config: &LightriderMatchmakerConfig) -> RequestPlay {
     let mut request = RequestPlay::new(config.game_name.clone(), config.game_version.clone());
     request.room = matchmaker_room_selection(config.room);
+    request
+}
+
+fn log_matchmaker_request(config: &LightriderMatchmakerConfig, request: &RequestPlay) {
     info!(
         matchmaker_url = %config.matchmaker_url,
         game = %config.game_name,
@@ -70,8 +101,88 @@ fn request_matchmaker_assignment(
         room = ?request.room,
         "requesting matchmaker assignment"
     );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn request_matchmaker_assignment(
+    config: Res<LightriderMatchmakerConfig>,
+    mut requests: MessageWriter<RequestPlay>,
+    mut state: ResMut<LightriderMatchmakerState>,
+) {
+    let request = build_matchmaker_request(&config);
+    log_matchmaker_request(&config, &request);
     requests.write(request);
     *state = LightriderMatchmakerState::Waiting("Waiting to connect to server".to_string());
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource)]
+struct MatchmakerOneShotRuntime {
+    receiver: Mutex<mpsc::Receiver<MatchmakerOneShotResult>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+enum MatchmakerOneShotResult {
+    Ready(MatchmakerClientResult),
+    Failed(String),
+}
+
+#[cfg(target_arch = "wasm32")]
+fn request_matchmaker_assignment_once(
+    mut commands: Commands,
+    config: Res<LightriderMatchmakerConfig>,
+    mut state: ResMut<LightriderMatchmakerState>,
+) {
+    let request = build_matchmaker_request(&config);
+    log_matchmaker_request(&config, &request);
+
+    let (sender, receiver) = mpsc::channel();
+    commands.insert_resource(MatchmakerOneShotRuntime {
+        receiver: Mutex::new(receiver),
+    });
+
+    let websocket_url = config.matchmaker_url.clone();
+    spawn_local(async move {
+        let result = match request_play_once(websocket_url, request).await {
+            Ok(result) => MatchmakerOneShotResult::Ready(result),
+            Err(error) => MatchmakerOneShotResult::Failed(error.to_string()),
+        };
+        let _ = sender.send(result);
+    });
+
+    *state = LightriderMatchmakerState::Waiting("Waiting to connect to server".to_string());
+}
+
+#[cfg(target_arch = "wasm32")]
+fn drain_matchmaker_assignment_once(
+    runtime: Option<Res<MatchmakerOneShotRuntime>>,
+    mut ready: MessageWriter<ConnectionGrantReady>,
+    mut failed: MessageWriter<MatchmakerClientFailed>,
+) {
+    let Some(runtime) = runtime else {
+        return;
+    };
+    let receiver = match runtime.receiver.lock() {
+        Ok(receiver) => receiver,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    while let Ok(result) = receiver.try_recv() {
+        match result {
+            MatchmakerOneShotResult::Ready(result) => {
+                ready.write(ConnectionGrantReady { result });
+            }
+            MatchmakerOneShotResult::Failed(message) => {
+                failed.write(MatchmakerClientFailed {
+                    message: message.clone(),
+                    error: MatchmakerClientErrorInfo {
+                        code: None,
+                        message,
+                        retryable: true,
+                    },
+                });
+            }
+        }
+    }
 }
 
 fn connect_matchmaker_assignment(

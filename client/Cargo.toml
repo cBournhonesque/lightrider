@@ -65,4 +65,5 @@ tokio = { version = "1.34", features = [
 bevy_seedling = { workspace = true, features = ["web_audio"] }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 tokio = { version = "1.34", features = ["macros", "rt"] }
+wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Document", "Element", "Location", "UrlSearchParams", "Window"] }
