@@ -154,13 +154,46 @@ fn spawn_client(
 fn disconnect_when_prediction_budget_exceeded(
     mut commands: Commands,
     game_config: Res<GameConfig>,
+    time: Res<Time>,
     tick_duration: Res<TickDuration>,
     mut connection_status: ResMut<ClientConnectionStatus>,
     clients: Query<(Entity, &Link), (With<Client>, With<Connected>)>,
+    mut next_trace_at: Local<f64>,
 ) {
     let input_delay = &game_config.network.input_delay;
+    let now = time.elapsed_secs_f64();
+    let should_trace = now >= *next_trace_at;
+    if should_trace {
+        *next_trace_at = now + 0.25;
+    }
+
     for (entity, link) in &clients {
         let budget = prediction_budget(link.stats, tick_duration.0, input_delay);
+        if should_trace {
+            let sync_config = SyncConfig::default();
+            let jitter_margin = sync_config.jitter_margin(link.stats.jitter, tick_duration.0);
+            let effective_rtt = link.stats.rtt.saturating_add(jitter_margin);
+            tracing::trace!(
+                target: "lightyear_debug::manual",
+                kind = "prediction_budget",
+                sample_point = "Update",
+                schedule = "Update",
+                entity = ?entity,
+                rtt_ms = link.stats.rtt.as_secs_f64() * 1000.0,
+                jitter_ms = link.stats.jitter.as_secs_f64() * 1000.0,
+                jitter_margin_ms = jitter_margin.as_secs_f64() * 1000.0,
+                effective_rtt_ms = effective_rtt.as_secs_f64() * 1000.0,
+                effective_rtt_ticks = budget.effective_rtt_ticks,
+                input_delay_ticks = budget.input_delay_ticks,
+                predicted_ticks = budget.predicted_ticks,
+                maximum_predicted_ticks = input_delay.maximum_predicted_ticks,
+                maximum_input_delay_before_prediction_ticks = input_delay
+                    .maximum_input_delay_before_prediction_ticks,
+                maximum_input_delay_ticks = input_delay.maximum_input_delay_ticks,
+                "prediction budget sample"
+            );
+        }
+
         if budget.input_delay_ticks <= input_delay.maximum_input_delay_ticks {
             continue;
         }

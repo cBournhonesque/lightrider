@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.dependencies]
-lightyear = { path = "../lightyear/lightyear", features = [
+lightyear = { path = "../lightyear/crates/core/lightyear", features = [
   "input_bei",
   "frame_interpolation",
   "netcode",

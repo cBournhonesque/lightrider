@@ -4,6 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lightrider</title>
+    <link rel="modulepreload" href="./pkg/lightrider-web.js" />
+    <link
+      rel="preload"
+      href="./pkg/lightrider-web_bg.wasm"
+      as="fetch"
+      type="application/wasm"
+      crossorigin
+    />
     <style>
       html,
       body {
@@ -255,14 +263,104 @@
   </head>
   <body>
     <div id="lightrider-status" class="loading-status">Loading assets...</div>
+    <div id="lightrider-root">
+      <main class="lightrider-web-shell">
+        <div class="menu-backdrop">
+          <section class="join-modal" aria-label="Lightrider menu">
+            <h1>LIGHTRIDER</h1>
+            <form id="lightrider-bootstrap-form">
+              <input
+                id="lightrider-bootstrap-name"
+                class="name-input"
+                autocomplete="nickname"
+                maxlength="18"
+                placeholder="Name"
+              />
+              <div class="room-row">
+                <input
+                  id="lightrider-bootstrap-room"
+                  class="room-input"
+                  autocomplete="off"
+                  maxlength="4"
+                  placeholder="ROOM"
+                />
+                <button class="play-button" type="submit">PLAY</button>
+              </div>
+              <p class="form-error hidden"></p>
+            </form>
+            <div class="modal-links">
+              <button id="lightrider-bootstrap-public" type="button">PUBLIC</button>
+              <a
+                href="https://github.com/cBournhonesque/lightrider"
+                target="_blank"
+                rel="noreferrer"
+              >GitHub</a>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
     <script>
       window.LIGHTRIDER_BOOTSTRAP = window.LIGHTRIDER_BOOTSTRAP || {};
+      window.LIGHTRIDER_STARTUP_STARTED_AT = performance.now();
+
+      const bootstrapForm = document.getElementById("lightrider-bootstrap-form");
+      const bootstrapPublic = document.getElementById("lightrider-bootstrap-public");
+      const bootstrapName = document.getElementById("lightrider-bootstrap-name");
+      const bootstrapRoom = document.getElementById("lightrider-bootstrap-room");
+
+      function updateBootstrapUrl() {
+        const url = new URL(window.location.href);
+        const name = bootstrapName.value.trim().slice(0, 18);
+        const room = bootstrapRoom.value.trim().toUpperCase();
+        if (name) {
+          url.searchParams.set("name", name);
+        } else {
+          url.searchParams.delete("name");
+        }
+        if (room) {
+          url.searchParams.set("room", room);
+        } else {
+          url.searchParams.delete("room");
+        }
+        window.history.replaceState(null, "", url);
+      }
+
+      bootstrapForm?.addEventListener("submit", (event) => {
+        event.preventDefault();
+        updateBootstrapUrl();
+        document.getElementById("lightrider-status").textContent =
+          "Starting game...";
+      });
+
+      bootstrapPublic?.addEventListener("click", () => {
+        bootstrapRoom.value = "";
+        updateBootstrapUrl();
+      });
     </script>
     <script src="./bootstrap.js"></script>
     <script type="module">
-      import init from "./pkg/lightrider-web.js";
-
-      init();
+      const importStart = performance.now();
+      import("./pkg/lightrider-web.js")
+        .then(({ default: init }) => {
+          const initStart = performance.now();
+          window.LIGHTRIDER_WASM_INIT_STARTED_AT = initStart;
+          return init().then(() => ({ initStart }));
+        })
+        .then(({ initStart }) => {
+          const done = performance.now();
+          console.info(
+            `Lightrider startup: module wait ${(initStart - importStart).toFixed(0)}ms, wasm init ${(done - initStart).toFixed(0)}ms, total ${(done - window.LIGHTRIDER_STARTUP_STARTED_AT).toFixed(0)}ms`
+          );
+        })
+        .catch((error) => {
+          console.error("Failed to start Lightrider", error);
+          const status = document.getElementById("lightrider-status");
+          if (status) {
+            status.textContent = `Failed to start game: ${error}`;
+            status.className = "loading-status";
+          }
+        });
     </script>
   </body>
 </html>

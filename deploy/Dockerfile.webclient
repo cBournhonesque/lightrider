@@ -8,7 +8,10 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
 
 COPY host-ca-certificates.crt /tmp/host-ca-certificates.crt
 
-RUN apt-get update && \
+RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=lightrider-cargo-install-target,target=/tmp/cargo-install-target \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         clang \
@@ -27,7 +30,9 @@ RUN apt-get update && \
         cat /tmp/host-ca-certificates.crt >> /etc/ssl/certs/ca-certificates.crt; \
     fi && \
     rm -rf /var/lib/apt/lists/* && \
-    CARGO_BUILD_JOBS=1 cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
+    CARGO_BUILD_JOBS=1 \
+    CARGO_TARGET_DIR=/tmp/cargo-install-target \
+    cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
 
 WORKDIR /src/lightrider
 
@@ -42,21 +47,26 @@ RUN cargo chef prepare --recipe-path /tmp/lightrider-web-recipe.json
 
 FROM chef AS builder
 
+RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=lightrider-cargo-install-target,target=/tmp/cargo-install-target \
+    rustup target add wasm32-unknown-unknown && \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_TARGET_DIR=/tmp/cargo-install-target \
+    cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
 ARG WEB_CARGO_JOBS=1
 ARG WEB_CARGO_INCREMENTAL=0
 ARG WEB_RELEASE_OPT_LEVEL=1
 ARG WEB_RELEASE_LTO=false
 ARG WEB_RELEASE_CODEGEN_UNITS=16
 
-RUN rustup target add wasm32-unknown-unknown && \
-    CARGO_BUILD_JOBS=1 cargo install wasm-bindgen-cli --version 0.2.122 --locked
-
 COPY --from=planner /tmp/lightrider-web-recipe.json /tmp/lightrider-web-recipe.json
-COPY lightyear /src/lightyear
-COPY lightyear-matchmaker /src/lightyear-matchmaker
-COPY bevy_replicon /src/bevy_replicon
 
-RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
+RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=lightrider-webclient-target,target=/src/lightrider/target \
+    CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
     CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
@@ -73,7 +83,10 @@ COPY lightyear-matchmaker /src/lightyear-matchmaker
 COPY bevy_replicon /src/bevy_replicon
 COPY lightrider /src/lightrider
 
-RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
+RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=lightrider-webclient-target,target=/src/lightrider/target \
+    CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${WEB_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${WEB_RELEASE_OPT_LEVEL}" \
     CARGO_PROFILE_RELEASE_LTO="${WEB_RELEASE_LTO}" \
@@ -96,11 +109,11 @@ RUN CARGO_INCREMENTAL="${WEB_CARGO_INCREMENTAL}" \
     hashed_wasm="/tmp/lightrider-web/pkg/lightrider-web_bg.${wasm_hash}.wasm" && \
     mv "${wasm_file}" "${hashed_wasm}" && \
     sed -i "s/lightrider-web_bg\\.wasm/lightrider-web_bg.${wasm_hash}.wasm/g" \
-        /tmp/lightrider-web/pkg/lightrider-web.js && \
+        /tmp/lightrider-web/pkg/lightrider-web.js \
+        /tmp/lightrider-web/index.html && \
     find /tmp/lightrider-web -type f \
         \( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.json' \) \
-        -exec gzip -9 -k {} \; && \
-    rm -rf /src/lightrider/target /usr/local/cargo/git /usr/local/cargo/registry
+        -exec gzip -9 -k {} \;
 
 FROM debian:bookworm-slim AS runtime
 

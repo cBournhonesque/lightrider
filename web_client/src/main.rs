@@ -4,6 +4,7 @@ mod wasm {
     use leptos::prelude::*;
     use leptos_bevy_canvas::prelude::*;
     use shared::network::protocol::prelude::{RoomCode, RoomId, RoomJoinMode};
+    use wasm_bindgen::JsCast;
 
     const DEFAULT_GAME: &str = "lightrider";
     const DEFAULT_VERSION: &str = "dev";
@@ -20,7 +21,13 @@ mod wasm {
 
     pub fn run() {
         console_error_panic_hook::set_once();
-        leptos::mount::mount_to_body(|| view! { <LightriderWebApp /> });
+        if let Some(root) = document_element_by_id("lightrider-root") {
+            root.set_inner_html("");
+            leptos::mount::mount_to(root.unchecked_into(), || view! { <LightriderWebApp /> })
+                .forget();
+        } else {
+            leptos::mount::mount_to_body(|| view! { <LightriderWebApp /> });
+        }
     }
 
     #[component]
@@ -171,13 +178,7 @@ mod wasm {
     }
 
     fn set_status_element(status: Option<&str>) {
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        let Some(document) = window.document() else {
-            return;
-        };
-        let Some(element) = document.get_element_by_id("lightrider-status") else {
+        let Some(element) = document_element_by_id("lightrider-status") else {
             return;
         };
         match status {
@@ -190,6 +191,10 @@ mod wasm {
                 element.set_class_name("loading-status hidden");
             }
         }
+    }
+
+    fn document_element_by_id(id: &str) -> Option<web_sys::Element> {
+        web_sys::window()?.document()?.get_element_by_id(id)
     }
 
     fn room_badge_text(room: RoomJoinMode) -> Option<String> {

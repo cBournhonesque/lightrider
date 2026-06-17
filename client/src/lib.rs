@@ -45,6 +45,7 @@ pub const SERVER_PORT: u16 = 5000;
 pub enum ClientMode {
     Player,
     Bot,
+    StressTurns,
 }
 
 #[derive(Parser, PartialEq, Debug)]
@@ -251,10 +252,11 @@ pub fn app(cli: Cli) -> App {
         mode: cli.room,
         name: player_name,
     });
-    if cli.mode == ClientMode::Bot {
+    if matches!(cli.mode, ClientMode::Bot | ClientMode::StressTurns) {
         app.add_plugins(bot::BotClientPlugin {
             decision_interval_ticks: bot_decision_interval_ticks,
             mistake_chance_per_decision_percent: bot_mistake_chance_per_decision_percent,
+            stress_turns: cli.mode == ClientMode::StressTurns,
         });
     }
     if !cli.headless {
@@ -291,6 +293,7 @@ fn player_name(cli: &Cli) -> String {
     match cli.mode {
         ClientMode::Player => format!("Player {}", cli.client_id),
         ClientMode::Bot => format!("Bot Client {}", cli.client_id),
+        ClientMode::StressTurns => format!("Stress Client {}", cli.client_id),
     }
 }
 

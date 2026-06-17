@@ -29,7 +29,7 @@ bevygap-matchmaker-tls = ["bevygap"]
 [dependencies]
 shared = { path = "../shared" }
 lightyear.workspace = true
-lightyear_tools = { path = "../../lightyear/lightyear_tools" }
+lightyear_tools = { path = "../../lightyear/crates/tools/tools" }
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 anyhow.workspace = true
