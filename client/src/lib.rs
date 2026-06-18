@@ -290,6 +290,10 @@ fn player_name(cli: &Cli) -> String {
     if !trimmed.is_empty() {
         return trimmed.to_string();
     }
+    #[cfg(feature = "lightyear-matchmaker")]
+    if cli.matchmaker_url.is_some() && matches!(cli.mode, ClientMode::Player) {
+        return String::new();
+    }
     match cli.mode {
         ClientMode::Player => format!("Player {}", cli.client_id),
         ClientMode::Bot => format!("Bot Client {}", cli.client_id),

@@ -11,6 +11,7 @@ pub(crate) struct PowerlineSpriteSheet {
 pub(crate) enum PowerlineFrame {
     Crown,
     Food,
+    Glow,
     HeadDot,
     Lightning1,
     Lightning2,
@@ -51,6 +52,7 @@ impl PowerlineFrame {
         let (x, y, width, height) = match self {
             Self::Crown => (382.0, 102.0, 31.0, 27.0),
             Self::Food => (132.0, 2.0, 100.0, 100.0),
+            Self::Glow => (234.0, 2.0, 98.0, 98.0),
             Self::HeadDot => (132.0, 104.0, 47.0, 46.0),
             Self::Lightning1 => (415.0, 102.0, 18.0, 30.0),
             Self::Lightning2 => (483.0, 99.0, 19.0, 30.0),

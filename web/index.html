@@ -153,7 +153,6 @@
       }
 
       .play-button,
-      .modal-links button,
       .menu-button,
       .modal-close {
         border: 0;
@@ -175,26 +174,11 @@
         min-height: 18px;
       }
 
-      .modal-links {
-        align-items: center;
-        display: flex;
-        gap: 14px;
-        justify-content: space-between;
-        margin-top: 16px;
-      }
-
-      .modal-links button,
-      .modal-links a,
       .menu-button {
         color: #bdfbf5;
         font-size: 12px;
         font-weight: 700;
         text-decoration: none;
-      }
-
-      .modal-links button {
-        background: transparent;
-        padding: 0;
       }
 
       .modal-close {
@@ -288,14 +272,6 @@
               </div>
               <p class="form-error hidden"></p>
             </form>
-            <div class="modal-links">
-              <button id="lightrider-bootstrap-public" type="button">PUBLIC</button>
-              <a
-                href="https://github.com/cBournhonesque/lightrider"
-                target="_blank"
-                rel="noreferrer"
-              >GitHub</a>
-            </div>
           </section>
         </div>
       </main>
@@ -305,7 +281,6 @@
       window.LIGHTRIDER_STARTUP_STARTED_AT = performance.now();
 
       const bootstrapForm = document.getElementById("lightrider-bootstrap-form");
-      const bootstrapPublic = document.getElementById("lightrider-bootstrap-public");
       const bootstrapName = document.getElementById("lightrider-bootstrap-name");
       const bootstrapRoom = document.getElementById("lightrider-bootstrap-room");
 
@@ -328,15 +303,24 @@
 
       bootstrapForm?.addEventListener("submit", (event) => {
         event.preventDefault();
+        const name = bootstrapName.value.trim().slice(0, 18);
+        const error = bootstrapForm.querySelector(".form-error");
+        if (!name) {
+          if (error) {
+            error.textContent = "Enter a name.";
+            error.className = "form-error";
+          }
+          return;
+        }
+        if (error) {
+          error.textContent = "";
+          error.className = "form-error hidden";
+        }
         updateBootstrapUrl();
         document.getElementById("lightrider-status").textContent =
           "Starting game...";
       });
 
-      bootstrapPublic?.addEventListener("click", () => {
-        bootstrapRoom.value = "";
-        updateBootstrapUrl();
-      });
     </script>
     <script src="./bootstrap.js"></script>
     <script type="module">

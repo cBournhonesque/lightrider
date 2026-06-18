@@ -13,6 +13,7 @@ use shared::map::{MapMarker, MapSize};
 use shared::network::bundle::food::FoodBundle;
 use shared::network::protocol::prelude::*;
 use shared::spatial::{FoodPoint, FoodSpatialIndex};
+use std::collections::HashSet;
 use tracing::error;
 
 pub struct FoodPlugin;
@@ -22,6 +23,7 @@ fn spawn_food(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: Local<Option<Timer>>,
+    mut seeded_rooms: Local<HashSet<RoomId>>,
     mut maps: Query<(&RoomId, &MapSize, &mut RngComponent), With<MapMarker>>,
     food: Query<&RoomId, With<FoodMarker>>,
     config: Res<GameConfig>,
@@ -37,19 +39,34 @@ fn spawn_food(
     if config.is_changed() {
         timer.set_duration(config.food.spawn_interval());
     }
-    if !timer.tick(time.delta()).just_finished() {
-        return;
-    }
+    let spawn_regular_food = timer.tick(time.delta()).just_finished();
     for (room, map_size, mut rng) in &mut maps {
         let room_food_count = food.iter().filter(|food_room| *food_room == room).count();
-        if room_food_count >= config.food.spawn_target_count() {
+        let target_count = config.food.spawn_target_count();
+        if seeded_rooms.insert(*room) {
+            for _ in 0..target_count.saturating_sub(room_food_count) {
+                spawn_random_food(&mut commands, &rooms, *room, map_size, rng.as_mut());
+            }
+            continue;
+        }
+        if !spawn_regular_food || room_food_count >= target_count {
             continue;
         }
 
-        let x = rng.f32_normalized() * map_size.width * 0.5;
-        let y = rng.f32_normalized() * map_size.height * 0.5;
-        spawn_food_entity(&mut commands, &rooms, *room, Position(Vec2::new(x, y)));
+        spawn_random_food(&mut commands, &rooms, *room, map_size, rng.as_mut());
     }
+}
+
+fn spawn_random_food(
+    commands: &mut Commands,
+    rooms: &RoomDirectory,
+    room: RoomId,
+    map_size: &MapSize,
+    rng: &mut RngComponent,
+) -> Entity {
+    let x = rng.f32_normalized() * map_size.width * 0.5;
+    let y = rng.f32_normalized() * map_size.height * 0.5;
+    spawn_food_entity(commands, rooms, room, Position(Vec2::new(x, y)))
 }
 
 pub(crate) fn spawn_food_entity(
@@ -258,6 +275,39 @@ mod tests {
         let food = app.world().entity(food);
         assert!(food.contains::<Replicate>());
         assert!(food.contains::<InterpolationTarget>());
+    }
+
+    #[test]
+    fn spawn_food_seeds_new_rooms_to_target_count() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let mut config = GameConfig::default();
+        config.food.target_count = 3;
+        config.food.max_count = 3;
+        app.insert_resource(config.clone());
+        app.init_resource::<RoomDirectory>();
+        app.add_systems(Update, spawn_food);
+        app.world_mut().spawn((
+            MapSize {
+                width: config.arena.width,
+                height: config.arena.height,
+            },
+            RoomId(7),
+            MapMarker,
+            RngComponent::with_seed(7),
+        ));
+
+        app.update();
+
+        let mut food = app
+            .world_mut()
+            .query_filtered::<&RoomId, With<FoodMarker>>();
+        assert_eq!(
+            food.iter(app.world())
+                .filter(|room| **room == RoomId(7))
+                .count(),
+            3
+        );
     }
 
     #[test]

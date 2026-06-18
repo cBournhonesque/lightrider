@@ -16,11 +16,15 @@ use std::collections::{HashMap, HashSet};
 use crate::collision::death::ConfirmedDeath;
 use crate::food::ConfirmedFoodPickup;
 
-const CRASH_SOUND: &str = "powerline/sounds/crash.ogg";
-const FOOD_GRAB_SOUND: &str = "powerline/sounds/foodgrab.ogg";
-const LINE_LOOP_SOUND: &str = "powerline/sounds/lineloop.ogg";
-const LINE_FAST_LOOP_SOUND: &str = "powerline/sounds/lineloopfast.ogg";
-const ELECTRO_LOOP_SOUND: &str = "powerline/sounds/electroloop.ogg";
+const SOUND_ATLAS: &str = "powerline/sounds/sound.ogg";
+const SOUND_ATLAS_DURATION_MS: f64 = 18_000.0;
+const CRASH_SLICE: SoundSlice = SoundSlice::new(0.0, 804.0589569160998);
+const ELECTRO_LOOP_SLICE: SoundSlice = SoundSlice::new(2_000.0, 1_821.1791383219954);
+const FOOD_GRAB_SLICE: SoundSlice = SoundSlice::new(5_000.0, 461.29251700680294);
+const LINE_LOOP_SLICE: SoundSlice = SoundSlice::new(7_000.0, 2_946.1224489795923);
+const LINE_FAST_LOOP_SLICE: SoundSlice = SoundSlice::new(11_000.0, 2_000.0);
+const SPARK_SLICE: SoundSlice = SoundSlice::new(14_000.0, 87.93650793650798);
+const TURN_SLICE: SoundSlice = SoundSlice::new(16_000.0, 500.0);
 const SILENT_VOLUME_EPSILON: f32 = 0.001;
 const VOLUME_UPDATE_EPSILON: f32 = 0.005;
 const REMOTE_LOOP_POSITION_UPDATE_DISTANCE: f32 = 8.0;
@@ -28,6 +32,8 @@ const MAX_REMOTE_SPEED_LOOP_SNAKES: usize = 2;
 const MAX_ONE_SHOT_SOUNDS_PER_FRAME: usize = 2;
 const MAX_ONE_SHOT_SOUND_TOKENS: f32 = 24.0;
 const ONE_SHOT_SOUND_TOKENS_PER_SECOND: f32 = 24.0;
+const FOOD_SOUND_COOLDOWN_SECONDS: f64 = 0.075;
+const LOCAL_ELECTRO_BASE_VOLUME_RATIO: f32 = 0.28;
 const FIREWHEEL_CHANNEL_CAPACITY: u32 = 65_536;
 const FIREWHEEL_EVENT_QUEUE_CAPACITY: usize = 1024;
 const FIREWHEEL_IMMEDIATE_EVENT_CAPACITY: usize = 4096;
@@ -39,11 +45,30 @@ pub(crate) struct SoundPlugin;
 
 #[derive(Resource, Clone)]
 struct PowerlineSounds {
-    crash: Handle<AudioSample>,
-    food_grab: Handle<AudioSample>,
-    line_loop: Handle<AudioSample>,
-    line_fast_loop: Handle<AudioSample>,
-    electro_loop: Handle<AudioSample>,
+    atlas: Handle<AudioSample>,
+    crash: Option<Handle<AudioSample>>,
+    food_grab: Option<Handle<AudioSample>>,
+    line_loop: Option<Handle<AudioSample>>,
+    line_fast_loop: Option<Handle<AudioSample>>,
+    electro_loop: Option<Handle<AudioSample>>,
+    spark: Option<Handle<AudioSample>>,
+    turn: Option<Handle<AudioSample>>,
+}
+
+#[derive(Clone, Copy)]
+struct SoundSlice {
+    start_ms: f64,
+    duration_ms: f64,
+}
+
+struct PowerlineSoundSamples {
+    crash: AudioSample,
+    food_grab: AudioSample,
+    line_loop: AudioSample,
+    line_fast_loop: AudioSample,
+    electro_loop: AudioSample,
+    spark: AudioSample,
+    turn: AudioSample,
 }
 
 #[derive(Resource, Default)]
@@ -66,6 +91,11 @@ struct TurnSoundState {
 #[derive(Resource, Default)]
 struct ProximityBoostSoundState {
     active: HashSet<Entity>,
+}
+
+#[derive(Resource, Default)]
+struct FoodSoundCooldown {
+    last_played_seconds: Option<f64>,
 }
 
 #[derive(Resource, Default)]
@@ -122,11 +152,13 @@ impl Plugin for SoundPlugin {
         app.init_resource::<RemoteSpeedLoopState>();
         app.init_resource::<TurnSoundState>();
         app.init_resource::<ProximityBoostSoundState>();
+        app.init_resource::<FoodSoundCooldown>();
         app.init_resource::<OneShotSoundBudget>();
         app.add_systems(
             Update,
             (
                 reset_one_shot_sound_budget,
+                build_powerline_sound_slices,
                 sync_spatial_listener,
                 play_confirmed_death_sounds,
                 play_confirmed_food_sounds,
@@ -170,11 +202,124 @@ impl FromWorld for PowerlineSounds {
     fn from_world(world: &mut World) -> Self {
         let asset_server = world.resource::<AssetServer>();
         Self {
-            crash: asset_server.load(CRASH_SOUND),
-            food_grab: asset_server.load(FOOD_GRAB_SOUND),
-            line_loop: asset_server.load(LINE_LOOP_SOUND),
-            line_fast_loop: asset_server.load(LINE_FAST_LOOP_SOUND),
-            electro_loop: asset_server.load(ELECTRO_LOOP_SOUND),
+            atlas: asset_server.load(SOUND_ATLAS),
+            crash: None,
+            food_grab: None,
+            line_loop: None,
+            line_fast_loop: None,
+            electro_loop: None,
+            spark: None,
+            turn: None,
+        }
+    }
+}
+
+impl PowerlineSounds {
+    fn is_ready(&self) -> bool {
+        self.crash.is_some()
+    }
+
+    fn crash(&self) -> Option<Handle<AudioSample>> {
+        self.crash.clone()
+    }
+
+    fn food_grab(&self) -> Option<Handle<AudioSample>> {
+        self.food_grab.clone()
+    }
+
+    fn spark(&self) -> Option<Handle<AudioSample>> {
+        self.spark.clone()
+    }
+
+    fn turn(&self) -> Option<Handle<AudioSample>> {
+        self.turn.clone()
+    }
+
+    fn speed_loops(&self) -> Option<SpeedLoopSounds> {
+        Some(SpeedLoopSounds {
+            line_loop: self.line_loop.clone()?,
+            line_fast_loop: self.line_fast_loop.clone()?,
+            electro_loop: self.electro_loop.clone()?,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct SpeedLoopSounds {
+    line_loop: Handle<AudioSample>,
+    line_fast_loop: Handle<AudioSample>,
+    electro_loop: Handle<AudioSample>,
+}
+
+fn build_powerline_sound_slices(
+    mut sounds: ResMut<PowerlineSounds>,
+    mut samples: ResMut<Assets<AudioSample>>,
+) {
+    if sounds.is_ready() {
+        return;
+    }
+
+    let Some(powerline_samples) = samples
+        .get(&sounds.atlas)
+        .map(powerline_sound_samples_from_atlas)
+    else {
+        return;
+    };
+
+    sounds.crash = Some(samples.add(powerline_samples.crash));
+    sounds.food_grab = Some(samples.add(powerline_samples.food_grab));
+    sounds.line_loop = Some(samples.add(powerline_samples.line_loop));
+    sounds.line_fast_loop = Some(samples.add(powerline_samples.line_fast_loop));
+    sounds.electro_loop = Some(samples.add(powerline_samples.electro_loop));
+    sounds.spark = Some(samples.add(powerline_samples.spark));
+    sounds.turn = Some(samples.add(powerline_samples.turn));
+}
+
+fn powerline_sound_samples_from_atlas(atlas: &AudioSample) -> PowerlineSoundSamples {
+    PowerlineSoundSamples {
+        crash: audio_sprite_slice(atlas, CRASH_SLICE),
+        food_grab: audio_sprite_slice(atlas, FOOD_GRAB_SLICE),
+        line_loop: audio_sprite_slice(atlas, LINE_LOOP_SLICE),
+        line_fast_loop: audio_sprite_slice(atlas, LINE_FAST_LOOP_SLICE),
+        electro_loop: audio_sprite_slice(atlas, ELECTRO_LOOP_SLICE),
+        spark: audio_sprite_slice(atlas, SPARK_SLICE),
+        turn: audio_sprite_slice(atlas, TURN_SLICE),
+    }
+}
+
+fn audio_sprite_slice(atlas: &AudioSample, slice: SoundSlice) -> AudioSample {
+    let sample = atlas.get();
+    let range = sound_slice_frame_range(sample.len_frames(), slice);
+    let frame_count = range.end.saturating_sub(range.start).max(1);
+    let mut channels = vec![vec![0.0; frame_count]; sample.num_channels().get()];
+    let mut buffers = channels
+        .iter_mut()
+        .map(Vec::as_mut_slice)
+        .collect::<Vec<_>>();
+    sample.fill_buffers(&mut buffers, 0..frame_count, range.start as u64);
+    AudioSample::new(channels, atlas.original_sample_rate())
+}
+
+fn sound_slice_frame_range(total_frames: u64, slice: SoundSlice) -> std::ops::Range<usize> {
+    if total_frames == 0 {
+        return 0..1;
+    }
+
+    let total_frames = total_frames as f64;
+    let start = ((slice.start_ms / SOUND_ATLAS_DURATION_MS) * total_frames)
+        .round()
+        .clamp(0.0, total_frames) as usize;
+    let end = (((slice.start_ms + slice.duration_ms) / SOUND_ATLAS_DURATION_MS) * total_frames)
+        .round()
+        .clamp(start as f64 + 1.0, total_frames) as usize;
+    start..end
+}
+
+impl SoundSlice {
+    const fn new(start_ms: f64, duration_ms: f64) -> Self {
+        Self {
+            start_ms,
+            duration_ms,
         }
     }
 }
@@ -249,15 +394,17 @@ fn play_turn_sounds(
     if let Some((snake, head, _)) = local_snakes.iter().next() {
         seen.insert(snake);
         if direction_changed(&mut state.directions, snake, head.direction) {
-            let volume = config.sound.master_volume * config.sound.turn_volume;
-            spawn_one_shot(
-                &mut commands,
-                sounds.food_grab.clone(),
-                None,
-                volume,
-                &config.sound,
-                &mut budget,
-            );
+            if let Some(turn_sound) = sounds.turn() {
+                let volume = config.sound.master_volume * config.sound.turn_volume;
+                spawn_one_shot(
+                    &mut commands,
+                    turn_sound,
+                    None,
+                    volume,
+                    &config.sound,
+                    &mut budget,
+                );
+            }
         }
     }
 
@@ -283,14 +430,16 @@ fn play_turn_sounds(
             config.sound.remote_turn_volume,
             &config.sound,
         );
-        spawn_one_shot(
-            &mut commands,
-            sounds.food_grab.clone(),
-            Some(head.position),
-            volume,
-            &config.sound,
-            &mut budget,
-        );
+        if let Some(turn_sound) = sounds.turn() {
+            spawn_one_shot(
+                &mut commands,
+                turn_sound,
+                Some(head.position),
+                volume,
+                &config.sound,
+                &mut budget,
+            );
+        }
     }
 
     state.directions.retain(|entity, _| seen.contains(entity));
@@ -328,15 +477,17 @@ fn play_proximity_boost_sounds(
         if proximity_boost_active(acceleration.0, food_boost.0, &config.movement) {
             active_now.insert(snake);
             if !state.active.contains(&snake) {
-                let volume = config.sound.master_volume * config.sound.proximity_boost_volume;
-                spawn_one_shot(
-                    &mut commands,
-                    sounds.food_grab.clone(),
-                    None,
-                    volume,
-                    &config.sound,
-                    &mut budget,
-                );
+                if let Some(spark_sound) = sounds.spark() {
+                    let volume = config.sound.master_volume * config.sound.proximity_boost_volume;
+                    spawn_one_shot(
+                        &mut commands,
+                        spark_sound,
+                        None,
+                        volume,
+                        &config.sound,
+                        &mut budget,
+                    );
+                }
             }
         }
     }
@@ -362,14 +513,16 @@ fn play_proximity_boost_sounds(
                 config.sound.remote_proximity_boost_volume,
                 &config.sound,
             );
-            spawn_one_shot(
-                &mut commands,
-                sounds.food_grab.clone(),
-                Some(head.position),
-                volume,
-                &config.sound,
-                &mut budget,
-            );
+            if let Some(spark_sound) = sounds.spark() {
+                spawn_one_shot(
+                    &mut commands,
+                    spark_sound,
+                    Some(head.position),
+                    volume,
+                    &config.sound,
+                    &mut budget,
+                );
+            }
         }
     }
 
@@ -390,6 +543,10 @@ fn play_confirmed_death_sounds(
         for _ in deaths.read() {}
         return;
     }
+    let Some(crash_sound) = sounds.crash() else {
+        for _ in deaths.read() {}
+        return;
+    };
 
     let listener = controlled_listener_snapshot(&controlled_snakes)
         .or_else(|| listener_snapshot(&players, &heads));
@@ -401,7 +558,7 @@ fn play_confirmed_death_sounds(
         let source_position = (!death.local_player).then_some(death.position).flatten();
         spawn_one_shot(
             &mut commands,
-            sounds.crash.clone(),
+            crash_sound.clone(),
             source_position,
             volume,
             &config.sound,
@@ -414,6 +571,8 @@ fn play_confirmed_food_sounds(
     mut commands: Commands,
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
+    time: Res<Time>,
+    mut cooldown: ResMut<FoodSoundCooldown>,
     mut budget: ResMut<OneShotSoundBudget>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
@@ -424,22 +583,31 @@ fn play_confirmed_food_sounds(
         for _ in pickups.read() {}
         return;
     }
+    let Some(food_grab_sound) = sounds.food_grab() else {
+        for _ in pickups.read() {}
+        return;
+    };
 
     let listener = controlled_listener_snapshot(&controlled_snakes)
         .or_else(|| listener_snapshot_from_roomed_tails(&players, &snakes));
     let local_snake = local_player_snake(&players);
     for pickup in pickups.read() {
         let collision = &pickup.collision;
+        if !food_sound_ready(time.elapsed_secs_f64(), &cooldown) {
+            continue;
+        }
         if Some(collision.snake) == local_snake {
             let volume = config.sound.master_volume * config.sound.food_volume;
-            spawn_one_shot(
+            if spawn_one_shot(
                 &mut commands,
-                sounds.food_grab.clone(),
+                food_grab_sound.clone(),
                 None,
                 volume,
                 &config.sound,
                 &mut budget,
-            );
+            ) {
+                cooldown.last_played_seconds = Some(time.elapsed_secs_f64());
+            }
             continue;
         }
 
@@ -460,14 +628,16 @@ fn play_confirmed_food_sounds(
             * config.sound.food_volume
             * config.sound.remote_food_volume
             * attenuation;
-        spawn_one_shot(
+        if spawn_one_shot(
             &mut commands,
-            sounds.food_grab.clone(),
+            food_grab_sound.clone(),
             Some(source_position),
             volume,
             &config.sound,
             &mut budget,
-        );
+        ) {
+            cooldown.last_played_seconds = Some(time.elapsed_secs_f64());
+        }
     }
 }
 
@@ -491,19 +661,17 @@ fn update_local_speed_loops(
         &config.sound,
         &config.movement,
     );
-    let electro_volume = if state_snapshot.is_some_and(|state| {
-        proximity_boost_active(state.acceleration, state.food_boost, &config.movement)
-    }) {
-        config.sound.master_volume * config.sound.electro_loop_volume
-    } else {
-        0.0
+    let electro_volume = local_electro_loop_volume(state_snapshot, &config.sound, &config.movement);
+    let Some(loop_sounds) = sounds.speed_loops() else {
+        clear_local_speed_loops(&mut commands, &mut state);
+        return;
     };
 
     update_plain_loop(
         &mut commands,
         &mut state.line_loop,
         LocalSpeedLoopSound,
-        sounds.line_loop.clone(),
+        loop_sounds.line_loop,
         line_volume,
         &sample_effects,
         &mut volume_nodes,
@@ -512,7 +680,7 @@ fn update_local_speed_loops(
         &mut commands,
         &mut state.line_fast_loop,
         LocalSpeedLoopSound,
-        sounds.line_fast_loop.clone(),
+        loop_sounds.line_fast_loop,
         fast_volume,
         &sample_effects,
         &mut volume_nodes,
@@ -521,7 +689,7 @@ fn update_local_speed_loops(
         &mut commands,
         &mut state.electro_loop,
         LocalSpeedLoopSound,
-        sounds.electro_loop.clone(),
+        loop_sounds.electro_loop,
         electro_volume,
         &sample_effects,
         &mut volume_nodes,
@@ -559,6 +727,10 @@ fn update_remote_speed_loops(
         clear_remote_speed_loops(&mut commands, &mut state);
         return;
     }
+    let Some(loop_sounds) = sounds.speed_loops() else {
+        clear_remote_speed_loops(&mut commands, &mut state);
+        return;
+    };
 
     let Some(listener) = controlled_listener_snapshot(&controlled_snakes)
         .or_else(|| remote_listener_snapshot(&players, &heads))
@@ -620,7 +792,7 @@ fn update_remote_speed_loops(
             &mut commands,
             &mut loops.line_loop,
             candidate.snake,
-            sounds.line_loop.clone(),
+            loop_sounds.line_loop.clone(),
             candidate.position,
             candidate.line_volume,
             &config.sound,
@@ -632,7 +804,7 @@ fn update_remote_speed_loops(
             &mut commands,
             &mut loops.line_fast_loop,
             candidate.snake,
-            sounds.line_fast_loop.clone(),
+            loop_sounds.line_fast_loop.clone(),
             candidate.position,
             candidate.fast_volume,
             &config.sound,
@@ -644,7 +816,7 @@ fn update_remote_speed_loops(
             &mut commands,
             &mut loops.electro_loop,
             candidate.snake,
-            sounds.electro_loop.clone(),
+            loop_sounds.electro_loop.clone(),
             candidate.position,
             candidate.electro_volume,
             &config.sound,
@@ -781,12 +953,12 @@ fn spawn_one_shot(
     volume: f32,
     sound_config: &SoundConfig,
     budget: &mut OneShotSoundBudget,
-) {
+) -> bool {
     if volume <= SILENT_VOLUME_EPSILON
         || budget.spawned_this_frame >= MAX_ONE_SHOT_SOUNDS_PER_FRAME
         || budget.tokens < 1.0
     {
-        return;
+        return false;
     }
     budget.spawned_this_frame += 1;
     budget.tokens -= 1.0;
@@ -805,6 +977,13 @@ fn spawn_one_shot(
     } else {
         commands.spawn(player);
     }
+    true
+}
+
+fn food_sound_ready(now_seconds: f64, cooldown: &FoodSoundCooldown) -> bool {
+    cooldown
+        .last_played_seconds
+        .is_none_or(|last| now_seconds - last + 1e-9 >= FOOD_SOUND_COOLDOWN_SECONDS)
 }
 
 fn seedling_volume(volume: f32) -> Volume {
@@ -834,6 +1013,12 @@ fn clear_remote_speed_loops(commands: &mut Commands, state: &mut RemoteSpeedLoop
         despawn_loop(commands, loops.line_fast_loop);
         despawn_loop(commands, loops.electro_loop);
     }
+}
+
+fn clear_local_speed_loops(commands: &mut Commands, state: &mut LocalSpeedLoopState) {
+    despawn_loop(commands, state.line_loop.take());
+    despawn_loop(commands, state.line_fast_loop.take());
+    despawn_loop(commands, state.electro_loop.take());
 }
 
 fn despawn_loop(commands: &mut Commands, entity: Option<Entity>) {
@@ -950,6 +1135,25 @@ fn local_player_sound_state(
 
 fn proximity_boost_active(acceleration: f32, food_boost: f32, movement: &MovementConfig) -> bool {
     acceleration - food_boost > movement.base_acceleration + 0.001
+}
+
+fn local_electro_loop_volume(
+    state: Option<LocalSoundState>,
+    sound: &SoundConfig,
+    movement: &MovementConfig,
+) -> f32 {
+    if !sound.enabled {
+        return 0.0;
+    }
+    let Some(state) = state else {
+        return 0.0;
+    };
+    let base = sound.master_volume * sound.electro_loop_volume * LOCAL_ELECTRO_BASE_VOLUME_RATIO;
+    if proximity_boost_active(state.acceleration, state.food_boost, movement) {
+        sound.master_volume * sound.electro_loop_volume
+    } else {
+        base
+    }
 }
 
 fn direction_changed(
@@ -1120,6 +1324,41 @@ mod tests {
     }
 
     #[test]
+    fn local_electro_loop_has_baseline_volume_for_local_snake() {
+        let sound = SoundConfig::default();
+        let movement = MovementConfig::default();
+
+        let volume = local_electro_loop_volume(
+            Some(LocalSoundState {
+                speed: movement.min_speed,
+                acceleration: movement.base_acceleration,
+                food_boost: 0.0,
+            }),
+            &sound,
+            &movement,
+        );
+
+        assert!(volume > 0.0);
+        assert!(volume < sound.master_volume * sound.electro_loop_volume);
+    }
+
+    #[test]
+    fn food_sound_cooldown_blocks_rapid_replays() {
+        let cooldown = FoodSoundCooldown {
+            last_played_seconds: Some(1.0),
+        };
+
+        assert!(!food_sound_ready(
+            1.0 + FOOD_SOUND_COOLDOWN_SECONDS * 0.5,
+            &cooldown
+        ));
+        assert!(food_sound_ready(
+            1.0 + FOOD_SOUND_COOLDOWN_SECONDS,
+            &cooldown
+        ));
+    }
+
+    #[test]
     fn remote_attenuation_is_full_nearby_and_silent_far_away() {
         let sound = SoundConfig::default();
 
@@ -1237,5 +1476,37 @@ mod tests {
             ),
             0.0
         );
+    }
+
+    #[test]
+    fn sound_sprite_ranges_match_original_howler_atlas() {
+        let total_frames = 44_100 * 18;
+
+        assert_eq!(
+            sound_slice_frame_range(total_frames, TURN_SLICE),
+            705_600..727_650
+        );
+        assert_eq!(
+            sound_slice_frame_range(total_frames, LINE_FAST_LOOP_SLICE),
+            485_100..573_300
+        );
+    }
+
+    #[test]
+    fn sound_sprite_ranges_are_non_empty_and_inside_atlas() {
+        let total_frames = 44_100 * 18;
+        for slice in [
+            CRASH_SLICE,
+            ELECTRO_LOOP_SLICE,
+            FOOD_GRAB_SLICE,
+            LINE_LOOP_SLICE,
+            LINE_FAST_LOOP_SLICE,
+            SPARK_SLICE,
+            TURN_SLICE,
+        ] {
+            let range = sound_slice_frame_range(total_frames, slice);
+            assert!(range.start < range.end);
+            assert!(range.end <= total_frames as usize);
+        }
     }
 }

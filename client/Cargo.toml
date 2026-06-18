@@ -29,7 +29,7 @@ bevygap-matchmaker-tls = ["bevygap"]
 [dependencies]
 shared = { path = "../shared" }
 lightyear.workspace = true
-lightyear_tools = { path = "../../lightyear/crates/tools/tools" }
+lightyear_tools = { path = "../../lightyear/lightyear_tools" }
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 anyhow.workspace = true
@@ -64,6 +64,8 @@ tokio = { version = "1.34", features = [
 [target."cfg(target_family = \"wasm\")".dependencies]
 bevy_seedling = { workspace = true, features = ["web_audio"] }
 getrandom = { version = "0.4", features = ["wasm_js"] }
+js-sys = "0.3"
 tokio = { version = "1.34", features = ["macros", "rt"] }
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Document", "Element", "Location", "UrlSearchParams", "Window"] }

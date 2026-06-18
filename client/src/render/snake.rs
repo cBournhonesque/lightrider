@@ -22,6 +22,9 @@ const SNAKE_DEATH_Z: f32 = 16.0;
 const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.58;
 const MESH_CURVE_SEGMENTS: u32 = 14;
 const AXIS_REPAIR_EPSILON: f32 = 0.001;
+const WIDTH_GROWTH_START_LENGTH: f32 = 2500.0;
+const WIDTH_GROWTH_MAX_LENGTH: f32 = 5000.0;
+const WIDTH_GROWTH_MAX_SCALE: f32 = 2.0;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SnakeVisual {
@@ -114,9 +117,10 @@ pub(crate) fn draw_snakes(
 
     let color = Color::srgb(0.1, 0.75, 1.0);
     let head_color = Color::srgb(0.75, 0.95, 1.0);
-    let tail_width = config.render.tail_width.max(1.0);
-    let head_size = config.render.head_size.max(1.0);
     for (head, points, length) in tails.iter() {
+        let width_scale = snake_width_scale(length);
+        let tail_width = config.render.tail_width.max(1.0) * width_scale;
+        let head_size = config.render.head_size.max(1.0) * width_scale;
         let points = visible_tail(head, points, length);
         gizmos.rect_2d(points.front().0, Vec2::ONE * head_size, head_color);
         points.pairs_front_to_back().for_each(|(start, end)| {
@@ -256,13 +260,16 @@ fn desired_snake_visuals(
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
     >,
 ) -> (Vec<DesiredSnakeSpriteVisual>, Vec<DesiredSnakeMeshVisual>) {
-    let tail_width = config.render.tail_width.max(1.0);
-    let head_size = config.render.head_size.max(tail_width * 1.8);
-    let head_diameter = (head_size * 0.62).max(tail_width * 2.5);
+    let base_tail_width = config.render.tail_width.max(1.0);
+    let base_head_size = config.render.head_size.max(base_tail_width * 1.8);
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
     for (owner, head, points, length, speed, acceleration, player) in tails.iter() {
+        let width_scale = snake_width_scale(length);
+        let tail_width = base_tail_width * width_scale;
+        let head_size = base_head_size * width_scale;
+        let head_diameter = (head_size * 0.62).max(tail_width * 2.5);
         let points = visible_tail(head, points, length);
         let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
@@ -400,6 +407,17 @@ fn head_glow_visual(
 fn normalized_range(value: f32, start: f32, end: f32) -> f32 {
     let width = (end - start).max(f32::EPSILON);
     ((value - start) / width).clamp(0.0, 1.0)
+}
+
+fn snake_width_scale(length: Option<&TailLength>) -> f32 {
+    let Some(length) = length else {
+        return 1.0;
+    };
+    1.0 + normalized_range(
+        length.current_size,
+        WIDTH_GROWTH_START_LENGTH,
+        WIDTH_GROWTH_MAX_LENGTH,
+    ) * (WIDTH_GROWTH_MAX_SCALE - 1.0)
 }
 
 fn visible_tail(
@@ -938,5 +956,31 @@ mod tests {
         assert!(accelerating_mid.alpha > idle.alpha);
         assert!(accelerating_fast.diameter > accelerating_mid.diameter);
         assert!(accelerating_fast.alpha > accelerating_mid.alpha);
+    }
+
+    #[test]
+    fn snake_width_scale_reaches_double_width_at_large_lengths() {
+        assert_eq!(snake_width_scale(None), 1.0);
+        assert_eq!(
+            snake_width_scale(Some(&TailLength {
+                current_size: WIDTH_GROWTH_START_LENGTH,
+                target_size: WIDTH_GROWTH_START_LENGTH,
+            })),
+            1.0
+        );
+        assert_eq!(
+            snake_width_scale(Some(&TailLength {
+                current_size: WIDTH_GROWTH_MAX_LENGTH,
+                target_size: WIDTH_GROWTH_MAX_LENGTH,
+            })),
+            WIDTH_GROWTH_MAX_SCALE
+        );
+        assert_eq!(
+            snake_width_scale(Some(&TailLength {
+                current_size: (WIDTH_GROWTH_START_LENGTH + WIDTH_GROWTH_MAX_LENGTH) * 0.5,
+                target_size: WIDTH_GROWTH_MAX_LENGTH,
+            })),
+            1.5
+        );
     }
 }

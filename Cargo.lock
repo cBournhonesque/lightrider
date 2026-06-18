@@ -2600,6 +2600,7 @@ dependencies = [
  "clap",
  "derive_more 0.99.20",
  "getrandom 0.4.2",
+ "js-sys",
  "lightyear",
  "lightyear_matchmaker_bevy_client",
  "lightyear_matchmaker_core",
@@ -2610,6 +2611,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
 ]

@@ -11,7 +11,6 @@ use lightyear::prelude::*;
 use lightyear_matchmaker_bevy_client::{
     request_play_once, MatchmakerClientErrorInfo, MatchmakerClientResult,
 };
-#[cfg(target_arch = "wasm32")]
 use lightyear_matchmaker_bevy_client::{ConnectionGrantReady, MatchmakerClientFailed, RequestPlay};
 #[cfg(not(target_arch = "wasm32"))]
 use lightyear_matchmaker_bevy_client::{LightyearMatchmakerClientPlugin, MatchmakerClientConfig};

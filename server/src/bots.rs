@@ -53,6 +53,9 @@ impl BotTargetOverrides {
         room: RoomId,
         human_count: usize,
     ) -> usize {
+        if human_count == 0 {
+            return 0;
+        }
         let target = if let Some(override_target) = self.per_room.get(&room).copied() {
             override_target
         } else if config.bots.enabled {
@@ -347,7 +350,8 @@ mod tests {
 
         assert_eq!(targets.target_for_room(&config, room, 0), 0);
         assert_eq!(targets.set_target(&config, room, 3), 3);
-        assert_eq!(targets.target_for_room(&config, room, 0), 3);
+        assert_eq!(targets.target_for_room(&config, room, 0), 0);
+        assert_eq!(targets.target_for_room(&config, room, 1), 3);
     }
 
     #[test]
@@ -360,7 +364,7 @@ mod tests {
         let targets = BotTargetOverrides::default();
         let room = RoomId(2);
 
-        assert_eq!(targets.target_for_room(&config, room, 0), 5);
+        assert_eq!(targets.target_for_room(&config, room, 0), 0);
         assert_eq!(targets.target_for_room(&config, room, 1), 4);
         assert_eq!(targets.target_for_room(&config, room, 4), 1);
         assert_eq!(targets.target_for_room(&config, room, 5), 0);
@@ -377,7 +381,7 @@ mod tests {
         let targets = BotTargetOverrides::default();
         let room = RoomId(2);
 
-        assert_eq!(targets.target_for_room(&config, room, 0), 5);
+        assert_eq!(targets.target_for_room(&config, room, 0), 0);
         assert_eq!(targets.target_for_room(&config, room, 3), 2);
         assert_eq!(targets.target_for_room(&config, room, 5), 2);
         assert_eq!(targets.target_for_room(&config, room, 7), 1);

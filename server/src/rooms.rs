@@ -22,6 +22,9 @@ pub(crate) struct ClientRoom {
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 struct PendingPlayerName(String);
 
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+struct RegisteredHumanRoom(RoomId);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RoomAssignment {
     pub(crate) game_room: RoomId,
@@ -262,36 +265,119 @@ fn ensure_initial_room(
 
 fn handle_player_name_updates(
     mut commands: Commands,
+    config: Res<GameConfig>,
+    mut directory: ResMut<RoomDirectory>,
     mut clients: Query<
-        (Entity, &RemoteId, &mut MessageReceiver<PlayerNameUpdate>),
+        (
+            Entity,
+            &RemoteId,
+            &mut MessageReceiver<PlayerNameUpdate>,
+            Option<&ClientRoom>,
+            Option<&RegisteredHumanRoom>,
+        ),
         With<Connected>,
     >,
-    mut players: Query<&mut Player>,
+    mut players: Query<(
+        Entity,
+        &mut Player,
+        &mut PlayerScore,
+        &mut PlayerStats,
+        &mut PlayerStatus,
+        &RoomId,
+        Option<&ControlledBy>,
+    )>,
 ) {
-    for (client_entity, remote_id, mut receiver) in &mut clients {
+    for (client_entity, remote_id, mut receiver, client_room, registered_room) in &mut clients {
         for message in receiver.receive() {
-            let name = sanitize_player_name(&message.name);
+            let Some(name) = sanitize_player_name(&message.name) else {
+                commands.entity(client_entity).remove::<PendingPlayerName>();
+                continue;
+            };
             commands
                 .entity(client_entity)
                 .insert(PendingPlayerName(name.clone()));
-            for mut player in &mut players {
-                if player.id == remote_id.0 {
-                    player.name = name.clone();
-                    break;
+
+            if let Some((
+                player_entity,
+                mut player,
+                mut score,
+                mut stats,
+                mut status,
+                room,
+                controlled_by,
+            )) = players
+                .iter_mut()
+                .find(|(_, player, ..)| player.id == remote_id.0)
+            {
+                if player.name == name && player.snake.is_some() && *status == PlayerStatus::Alive {
+                    continue;
                 }
+                player.name = name;
+                if let Some(snake_entity) = player.snake.take() {
+                    commands.entity(snake_entity).try_despawn();
+                }
+                let Some(lightyear_room) = directory.lightyear_room(*room) else {
+                    continue;
+                };
+                let assignment = RoomAssignment {
+                    game_room: *room,
+                    lightyear_room,
+                };
+                let head_entity = spawn_client_snake(
+                    &mut commands,
+                    client_entity,
+                    remote_id.0,
+                    player_entity,
+                    assignment,
+                    &config,
+                );
+                if let Some(controlled_by) = controlled_by.copied() {
+                    commands.entity(head_entity).insert(controlled_by);
+                }
+                player.snake = Some(head_entity);
+                *score = PlayerScore::default();
+                stats.reset_for_life();
+                *status = PlayerStatus::Alive;
+                if registered_room.is_none() {
+                    directory.register_human(*room);
+                    commands
+                        .entity(client_entity)
+                        .insert(RegisteredHumanRoom(*room));
+                }
+                continue;
             }
+
+            let Some(client_room) = client_room else {
+                continue;
+            };
+            let Some(lightyear_room) = directory.lightyear_room(client_room.room) else {
+                continue;
+            };
+            let assignment = RoomAssignment {
+                game_room: client_room.room,
+                lightyear_room,
+            };
+            if registered_room.is_none() {
+                directory.register_human(client_room.room);
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(client_room.room));
+            }
+            spawn_client_player(
+                &mut commands,
+                client_entity,
+                remote_id.0,
+                assignment,
+                &config,
+                name,
+            );
         }
     }
 }
 
-fn sanitize_player_name(name: &str) -> String {
+fn sanitize_player_name(name: &str) -> Option<String> {
     let trimmed = name.trim();
-    let sanitized = if trimmed.is_empty() {
-        "Player"
-    } else {
-        trimmed
-    };
-    sanitized.chars().take(18).collect()
+    (!trimmed.is_empty()).then(|| trimmed.chars().take(18).collect())
 }
 
 fn handle_room_join_requests(
@@ -307,14 +393,18 @@ fn handle_room_join_requests(
             &mut MessageReceiver<RoomJoinRequest>,
             Option<&ClientRoom>,
             Option<&PendingPlayerName>,
+            Option<&RegisteredHumanRoom>,
         ),
         With<Connected>,
     >,
     players: Query<(Entity, &Player)>,
     mut room_components: Query<&mut RoomId>,
 ) {
-    for (client_entity, remote_id, mut receiver, client_room, pending_name) in &mut clients {
+    for (client_entity, remote_id, mut receiver, client_room, pending_name, registered_room) in
+        &mut clients
+    {
         let mut current_room = client_room.map(|room| room.room);
+        let mut registered_room = registered_room.map(|room| room.0);
         for request in receiver.receive() {
             let roll = rng.usize(..);
             let assignment = directory.assign_for_mode(
@@ -324,16 +414,14 @@ fn handle_room_join_requests(
                 request.mode,
                 roll,
             );
-            if Some(assignment.game_room) == current_room {
-                continue;
-            }
 
-            move_client_to_room(
+            registered_room = move_client_to_room(
                 &mut commands,
                 &mut directory,
                 client_entity,
                 remote_id.0,
                 current_room,
+                registered_room,
                 assignment,
                 &config,
                 pending_name,
@@ -401,19 +489,14 @@ fn move_client_to_room(
     directory: &mut RoomDirectory,
     client_entity: Entity,
     client_id: lightyear::prelude::PeerId,
-    current_room: Option<RoomId>,
+    _current_room: Option<RoomId>,
+    registered_room: Option<RoomId>,
     assignment: RoomAssignment,
     config: &GameConfig,
     pending_name: Option<&PendingPlayerName>,
     players: &Query<(Entity, &Player)>,
     room_components: &mut Query<&mut RoomId>,
-) {
-    if let Some(current_room) = current_room {
-        directory.move_human(current_room, assignment.game_room);
-    } else {
-        directory.register_human(assignment.game_room);
-    }
-
+) -> Option<RoomId> {
     add_replicated_entity_to_room(commands, assignment.lightyear_room, client_entity);
     commands.entity(client_entity).insert(ClientRoom {
         room: assignment.game_room,
@@ -421,16 +504,39 @@ fn move_client_to_room(
 
     let Some((player_entity, player)) = players.iter().find(|(_, player)| player.id == client_id)
     else {
-        spawn_client_player(
-            commands,
-            client_entity,
-            client_id,
-            assignment,
-            config,
-            pending_name,
-        );
-        return;
+        if let Some(pending_name) = pending_name {
+            if registered_room != Some(assignment.game_room) {
+                if let Some(registered_room) = registered_room {
+                    directory.move_human(registered_room, assignment.game_room);
+                } else {
+                    directory.register_human(assignment.game_room);
+                }
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(assignment.game_room));
+            }
+            spawn_client_player(
+                commands,
+                client_entity,
+                client_id,
+                assignment,
+                config,
+                pending_name.0.clone(),
+            );
+            return Some(assignment.game_room);
+        }
+        return registered_room;
     };
+    if registered_room != Some(assignment.game_room) {
+        if let Some(registered_room) = registered_room {
+            directory.move_human(registered_room, assignment.game_room);
+        } else {
+            directory.register_human(assignment.game_room);
+        }
+        commands
+            .entity(client_entity)
+            .insert(RegisteredHumanRoom(assignment.game_room));
+    }
     move_replicated_entity_to_room(commands, player_entity, assignment.lightyear_room);
     if let Ok(mut player_room) = room_components.get_mut(player_entity) {
         *player_room = assignment.game_room;
@@ -442,6 +548,7 @@ fn move_client_to_room(
             *snake_room = assignment.game_room;
         }
     }
+    Some(assignment.game_room)
 }
 
 fn spawn_client_player(
@@ -450,12 +557,52 @@ fn spawn_client_player(
     client_id: PeerId,
     assignment: RoomAssignment,
     config: &GameConfig,
-    pending_name: Option<&PendingPlayerName>,
+    name: String,
 ) {
     info!(
         "Client {client_id:?} joined room {}",
         assignment.game_room.0,
     );
+    let player_entity = PlayerBundle::new_in_room(
+        Player {
+            id: client_id,
+            name: name.clone(),
+            snake: None,
+        },
+        assignment.game_room,
+    )
+    .spawn(commands, client_id);
+    let head_entity = spawn_client_snake(
+        commands,
+        client_entity,
+        client_id,
+        player_entity,
+        assignment,
+        config,
+    );
+
+    let controlled_by = ControlledBy {
+        owner: client_entity,
+        lifetime: Default::default(),
+    };
+    commands.entity(head_entity).insert(controlled_by);
+    commands.entity(player_entity).insert(controlled_by);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, player_entity);
+    commands.entity(player_entity).insert(Player {
+        id: client_id,
+        name,
+        snake: Some(head_entity),
+    });
+}
+
+fn spawn_client_snake(
+    commands: &mut Commands,
+    client_entity: Entity,
+    client_id: PeerId,
+    player_entity: Entity,
+    assignment: RoomAssignment,
+    config: &GameConfig,
+) -> Entity {
     let (spawn_position, spawn_direction) =
         snake_spawn_pose(config, assignment.game_room, client_id.to_bits());
     let head_entity = SnakeBundle::spawn_with_room_at(
@@ -466,29 +613,16 @@ fn spawn_client_player(
         spawn_position,
         spawn_direction,
     );
-    let player_entity = PlayerBundle::new_in_room(
-        Player {
-            id: client_id,
-            name: pending_name
-                .map(|name| name.0.clone())
-                .unwrap_or_else(|| format!("Player {}", client_id.to_bits())),
-            snake: Some(head_entity),
+    commands.entity(head_entity).insert((
+        HasPlayer(player_entity),
+        ControlledBy {
+            owner: client_entity,
+            lifetime: Default::default(),
         },
-        assignment.game_room,
-    )
-    .spawn(commands, client_id);
-
-    let controlled_by = ControlledBy {
-        owner: client_entity,
-        lifetime: Default::default(),
-    };
-    commands
-        .entity(head_entity)
-        .insert((HasPlayer(player_entity), controlled_by));
-    commands.entity(player_entity).insert(controlled_by);
-    add_replicated_entity_to_room(commands, assignment.lightyear_room, player_entity);
+    ));
     add_replicated_entity_to_room(commands, assignment.lightyear_room, head_entity);
     spawn_snake_input_actions(commands, head_entity, client_id, true);
+    head_entity
 }
 
 pub(crate) fn add_replicated_entity_to_room(
@@ -517,16 +651,16 @@ fn move_replicated_entity_to_room(
 
 fn handle_disconnected(
     trigger: On<Add, Disconnected>,
-    clients: Query<(&RemoteId, Option<&ClientRoom>), With<ClientOf>>,
+    clients: Query<(&RemoteId, Option<&RegisteredHumanRoom>), With<ClientOf>>,
     players: Query<(Entity, &Player)>,
     mut directory: ResMut<RoomDirectory>,
     mut commands: Commands,
 ) {
-    let Ok((remote_id, client_room)) = clients.get(trigger.entity) else {
+    let Ok((remote_id, registered_room)) = clients.get(trigger.entity) else {
         return;
     };
-    if let Some(client_room) = client_room {
-        directory.unregister_human(client_room.room);
+    if let Some(registered_room) = registered_room {
+        directory.unregister_human(registered_room.0);
     }
 
     let Some((player_entity, player)) = players.iter().find(|(_, player)| player.id == remote_id.0)

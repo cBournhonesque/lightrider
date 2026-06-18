@@ -9,7 +9,8 @@ use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Client, Controlled, Link, Predicted};
 use shared::config::{ArenaConfig, GameConfig};
 use shared::network::protocol::prelude::{
-    Player, PlayerDeathStats, PlayerStatus, RoomId, SnakeHead, TailLength, TailPoints, TailPolyline,
+    Direction, Player, PlayerDeathStats, PlayerStatus, RoomId, SnakeHead, TailLength, TailPoints,
+    TailPolyline,
 };
 use std::{collections::HashSet, time::Duration};
 
@@ -18,7 +19,7 @@ const NEARBY_LEADERBOARD_ROWS: usize = 5;
 const MAX_LEADERBOARD_ROWS: usize = 10;
 const MINIMAP_WIDTH: f32 = 180.0;
 const MINIMAP_HEIGHT: f32 = 82.0;
-const MINIMAP_DOT_SIZE: f32 = 8.0;
+const MINIMAP_ARROW_SIZE: f32 = 10.0;
 const MINIMAP_TRAIL_THICKNESS: f32 = 2.0;
 const MINIMAP_CROWN_WIDTH: f32 = 16.0;
 const MINIMAP_CROWN_HEIGHT: f32 = 14.0;
@@ -75,9 +76,8 @@ struct DesiredMiniMapTrailSegment {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MiniMapDotKind {
-    Leader,
     LeaderCrown,
-    Player,
+    PlayerArrow,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,7 +127,6 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 top: Val::Px(12.0),
                 right: Val::Px(12.0),
                 width: Val::Px(278.0),
-                border: UiRect::all(Val::Px(1.0)),
                 border_radius: ui_style::panel_radius(),
                 padding: UiRect::all(Val::Px(8.0)),
                 flex_direction: FlexDirection::Column,
@@ -135,7 +134,6 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 ..default()
             },
             ui_style::panel_background(0.54),
-            ui_style::panel_border(),
             ui_style::panel_shadow(),
         ))
         .with_children(|parent| {
@@ -173,13 +171,6 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
         ))
         .with_children(|parent| {
             parent.spawn((
-                MiniMapDot(MiniMapDotKind::Leader),
-                minimap_node(Vec2::splat(MINIMAP_DOT_SIZE)),
-                BackgroundColor(Color::srgb(1.0, 0.86, 0.26)),
-                ZIndex(2),
-                Visibility::Hidden,
-            ));
-            parent.spawn((
                 MiniMapDot(MiniMapDotKind::LeaderCrown),
                 minimap_node(Vec2::new(MINIMAP_CROWN_WIDTH, MINIMAP_CROWN_HEIGHT)),
                 ImageNode::new(sheet.image()).with_rect(PowerlineFrame::Crown.rect()),
@@ -187,9 +178,14 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 Visibility::Hidden,
             ));
             parent.spawn((
-                MiniMapDot(MiniMapDotKind::Player),
-                minimap_node(Vec2::splat(MINIMAP_DOT_SIZE)),
-                BackgroundColor(Color::srgb(0.16, 0.78, 1.0)),
+                MiniMapDot(MiniMapDotKind::PlayerArrow),
+                minimap_node(Vec2::splat(MINIMAP_ARROW_SIZE)),
+                Text::new(">"),
+                TextFont {
+                    font_size: 10.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.44, 1.0, 0.93)),
                 ZIndex(2),
                 Visibility::Hidden,
             ));
@@ -295,7 +291,7 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 ui_style::title_color(),
                 ui_style::text_glow(),
                 TextFont {
-                    font_size: 22.0,
+                    font_size: 28.0,
                     ..default()
                 },
             ));
@@ -393,6 +389,7 @@ fn update_leaderboard(
         })
         .collect::<Vec<_>>();
 
+    normalize_leaderboard_ranks(&mut entries);
     let rows = select_leaderboard_rows(&mut entries);
     text.0 = format_leaderboard_rows(&rows);
 }
@@ -405,7 +402,10 @@ fn update_minimap(
     players: Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
     predicted_tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>), With<Predicted>>,
     tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
-    mut dots: Query<(&MiniMapDot, &mut Node, &mut Visibility), Without<MiniMapTrailSegment>>,
+    mut dots: Query<
+        (&MiniMapDot, &mut Node, &mut Visibility, Option<&mut Text>),
+        Without<MiniMapTrailSegment>,
+    >,
     mut trail_segments: Query<
         (
             Entity,
@@ -431,6 +431,7 @@ fn update_minimap(
                 .map(|(head, tail, length)| visible_tail(head, tail, length))
         });
     let local_position = local_tail.as_ref().map(snake_head);
+    let local_direction = local_tail.as_ref().map(snake_head_direction);
     let leader_entity = local_room.and_then(|room| {
         leaderboard_state
             .latest()
@@ -454,15 +455,18 @@ fn update_minimap(
         }
     });
 
-    for (dot, mut node, mut visibility) in &mut dots {
+    for (dot, mut node, mut visibility, text) in &mut dots {
         let position = match dot.0 {
-            MiniMapDotKind::Leader | MiniMapDotKind::LeaderCrown => leader_position,
-            MiniMapDotKind::Player => local_position,
+            MiniMapDotKind::LeaderCrown => leader_position,
+            MiniMapDotKind::PlayerArrow => local_position,
         };
         if let Some(position) = position {
             let panel_position = minimap_position_for_kind(position, &config.arena, dot.0);
             node.left = Val::Px(panel_position.x);
             node.top = Val::Px(panel_position.y);
+            if let Some(mut text) = text {
+                text.0 = minimap_arrow_for_direction(local_direction).to_string();
+            }
             *visibility = Visibility::Inherited;
         } else {
             *visibility = Visibility::Hidden;
@@ -559,7 +563,7 @@ fn update_death_overlay(
 
     *visibility = Visibility::Inherited;
     if let Ok(mut title) = title.single_mut() {
-        title.0 = death_view.message.clone();
+        title.0 = death_view.message.to_ascii_uppercase();
     }
     if let Ok(mut text) = stats_text.single_mut() {
         let respawn_wait = (death_view.respawn_allowed_at_seconds - time.elapsed_secs()).max(0.0);
@@ -622,6 +626,10 @@ fn snake_head(tail: &TailPolyline) -> Vec2 {
     tail.front().0
 }
 
+fn snake_head_direction(tail: &TailPolyline) -> Direction {
+    tail.front().1
+}
+
 fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
     tail.polyline(
         head,
@@ -631,23 +639,29 @@ fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>
 
 #[cfg(test)]
 fn minimap_position(position: Vec2, arena: &ArenaConfig) -> Vec2 {
-    minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_DOT_SIZE), Vec2::ZERO)
+    minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_ARROW_SIZE), Vec2::ZERO)
 }
 
 fn minimap_position_for_kind(position: Vec2, arena: &ArenaConfig, kind: MiniMapDotKind) -> Vec2 {
     match kind {
-        MiniMapDotKind::Leader => {
-            minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_DOT_SIZE), Vec2::ZERO)
-        }
         MiniMapDotKind::LeaderCrown => minimap_position_for_size(
             position,
             arena,
             Vec2::new(MINIMAP_CROWN_WIDTH, MINIMAP_CROWN_HEIGHT),
             Vec2::new(0.0, -MINIMAP_CROWN_HEIGHT + 3.0),
         ),
-        MiniMapDotKind::Player => {
-            minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_DOT_SIZE), Vec2::ZERO)
+        MiniMapDotKind::PlayerArrow => {
+            minimap_position_for_size(position, arena, Vec2::splat(MINIMAP_ARROW_SIZE), Vec2::ZERO)
         }
+    }
+}
+
+fn minimap_arrow_for_direction(direction: Option<Direction>) -> &'static str {
+    match direction.unwrap_or(Direction::Right) {
+        Direction::Right => ">",
+        Direction::Left => "<",
+        Direction::Up => "^",
+        Direction::Down => "v",
     }
 }
 
@@ -742,6 +756,19 @@ fn select_leaderboard_rows(entries: &mut [LeaderboardEntry]) -> Vec<LeaderboardE
 
     rows.truncate(MAX_LEADERBOARD_ROWS);
     rows
+}
+
+fn normalize_leaderboard_ranks(entries: &mut [LeaderboardEntry]) {
+    entries.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for (index, entry) in entries.iter_mut().enumerate() {
+        entry.rank = index as u16 + 1;
+    }
 }
 
 fn compare_rank_score(
@@ -851,9 +878,9 @@ fn format_death_stats(stats: PlayerDeathStats, respawn_wait_seconds: f32) -> Str
 
 fn format_respawn_prompt(respawn_wait_seconds: f32) -> String {
     if respawn_wait_seconds > 0.0 {
-        format!("Respawn in {}...", respawn_wait_seconds.ceil() as u32)
+        format!("RESPAWN IN {}...", respawn_wait_seconds.ceil() as u32)
     } else {
-        "Press Enter to respawn".to_string()
+        "PRESS ENTER TO RESPAWN".to_string()
     }
 }
 
@@ -911,6 +938,27 @@ mod tests {
     }
 
     #[test]
+    fn leaderboard_normalizes_sparse_snapshot_ranks() {
+        let mut entries = vec![
+            LeaderboardEntry {
+                rank: 1,
+                ..entry(1, 20, false)
+            },
+            LeaderboardEntry {
+                rank: 4,
+                ..entry(2, 10, false)
+            },
+        ];
+
+        normalize_leaderboard_ranks(&mut entries);
+
+        assert_eq!(
+            entries.iter().map(|entry| entry.rank).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
     fn minimap_maps_world_center_to_panel_center() {
         let arena = ArenaConfig {
             width: 1000.0,
@@ -920,8 +968,8 @@ mod tests {
         assert_eq!(
             minimap_position(Vec2::ZERO, &arena),
             Vec2::new(
-                (MINIMAP_WIDTH - MINIMAP_DOT_SIZE) * 0.5,
-                (MINIMAP_HEIGHT - MINIMAP_DOT_SIZE) * 0.5
+                (MINIMAP_WIDTH - MINIMAP_ARROW_SIZE) * 0.5,
+                (MINIMAP_HEIGHT - MINIMAP_ARROW_SIZE) * 0.5
             )
         );
     }
@@ -946,7 +994,7 @@ mod tests {
         assert!(text.contains("Kills: 3"));
         assert!(text.contains("Time as leader: 0:05"));
         assert!(text.contains("Food eaten: 7"));
-        assert!(text.contains("Respawn in 2..."));
+        assert!(text.contains("RESPAWN IN 2..."));
     }
 
     #[test]
@@ -963,7 +1011,7 @@ mod tests {
             0.0,
         );
 
-        assert!(text.contains("Press Enter to respawn"));
+        assert!(text.contains("PRESS ENTER TO RESPAWN"));
     }
 
     #[test]

@@ -40,25 +40,34 @@ mod wasm {
         if let Some(message) = startup_error.as_deref() {
             set_status_element(Some(message));
         }
-        let can_start_bevy = startup_error.is_none();
-        let game_stage = if can_start_bevy {
-            let bevy_options = settings.bevy_options();
-            view! {
-                <BevyCanvas
-                    canvas_id=CANVAS_ID
-                    init=move || client::web_app(bevy_options.clone())
-                />
-            }
-            .into_any()
-        } else {
-            view! { <div class="game-stage-blocked"></div> }.into_any()
-        };
-
         let (name, set_name) = signal(settings.player_name.clone());
         let (room_code, set_room_code) = signal(initial_room_code);
         let (room_badge, set_room_badge) = signal(initial_room_badge);
         let (modal_open, set_modal_open) = signal(show_modal);
         let (error, set_error) = signal(String::new());
+        let can_start_bevy = startup_error.is_none();
+        publish_player_settings(&settings.player_name, settings.room);
+        let initial_bevy_options = can_start_bevy.then(|| settings.bevy_options());
+        let (bevy_options, set_bevy_options) = signal(initial_bevy_options);
+        let submit_settings = settings.clone();
+        leptos::prelude::window_event_listener(leptos::ev::keydown, move |event| {
+            if event.key() == "Escape" {
+                set_modal_open.set(true);
+            }
+        });
+        let game_stage = move || {
+            if let Some(options) = bevy_options.get() {
+                view! {
+                    <BevyCanvas
+                        canvas_id=CANVAS_ID
+                        init=move || client::web_app(options.clone())
+                    />
+                }
+                .into_any()
+            } else {
+                view! { <div class="game-stage-blocked"></div> }.into_any()
+            }
+        };
 
         let on_name_input = move |event| {
             set_name.set(event_target_value(&event));
@@ -69,13 +78,23 @@ mod wasm {
         let on_submit = move |event: web_sys::SubmitEvent| {
             event.prevent_default();
             let player_name = sanitize_player_name(&name.get());
+            if player_name.is_empty() {
+                set_error.set("Enter a name.".to_string());
+                return;
+            }
             let room = room_code.get();
             match parse_room_input(&room) {
                 Ok(room_mode) => {
                     set_error.set(String::new());
                     set_room_badge.set(room_badge_text(room_mode));
-                    apply_settings_to_url(&player_name, room_mode);
+                    replace_settings_in_url(&player_name, room_mode);
+                    publish_player_settings(&player_name, room_mode);
                     set_modal_open.set(false);
+                    if can_start_bevy && bevy_options.get_untracked().is_none() {
+                        set_bevy_options.set(Some(
+                            submit_settings.bevy_options_with(player_name, room_mode),
+                        ));
+                    }
                 }
                 Err(message) => set_error.set(message),
             }
@@ -88,14 +107,6 @@ mod wasm {
                 </div>
                 <div class=move || if modal_open.get() { "menu-backdrop" } else { "menu-backdrop hidden" }>
                     <section class="join-modal" aria-label="Lightrider menu">
-                        <button
-                            class="modal-close"
-                            type="button"
-                            aria-label="Close menu"
-                            on:click=move |_| set_modal_open.set(false)
-                        >
-                            "X"
-                        </button>
                         <h1>"LIGHTRIDER"</h1>
                         <form on:submit=on_submit>
                             <input
@@ -121,25 +132,11 @@ mod wasm {
                                 {move || error.get()}
                             </p>
                         </form>
-                        <div class="modal-links">
-                            <button type="button" on:click=move |_| {
-                                set_room_code.set(String::new());
-                            }>"PUBLIC"</button>
-                            <a href="https://github.com/cBournhonesque/lightrider" target="_blank" rel="noreferrer">"GitHub"</a>
-                        </div>
                     </section>
                 </div>
                 <div class=move || if room_badge.get().is_some() { "room-code-badge" } else { "room-code-badge hidden" }>
                     {move || room_badge.get().unwrap_or_default()}
                 </div>
-                <button
-                    class=move || if modal_open.get() { "menu-button hidden" } else { "menu-button" }
-                    type="button"
-                    aria-label="Open menu"
-                    on:click=move |_| set_modal_open.set(true)
-                >
-                    "MENU"
-                </button>
             </main>
         }
     }
@@ -244,12 +241,16 @@ mod wasm {
         }
 
         fn bevy_options(&self) -> WebClientOptions {
+            self.bevy_options_with(self.player_name.clone(), self.room)
+        }
+
+        fn bevy_options_with(&self, player_name: String, room: RoomJoinMode) -> WebClientOptions {
             WebClientOptions {
                 matchmaker_url: self.matchmaker_url.clone(),
                 matchmaker_game: self.matchmaker_game.clone(),
                 matchmaker_version: self.matchmaker_version.clone(),
-                room: self.room,
-                name: self.player_name.clone(),
+                room,
+                name: player_name,
                 canvas_selector: format!("#{CANVAS_ID}"),
             }
         }
@@ -368,7 +369,29 @@ mod wasm {
         name.trim().chars().take(18).collect()
     }
 
-    fn apply_settings_to_url(name: &str, room: RoomJoinMode) {
+    fn publish_player_settings(name: &str, room: RoomJoinMode) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let object = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &object,
+            &wasm_bindgen::JsValue::from_str("name"),
+            &wasm_bindgen::JsValue::from_str(name),
+        );
+        let _ = js_sys::Reflect::set(
+            &object,
+            &wasm_bindgen::JsValue::from_str("room"),
+            &wasm_bindgen::JsValue::from_str(&room_input_value(room)),
+        );
+        let _ = js_sys::Reflect::set(
+            window.as_ref(),
+            &wasm_bindgen::JsValue::from_str("LIGHTRIDER_PLAYER_SETTINGS"),
+            &object,
+        );
+    }
+
+    fn replace_settings_in_url(name: &str, room: RoomJoinMode) {
         let location = window_location();
         let search = location.search().unwrap_or_default();
         let params = web_sys::UrlSearchParams::new_with_str(&search)
@@ -390,7 +413,10 @@ mod wasm {
             format!("{pathname}?{query}")
         };
         if location.href().ok().as_deref() != Some(&href) {
-            let _ = location.set_href(&href);
+            if let Some(history) = web_sys::window().and_then(|window| window.history().ok()) {
+                let _ =
+                    history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&href));
+            }
         }
     }
 }

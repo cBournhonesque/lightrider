@@ -9,14 +9,22 @@ use shared::network::protocol::prelude::*;
 pub(crate) struct FoodRenderPlugin;
 
 const FOOD_Z: f32 = 2.0;
+const FOOD_GLOW_Z: f32 = FOOD_Z - 0.05;
 const FOOD_PICKUP_ANIMATION_Z: f32 = 6.0;
 const FOOD_PICKUP_ANIMATION_SECONDS: f32 = 0.34;
-const FOOD_PULSE_SPEED: f32 = 3.0;
-const FOOD_PULSE_AMPLITUDE: f32 = 0.045;
+const FOOD_PULSE_SPEED: f32 = 3.35;
+const FOOD_PULSE_AMPLITUDE: f32 = 0.075;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct FoodVisual {
     target: Entity,
+    layer: FoodVisualLayer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum FoodVisualLayer {
+    Glow,
+    Core,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -40,7 +48,8 @@ impl FoodRenderPlugin {
 
         let radius = config.food.visual_radius.max(1.0);
         for pos in query.iter() {
-            gizmos.circle_2d(pos.0, radius, Color::srgb(0.25, 1.0, 0.38));
+            gizmos.circle_2d(pos.0, radius * 1.85, Color::srgba(0.25, 1.0, 0.38, 0.22));
+            gizmos.circle_2d(pos.0, radius * 1.15, Color::srgb(0.25, 1.0, 0.38));
             gizmos.circle_2d(pos.0, radius * 0.45, Color::srgb(0.75, 1.0, 0.78));
         }
     }
@@ -79,27 +88,37 @@ fn sync_asset_food_visuals(
     let mut seen = HashSet::with_capacity(food.iter().len());
     for (target, position) in &food {
         seen.insert(target);
-        let transform = Transform::from_translation(position.0.extend(FOOD_Z))
-            .with_rotation(food_rotation(target))
-            .with_scale(Vec3::splat(food_pulse_scale(target, time.elapsed_secs())));
-        let sprite = sheet.sprite(
-            PowerlineFrame::Food,
-            Vec2::splat(visual_size),
-            food_color(target),
+        let pulse = food_pulse_scale(target, time.elapsed_secs());
+        let rotation = food_rotation(target);
+        let color = food_color(target);
+        sync_food_visual_layer(
+            &mut commands,
+            &sheet,
+            &mut visuals,
+            target,
+            FoodVisualLayer::Glow,
+            PowerlineFrame::Glow,
+            position.0,
+            visual_size * 1.42,
+            food_glow_color(color),
+            rotation,
+            pulse * 1.08,
+            FOOD_GLOW_Z,
         );
-
-        let mut updated = false;
-        for (_, visual, mut visual_transform, mut visual_sprite) in &mut visuals {
-            if visual.target == target {
-                *visual_transform = transform;
-                *visual_sprite = sprite.clone();
-                updated = true;
-                break;
-            }
-        }
-        if !updated {
-            commands.spawn((FoodVisual { target }, sprite, transform));
-        }
+        sync_food_visual_layer(
+            &mut commands,
+            &sheet,
+            &mut visuals,
+            target,
+            FoodVisualLayer::Core,
+            PowerlineFrame::Food,
+            position.0,
+            visual_size,
+            color,
+            rotation,
+            pulse,
+            FOOD_Z,
+        );
     }
 
     for (entity, visual, _, _) in &mut visuals {
@@ -109,13 +128,49 @@ fn sync_asset_food_visuals(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn sync_food_visual_layer(
+    commands: &mut Commands,
+    sheet: &PowerlineSpriteSheet,
+    visuals: &mut Query<(Entity, &FoodVisual, &mut Transform, &mut Sprite)>,
+    target: Entity,
+    layer: FoodVisualLayer,
+    frame: PowerlineFrame,
+    position: Vec2,
+    size: f32,
+    color: Color,
+    rotation: Quat,
+    scale: f32,
+    z: f32,
+) {
+    let transform = Transform::from_translation(position.extend(z))
+        .with_rotation(rotation)
+        .with_scale(Vec3::splat(scale));
+    let sprite = sheet.sprite(frame, Vec2::splat(size), color);
+
+    for (_, visual, mut visual_transform, mut visual_sprite) in visuals {
+        if visual.target == target && visual.layer == layer {
+            *visual_transform = transform;
+            *visual_sprite = sprite;
+            return;
+        }
+    }
+
+    commands.spawn((FoodVisual { target, layer }, sprite, transform));
+}
+
 fn food_color(entity: Entity) -> Color {
     let hue = (entity.to_bits() % 360) as f32;
     Color::hsl(hue, 1.0, 0.55)
 }
 
+fn food_glow_color(mut color: Color) -> Color {
+    color.set_alpha(0.58);
+    color
+}
+
 fn food_visual_size(config: &GameConfig) -> f32 {
-    (config.food.visual_radius.max(1.0) * 3.25).max(5.0)
+    (config.food.visual_radius.max(1.0) * 3.65).max(6.0)
 }
 
 fn food_rotation(entity: Entity) -> Quat {
@@ -230,5 +285,10 @@ mod tests {
     fn food_visual_size_stays_smaller_than_old_sprite_scale() {
         let config = GameConfig::default();
         assert!(food_visual_size(&config) < config.food.visual_radius * 4.0);
+    }
+
+    #[test]
+    fn food_glow_uses_partial_alpha() {
+        assert!(food_glow_color(Color::srgb(1.0, 0.0, 0.0)).alpha() < 1.0);
     }
 }

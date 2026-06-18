@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use bevy::ecs::query::Or;
 use bevy::prelude::*;
 use bevy::sprite::Text2d;
-use bevy::transform::TransformSystems;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{ConfirmedHistory, Interpolated, Predicted, Replicated};
 use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, SnakeHead, TailPoints};
@@ -39,68 +38,8 @@ impl Plugin for NameLabelRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            (sync_name_label_roots, update_name_labels)
-                .chain()
-                .after(FrameInterpolationSystems::Interpolate)
-                .before(TransformSystems::Propagate),
+            update_name_labels.after(FrameInterpolationSystems::Interpolate),
         );
-    }
-}
-
-fn sync_name_label_roots(
-    mut commands: Commands,
-    mut snakes: Query<
-        (
-            Entity,
-            &SnakeHead,
-            Option<&mut Transform>,
-            Option<&GlobalTransform>,
-            Option<&Visibility>,
-            Option<&InheritedVisibility>,
-            Option<&ViewVisibility>,
-        ),
-        (
-            With<TailPoints>,
-            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
-        ),
-    >,
-) {
-    for (
-        snake,
-        head,
-        transform,
-        global_transform,
-        visibility,
-        inherited_visibility,
-        view_visibility,
-    ) in &mut snakes
-    {
-        let translation = head.position.extend(0.0);
-        if let Some(mut transform) = transform {
-            transform.translation = translation;
-            transform.rotation = Quat::IDENTITY;
-            transform.scale = Vec3::ONE;
-        } else {
-            commands
-                .entity(snake)
-                .insert(Transform::from_translation(translation));
-        }
-
-        if global_transform.is_none() {
-            commands.entity(snake).insert(GlobalTransform::default());
-        }
-
-        if visibility != Some(&Visibility::Inherited) {
-            commands.entity(snake).insert(Visibility::Inherited);
-        }
-        if inherited_visibility.is_none() {
-            commands
-                .entity(snake)
-                .insert(InheritedVisibility::default());
-        }
-        if view_visibility.is_none() {
-            commands.entity(snake).insert(ViewVisibility::default());
-        }
     }
 }
 
@@ -125,7 +64,6 @@ fn update_name_labels(
     mut labels: Query<(
         Entity,
         &mut NameLabel,
-        Option<&ChildOf>,
         &mut Text2d,
         &mut TextColor,
         &mut Transform,
@@ -136,10 +74,11 @@ fn update_name_labels(
         .iter()
         .filter(|(_, _, status)| **status == PlayerStatus::Alive)
         .filter_map(|(player_entity, player, _)| {
-            let snake = visible_snake_for_player(player_entity, player, &tails)?;
+            let (snake, head) = visible_snake_for_player(player_entity, player, &tails)?;
             Some((
                 player_entity,
                 snake,
+                *head,
                 player.name.clone(),
                 snake_color_for_player(player).label(),
             ))
@@ -147,69 +86,54 @@ fn update_name_labels(
         .collect::<Vec<_>>();
 
     let mut existing = HashSet::new();
-    for (
-        label_entity,
-        mut label,
-        parent,
-        mut text,
-        mut text_color,
-        mut transform,
-        mut visibility,
-    ) in &mut labels
+    for (label_entity, mut label, mut text, mut text_color, mut transform, mut visibility) in
+        &mut labels
     {
-        if let Some((_, snake, name, color)) = wanted
-            .iter()
-            .find(|(player_entity, _, _, _)| *player_entity == label.player)
+        if let Some((_, snake, head, name, color)) =
+            wanted.iter().find(|candidate| candidate.0 == label.player)
         {
-            if label.snake != *snake || parent.map(ChildOf::parent) != Some(*snake) {
-                commands.entity(label_entity).despawn();
-                continue;
-            }
-
             label.snake = *snake;
             existing.insert((label.player, *snake, label.layer));
             if text.0 != *name {
                 text.0 = name.clone();
             }
             *text_color = TextColor(label_color(label.layer, *color));
-            transform.translation = label_local_translation(label.layer);
-            *visibility = Visibility::Inherited;
+            transform.translation = label_world_translation(head, label.layer);
+            *visibility = Visibility::Visible;
         } else {
             commands.entity(label_entity).despawn();
         }
     }
 
-    for (player_entity, snake, name, color) in wanted {
+    for (player_entity, snake, head, name, color) in wanted {
         for layer in NameLabelLayer::ALL {
             if existing.contains(&(player_entity, snake, layer)) {
                 continue;
             }
-            commands.entity(snake).with_children(|parent| {
-                parent.spawn((
-                    NameLabel {
-                        player: player_entity,
-                        snake,
-                        layer,
-                    },
-                    Text2d::new(name.clone()),
-                    TextFont::from_font_size(LABEL_FONT_SIZE),
-                    TextColor(label_color(layer, color)),
-                    TextLayout::new_with_justify(Justify::Left),
-                    Transform::from_translation(label_local_translation(layer)),
-                    GlobalTransform::default(),
-                    Visibility::Inherited,
-                    InheritedVisibility::default(),
-                    ViewVisibility::default(),
-                ));
-            });
+            commands.spawn((
+                NameLabel {
+                    player: player_entity,
+                    snake,
+                    layer,
+                },
+                Text2d::new(name.clone()),
+                TextFont::from_font_size(LABEL_FONT_SIZE),
+                TextColor(label_color(layer, color)),
+                TextLayout::new_with_justify(Justify::Left),
+                Transform::from_translation(label_world_translation(&head, layer)),
+                GlobalTransform::default(),
+                Visibility::Visible,
+                InheritedVisibility::default(),
+                ViewVisibility::default(),
+            ));
         }
     }
 }
 
-fn visible_snake_for_player(
+fn visible_snake_for_player<'a>(
     player_entity: Entity,
     player: &Player,
-    tails: &Query<
+    tails: &'a Query<
         (
             Entity,
             &SnakeHead,
@@ -224,7 +148,7 @@ fn visible_snake_for_player(
             Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
         ),
     >,
-) -> Option<Entity> {
+) -> Option<(Entity, &'a SnakeHead)> {
     tails
         .iter()
         .filter(|(snake_entity, _, owner, owner_history, _, _, _)| {
@@ -234,7 +158,7 @@ fn visible_snake_for_player(
         .max_by_key(|(_, _, _, _, predicted, interpolated, replicated)| {
             visible_snake_priority(*predicted, *interpolated, *replicated)
         })
-        .map(|(snake_entity, _, _, _, _, _, _)| snake_entity)
+        .map(|(snake_entity, head, _, _, _, _, _)| (snake_entity, head))
 }
 
 fn snake_owner(
@@ -265,7 +189,7 @@ fn label_color(layer: NameLabelLayer, color: Color) -> Color {
     }
 }
 
-fn label_local_translation(layer: NameLabelLayer) -> Vec3 {
+fn label_world_translation(head: &SnakeHead, layer: NameLabelLayer) -> Vec3 {
     let offset = match layer {
         NameLabelLayer::Shadow => LABEL_OFFSET + LABEL_SHADOW_OFFSET,
         NameLabelLayer::Text => LABEL_OFFSET,
@@ -274,7 +198,7 @@ fn label_local_translation(layer: NameLabelLayer) -> Vec3 {
         NameLabelLayer::Shadow => LABEL_SHADOW_Z,
         NameLabelLayer::Text => LABEL_Z,
     };
-    Vec3::new(offset.x, offset.y, z)
+    Vec3::new(head.position.x + offset.x, head.position.y + offset.y, z)
 }
 
 #[cfg(test)]
@@ -307,9 +231,9 @@ mod tests {
     }
 
     #[test]
-    fn update_name_labels_spawns_visible_text_children() {
+    fn update_name_labels_spawns_visible_text_entities() {
         let mut app = App::new();
-        app.add_systems(Update, (sync_name_label_roots, update_name_labels).chain());
+        app.add_systems(Update, update_name_labels);
 
         let snake = app
             .world_mut()
@@ -336,25 +260,27 @@ mod tests {
 
         app.update();
 
-        assert_eq!(
-            app.world().get::<Visibility>(snake),
-            Some(&Visibility::Inherited)
-        );
-        assert!(app.world().get::<InheritedVisibility>(snake).is_some());
-        assert!(app.world().get::<ViewVisibility>(snake).is_some());
-
         let mut labels = app
             .world_mut()
-            .query::<(&NameLabel, &Text2d, &ChildOf, &Visibility)>();
+            .query::<(&NameLabel, &Text2d, &Transform, &Visibility)>();
         let labels = labels.iter(app.world()).collect::<Vec<_>>();
 
         assert_eq!(labels.len(), NameLabelLayer::ALL.len());
-        for (label, text, parent, visibility) in labels {
+        for (label, text, transform, visibility) in labels {
             assert_eq!(label.player, player);
             assert_eq!(label.snake, snake);
             assert_eq!(text.0, "Alice");
-            assert_eq!(parent.parent(), snake);
-            assert_eq!(*visibility, Visibility::Inherited);
+            assert_eq!(
+                transform.translation,
+                label_world_translation(
+                    &SnakeHead {
+                        position: Vec2::new(10.0, 20.0),
+                        ..default()
+                    },
+                    label.layer,
+                )
+            );
+            assert_eq!(*visibility, Visibility::Visible);
         }
     }
 }
