@@ -48,7 +48,18 @@ COPY lightrider /src/lightrider
 RUN printf '%s\n' "${LIGHTYEAR_MATCHMAKER_MANIFEST_SHA}" > /tmp/lightyear-matchmaker-manifest-sha && \
     cargo chef prepare --recipe-path /tmp/lightrider-server-recipe.json
 
-FROM chef AS builder
+FROM chef AS path_deps
+
+COPY lightrider/deploy/cargo_path_dep_skeleton.sh /tmp/cargo_path_dep_skeleton.sh
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+RUN sh /tmp/cargo_path_dep_skeleton.sh \
+    /src/lightyear \
+    /src/lightyear-matchmaker \
+    /src/bevy_replicon
+
+FROM chef AS cook
 
 ARG SERVER_CARGO_JOBS=2
 ARG SERVER_CARGO_INCREMENTAL=0
@@ -58,9 +69,13 @@ ARG SERVER_RELEASE_CODEGEN_UNITS=16
 
 COPY --from=planner /tmp/lightrider-server-recipe.json /tmp/lightrider-server-recipe.json
 
+COPY --from=path_deps /src/lightyear /src/lightyear
+COPY --from=path_deps /src/lightyear-matchmaker /src/lightyear-matchmaker
+COPY --from=path_deps /src/bevy_replicon /src/bevy_replicon
+COPY lightrider/deploy/cargo_clean_path_packages.sh /tmp/cargo_clean_path_packages.sh
+
 RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
-    --mount=type=cache,id=lightrider-server-target,target=/src/lightrider/target \
     CARGO_INCREMENTAL="${SERVER_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${SERVER_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${SERVER_RELEASE_OPT_LEVEL}" \
@@ -71,7 +86,20 @@ RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/regi
         --recipe-path /tmp/lightrider-server-recipe.json \
         --package server \
         --features lightyear-matchmaker \
-        --bin lightrider-server
+        --bin lightrider-server && \
+    sh /tmp/cargo_clean_path_packages.sh \
+        /src/lightyear \
+        /src/lightyear-matchmaker \
+        /src/bevy_replicon \
+        /src/lightrider
+
+FROM cook AS builder
+
+ARG SERVER_CARGO_JOBS=2
+ARG SERVER_CARGO_INCREMENTAL=0
+ARG SERVER_RELEASE_OPT_LEVEL=3
+ARG SERVER_RELEASE_LTO=false
+ARG SERVER_RELEASE_CODEGEN_UNITS=16
 
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
@@ -80,7 +108,6 @@ COPY lightrider /src/lightrider
 
 RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
-    --mount=type=cache,id=lightrider-server-target,target=/src/lightrider/target \
     CARGO_INCREMENTAL="${SERVER_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${SERVER_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${SERVER_RELEASE_OPT_LEVEL}" \

@@ -857,7 +857,7 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
     ln -sfn "$(basename "$run_dir")" logs/lightyear-matchmaker/latest
 
     target_dir="${CARGO_TARGET_DIR:-target}"
-    matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-../lightyear-matchmaker/target}"
+    matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-${CARGO_TARGET_DIR:-../lightyear-matchmaker/target}}"
     bin_dir="debug"
     cargo_args=(-j 2)
     if [[ "{{ release }}" == "true" ]]; then
@@ -989,7 +989,7 @@ game-server-build-local release="false":
 matchmaker-build-local release="false":
     #!/usr/bin/env bash
     set -euo pipefail
-    matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-../lightyear-matchmaker/target}"
+    matchmaker_target_dir="${LIGHTYEAR_MATCHMAKER_TARGET_DIR:-${CARGO_TARGET_DIR:-../lightyear-matchmaker/target}}"
     cargo_args=(-j 2)
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
@@ -1024,6 +1024,7 @@ web-build release="false":
       cargo_args+=(--release)
       wasm_profile="release"
     fi
+    target_dir="${CARGO_TARGET_DIR:-target}"
     rustup run nightly cargo build "${cargo_args[@]}" \
       -p web_client \
       --features lightyear-matchmaker \
@@ -1033,7 +1034,7 @@ web-build release="false":
     "$wasm_bindgen" \
       --target web \
       --out-dir web/pkg \
-      "target/wasm32-unknown-unknown/$wasm_profile/lightrider-web.wasm"
+      "$target_dir/wasm32-unknown-unknown/$wasm_profile/lightrider-web.wasm"
     rm -rf web/assets
     mkdir -p web/assets
     cp -R assets/. web/assets/

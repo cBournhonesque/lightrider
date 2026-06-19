@@ -50,7 +50,18 @@ WORKDIR /src/lightyear-matchmaker
 RUN printf '%s\n' "${LIGHTYEAR_MATCHMAKER_MANIFEST_SHA}" > /tmp/lightyear-matchmaker-manifest-sha && \
     cargo chef prepare --recipe-path /tmp/lightyear-matchmaker-recipe.json
 
-FROM chef AS builder
+FROM chef AS path_deps
+
+COPY lightrider/deploy/cargo_path_dep_skeleton.sh /tmp/cargo_path_dep_skeleton.sh
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+RUN sh /tmp/cargo_path_dep_skeleton.sh \
+    /src/lightyear \
+    /src/lightyear-matchmaker \
+    /src/bevy_replicon
+
+FROM chef AS cook
 
 ARG MATCHMAKER_CARGO_JOBS=2
 ARG MATCHMAKER_CARGO_INCREMENTAL=0
@@ -60,10 +71,14 @@ ARG MATCHMAKER_RELEASE_CODEGEN_UNITS=8
 
 COPY --from=planner /tmp/lightyear-matchmaker-recipe.json /tmp/lightyear-matchmaker-recipe.json
 
+COPY --from=path_deps /src/lightyear /src/lightyear
+COPY --from=path_deps /src/lightyear-matchmaker /src/lightyear-matchmaker
+COPY --from=path_deps /src/bevy_replicon /src/bevy_replicon
+COPY lightrider/deploy/cargo_clean_path_packages.sh /tmp/cargo_clean_path_packages.sh
+
 WORKDIR /src/lightyear-matchmaker
 RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
-    --mount=type=cache,id=lightrider-matchmaker-target,target=/src/lightyear-matchmaker/target \
     CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \
@@ -72,7 +87,19 @@ RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/regi
     RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
     cargo chef cook --release -j "${MATCHMAKER_CARGO_JOBS}" \
         --recipe-path /tmp/lightyear-matchmaker-recipe.json \
-        --package lightyear_matchmaker_server
+        --package lightyear_matchmaker_server && \
+    sh /tmp/cargo_clean_path_packages.sh \
+        /src/lightyear \
+        /src/lightyear-matchmaker \
+        /src/bevy_replicon
+
+FROM cook AS builder
+
+ARG MATCHMAKER_CARGO_JOBS=2
+ARG MATCHMAKER_CARGO_INCREMENTAL=0
+ARG MATCHMAKER_RELEASE_OPT_LEVEL=2
+ARG MATCHMAKER_RELEASE_LTO=thin
+ARG MATCHMAKER_RELEASE_CODEGEN_UNITS=8
 
 COPY lightyear /src/lightyear
 COPY lightyear-matchmaker /src/lightyear-matchmaker
@@ -81,7 +108,6 @@ COPY bevy_replicon /src/bevy_replicon
 WORKDIR /src/lightyear-matchmaker
 RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
-    --mount=type=cache,id=lightrider-matchmaker-target,target=/src/lightyear-matchmaker/target \
     CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
     CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
     CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \

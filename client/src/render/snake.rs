@@ -24,7 +24,7 @@ const MESH_CURVE_SEGMENTS: u32 = 14;
 const AXIS_REPAIR_EPSILON: f32 = 0.001;
 const WIDTH_GROWTH_START_LENGTH: f32 = 2500.0;
 const WIDTH_GROWTH_MAX_LENGTH: f32 = 5000.0;
-const WIDTH_GROWTH_MAX_SCALE: f32 = 2.0;
+const WIDTH_GROWTH_MAX_SCALE: f32 = 2.6;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SnakeVisual {
@@ -959,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn snake_width_scale_reaches_double_width_at_large_lengths() {
+    fn snake_width_scale_reaches_configured_large_length_width() {
         assert_eq!(snake_width_scale(None), 1.0);
         assert_eq!(
             snake_width_scale(Some(&TailLength {
@@ -980,7 +980,7 @@ mod tests {
                 current_size: (WIDTH_GROWTH_START_LENGTH + WIDTH_GROWTH_MAX_LENGTH) * 0.5,
                 target_size: WIDTH_GROWTH_MAX_LENGTH,
             })),
-            1.5
+            1.0 + (WIDTH_GROWTH_MAX_SCALE - 1.0) * 0.5
         );
     }
 }

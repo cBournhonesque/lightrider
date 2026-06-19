@@ -162,14 +162,14 @@ impl Default for RenderConfig {
     fn default() -> Self {
         Self {
             use_assets: true,
-            tail_width: 1.0,
+            tail_width: 1.25,
             head_size: 6.0,
             map_outline_width: 3.0,
             background_tile_size: 128.0,
-            normal_camera_scale: 0.30,
-            normal_camera_growth_per_tail_length: 0.00015,
+            normal_camera_scale: 0.24,
+            normal_camera_growth_per_tail_length: 0.00005,
             normal_camera_scale_smoothing: 6.0,
-            normal_camera_max_scale: 0.62,
+            normal_camera_max_scale: 0.46,
             debug_camera_scale: 1.0,
         }
     }
@@ -226,7 +226,7 @@ impl Default for SoundConfig {
             remote_turn_volume: 1.15,
             remote_proximity_boost_volume: 0.85,
             remote_speed_volume: 0.75,
-            speed_loop_start_speed: 1.2,
+            speed_loop_start_speed: 0.85,
             speed_loop_min_volume: 0.12,
             speed_loop_max_volume: 1.0,
             speed_fast_loop_start_speed: 2.55,
@@ -568,12 +568,12 @@ mod tests {
 
         assert_eq!(config.arena.width, 5000.0);
         assert_eq!(config.arena.height, 1600.0);
-        assert_eq!(config.render.tail_width, 1.0);
+        assert_eq!(config.render.tail_width, 1.25);
         assert_eq!(config.render.map_outline_width, 3.0);
-        assert_eq!(config.render.normal_camera_scale, 0.30);
-        assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00015);
+        assert_eq!(config.render.normal_camera_scale, 0.24);
+        assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00005);
         assert_eq!(config.render.normal_camera_scale_smoothing, 6.0);
-        assert_eq!(config.render.normal_camera_max_scale, 0.62);
+        assert_eq!(config.render.normal_camera_max_scale, 0.46);
         assert_eq!(config.render.debug_camera_scale, 1.0);
         assert_eq!(config.movement.min_speed, 0.85);
         assert_eq!(config.movement.max_speed, 3.0);
@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(config.sound.remote_proximity_boost_volume, 0.85);
         assert_eq!(config.sound.remote_death_volume, 1.35);
         assert_eq!(config.sound.remote_speed_volume, 0.75);
-        assert_eq!(config.sound.speed_loop_start_speed, 1.2);
+        assert_eq!(config.sound.speed_loop_start_speed, 0.85);
         assert_eq!(config.sound.speed_fast_loop_start_speed, 2.55);
         assert_eq!(config.sound.speed_loop_max_volume, 1.0);
         assert_eq!(config.food.visual_radius, 3.2);

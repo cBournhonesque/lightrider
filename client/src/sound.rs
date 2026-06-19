@@ -33,7 +33,8 @@ const MAX_ONE_SHOT_SOUNDS_PER_FRAME: usize = 2;
 const MAX_ONE_SHOT_SOUND_TOKENS: f32 = 24.0;
 const ONE_SHOT_SOUND_TOKENS_PER_SECOND: f32 = 24.0;
 const FOOD_SOUND_COOLDOWN_SECONDS: f64 = 0.075;
-const LOCAL_ELECTRO_BASE_VOLUME_RATIO: f32 = 0.28;
+const PROXIMITY_BOOST_SOUND_RETRIGGER_SECONDS: f64 = 0.35;
+const LOCAL_ELECTRO_BASE_VOLUME_RATIO: f32 = 0.58;
 const FIREWHEEL_CHANNEL_CAPACITY: u32 = 65_536;
 const FIREWHEEL_EVENT_QUEUE_CAPACITY: usize = 1024;
 const FIREWHEEL_IMMEDIATE_EVENT_CAPACITY: usize = 4096;
@@ -91,6 +92,7 @@ struct TurnSoundState {
 #[derive(Resource, Default)]
 struct ProximityBoostSoundState {
     active: HashSet<Entity>,
+    last_triggered_seconds: HashMap<Entity, f64>,
 }
 
 #[derive(Resource, Default)]
@@ -449,6 +451,7 @@ fn play_proximity_boost_sounds(
     mut commands: Commands,
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
+    time: Res<Time>,
     mut state: ResMut<ProximityBoostSoundState>,
     mut budget: ResMut<OneShotSoundBudget>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
@@ -471,12 +474,13 @@ fn play_proximity_boost_sounds(
 
     let listener = controlled_listener_snapshot(&controlled_heads)
         .or_else(|| remote_listener_snapshot(&players, &heads));
+    let now = time.elapsed_secs_f64();
     let mut active_now = HashSet::new();
 
     if let Some((snake, acceleration, food_boost)) = local_snakes.iter().next() {
         if proximity_boost_active(acceleration.0, food_boost.0, &config.movement) {
             active_now.insert(snake);
-            if !state.active.contains(&snake) {
+            if proximity_boost_spark_ready(&mut state, snake, now) {
                 if let Some(spark_sound) = sounds.spark() {
                     let volume = config.sound.master_volume * config.sound.proximity_boost_volume;
                     spawn_one_shot(
@@ -502,7 +506,7 @@ fn play_proximity_boost_sounds(
             }
 
             active_now.insert(snake);
-            if state.active.contains(&snake) {
+            if !proximity_boost_spark_ready(&mut state, snake, now) {
                 continue;
             }
 
@@ -527,6 +531,10 @@ fn play_proximity_boost_sounds(
     }
 
     state.active = active_now;
+    let active = state.active.clone();
+    state
+        .last_triggered_seconds
+        .retain(|entity, last| active.contains(entity) || now - *last <= 2.0);
 }
 
 fn play_confirmed_death_sounds(
@@ -744,25 +752,22 @@ fn update_remote_speed_loops(
         if *room != listener.room {
             continue;
         }
-        let proximity_active =
-            acceleration
-                .zip(food_boost)
-                .is_some_and(|(acceleration, food_boost)| {
-                    proximity_boost_active(acceleration.0, food_boost.0, &config.movement)
-                });
+        let proximity_intensity = acceleration
+            .zip(food_boost)
+            .map(|(acceleration, food_boost)| {
+                proximity_boost_intensity(acceleration.0, food_boost.0, &config.movement)
+            })
+            .unwrap_or(0.0);
 
         let source_position = head.position;
         let distance = source_position.distance(listener.position);
         let (line_volume, fast_volume) =
             remote_speed_loop_volumes(Some(speed.0), distance, &config.sound, &config.movement);
-        let electro_volume = if proximity_active {
-            config.sound.master_volume
-                * config.sound.electro_loop_volume
-                * config.sound.remote_speed_volume
-                * distance_attenuation(distance, &config.sound)
-        } else {
-            0.0
-        };
+        let electro_volume = config.sound.master_volume
+            * config.sound.electro_loop_volume
+            * config.sound.remote_speed_volume
+            * distance_attenuation(distance, &config.sound)
+            * proximity_intensity;
 
         if line_volume <= SILENT_VOLUME_EPSILON
             && fast_volume <= SILENT_VOLUME_EPSILON
@@ -1134,7 +1139,35 @@ fn local_player_sound_state(
 }
 
 fn proximity_boost_active(acceleration: f32, food_boost: f32, movement: &MovementConfig) -> bool {
-    acceleration - food_boost > movement.base_acceleration + 0.001
+    proximity_boost_intensity(acceleration, food_boost, movement) > 0.05
+}
+
+fn proximity_boost_intensity(acceleration: f32, food_boost: f32, movement: &MovementConfig) -> f32 {
+    let boost_acceleration = acceleration - food_boost - movement.base_acceleration;
+    let full_boost = (movement.base_acceleration.abs()
+        * movement.boost_acceleration_ratio.max(1.0)
+        + movement.food_boost_acceleration.abs())
+    .max(0.01);
+    (boost_acceleration / full_boost).clamp(0.0, 1.0)
+}
+
+fn proximity_boost_spark_ready(
+    state: &mut ProximityBoostSoundState,
+    snake: Entity,
+    now_seconds: f64,
+) -> bool {
+    if state.active.contains(&snake) {
+        return false;
+    }
+    if state
+        .last_triggered_seconds
+        .get(&snake)
+        .is_some_and(|last| now_seconds - *last < PROXIMITY_BOOST_SOUND_RETRIGGER_SECONDS)
+    {
+        return false;
+    }
+    state.last_triggered_seconds.insert(snake, now_seconds);
+    true
 }
 
 fn local_electro_loop_volume(
@@ -1149,11 +1182,12 @@ fn local_electro_loop_volume(
         return 0.0;
     };
     let base = sound.master_volume * sound.electro_loop_volume * LOCAL_ELECTRO_BASE_VOLUME_RATIO;
-    if proximity_boost_active(state.acceleration, state.food_boost, movement) {
-        sound.master_volume * sound.electro_loop_volume
-    } else {
-        base
-    }
+    let boosted = sound.master_volume * sound.electro_loop_volume;
+    lerp(
+        base,
+        boosted,
+        proximity_boost_intensity(state.acceleration, state.food_boost, movement),
+    )
 }
 
 fn direction_changed(
@@ -1229,7 +1263,7 @@ fn speed_loop_volumes(
         sound.speed_loop_start_speed,
         movement.max_speed.max(sound.speed_loop_start_speed),
     );
-    let line_volume = if line_ratio <= 0.0 {
+    let line_volume = if speed < sound.speed_loop_start_speed {
         0.0
     } else {
         sound.master_volume
@@ -1318,7 +1352,8 @@ mod tests {
         let slow = speed_loop_volumes(Some(sound.speed_loop_start_speed), &sound, &movement);
         let fast = speed_loop_volumes(Some(movement.max_speed), &sound, &movement);
 
-        assert_eq!(slow, (0.0, 0.0));
+        assert_eq!(slow.0, sound.master_volume * sound.speed_loop_min_volume);
+        assert_eq!(slow.1, 0.0);
         assert!(fast.0 > sound.speed_loop_min_volume);
         assert!(fast.1 > 0.0);
     }
@@ -1340,6 +1375,34 @@ mod tests {
 
         assert!(volume > 0.0);
         assert!(volume < sound.master_volume * sound.electro_loop_volume);
+    }
+
+    #[test]
+    fn local_electro_loop_increases_smoothly_with_proximity_boost() {
+        let sound = SoundConfig::default();
+        let movement = MovementConfig::default();
+
+        let idle = local_electro_loop_volume(
+            Some(LocalSoundState {
+                speed: movement.min_speed,
+                acceleration: movement.base_acceleration,
+                food_boost: 0.0,
+            }),
+            &sound,
+            &movement,
+        );
+        let boosted = local_electro_loop_volume(
+            Some(LocalSoundState {
+                speed: movement.max_speed,
+                acceleration: movement.base_acceleration + 0.04,
+                food_boost: 0.0,
+            }),
+            &sound,
+            &movement,
+        );
+
+        assert!(boosted > idle);
+        assert!(boosted <= sound.master_volume * sound.electro_loop_volume);
     }
 
     #[test]
@@ -1406,6 +1469,25 @@ mod tests {
             &movement
         ));
         assert!(proximity_boost_active(0.04, 0.01, &movement));
+    }
+
+    #[test]
+    fn proximity_boost_spark_has_retrigger_cooldown() {
+        let snake = Entity::from_bits(11);
+        let mut state = ProximityBoostSoundState::default();
+
+        assert!(proximity_boost_spark_ready(&mut state, snake, 1.0));
+        state.active.clear();
+        assert!(!proximity_boost_spark_ready(
+            &mut state,
+            snake,
+            1.0 + PROXIMITY_BOOST_SOUND_RETRIGGER_SECONDS * 0.5
+        ));
+        assert!(proximity_boost_spark_ready(
+            &mut state,
+            snake,
+            1.0 + PROXIMITY_BOOST_SOUND_RETRIGGER_SECONDS
+        ));
     }
 
     #[test]

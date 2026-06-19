@@ -45,7 +45,7 @@ impl Plugin for NameLabelRenderPlugin {
 
 fn update_name_labels(
     mut commands: Commands,
-    players: Query<(Entity, &Player, &PlayerStatus)>,
+    players: Query<(Entity, &Player, Option<&PlayerStatus>)>,
     tails: Query<
         (
             Entity,
@@ -72,7 +72,7 @@ fn update_name_labels(
 ) {
     let wanted = players
         .iter()
-        .filter(|(_, _, status)| **status == PlayerStatus::Alive)
+        .filter(|(_, _, status)| status.is_none_or(|status| *status == PlayerStatus::Alive))
         .filter_map(|(player_entity, player, _)| {
             let (snake, head) = visible_snake_for_player(player_entity, player, &tails)?;
             Some((
@@ -282,5 +282,36 @@ mod tests {
             );
             assert_eq!(*visibility, Visibility::Visible);
         }
+    }
+
+    #[test]
+    fn update_name_labels_treats_missing_status_as_alive() {
+        let mut app = App::new();
+        app.add_systems(Update, update_name_labels);
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeHead {
+                    position: Vec2::new(10.0, 20.0),
+                    ..default()
+                },
+                TailPoints::empty(),
+            ))
+            .id();
+        let player = app
+            .world_mut()
+            .spawn(Player {
+                id: lightyear::prelude::PeerId::Netcode(1),
+                name: "Alice".to_string(),
+                snake: Some(snake),
+            })
+            .id();
+        app.world_mut().entity_mut(snake).insert(HasPlayer(player));
+
+        app.update();
+
+        let mut labels = app.world_mut().query::<&NameLabel>();
+        assert_eq!(labels.iter(app.world()).count(), NameLabelLayer::ALL.len());
     }
 }
