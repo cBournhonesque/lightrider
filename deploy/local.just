@@ -53,36 +53,64 @@ bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" 
     done
     wait
 
-local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="1001" room="auto" release="false" headless="true":
+local *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    bots_arg="{{ bots }}"
-    config_arg="{{ config }}"
-    port_arg="{{ port }}"
-    client_id_arg="{{ client_id }}"
-    first_bot_id_arg="{{ first_bot_id }}"
-    room_arg="{{ room }}"
-    release_arg="{{ release }}"
-    headless_arg="{{ headless }}"
-    if [[ "$bots_arg" == release=* ]]; then
-      release_arg="${bots_arg#release=}"
-      bots_arg="4"
-    fi
-    if [[ "$bots_arg" == headless=* || "$bots_arg" == --headless=* ]]; then
-      headless_arg="${bots_arg#*=}"
-      bots_arg="4"
-    elif [[ "$bots_arg" == "--headless" ]]; then
-      headless_arg="$config_arg"
-      bots_arg="4"
-      config_arg="config/test.ron"
-    fi
-    if [[ "$release_arg" == release=* ]]; then
-      release_arg="${release_arg#release=}"
-    fi
-    if [[ "$headless_arg" == headless=* || "$headless_arg" == --headless=* ]]; then
-      headless_arg="${headless_arg#headless=}"
-      headless_arg="${headless_arg#--headless=}"
-    fi
+    bots_arg="4"
+    config_arg="config/test.ron"
+    port_arg="5000"
+    client_id_arg="1"
+    first_bot_id_arg="1001"
+    room_arg="auto"
+    release_arg="false"
+    headless_arg="true"
+    name_arg=""
+    auto_respawn_arg="true"
+
+    args=({{ args }})
+    positionals=()
+    for ((idx = 0; idx < ${#args[@]}; idx++)); do
+      arg="${args[$idx]}"
+      case "$arg" in
+        bots=*) bots_arg="${arg#*=}" ;;
+        config=*) config_arg="${arg#*=}" ;;
+        port=*) port_arg="${arg#*=}" ;;
+        client_id=*|client-id=*) client_id_arg="${arg#*=}" ;;
+        first_bot_id=*|first-bot-id=*) first_bot_id_arg="${arg#*=}" ;;
+        room=*) room_arg="${arg#*=}" ;;
+        release=*) release_arg="${arg#*=}" ;;
+        headless=*|--headless=*) headless_arg="${arg#*=}" ;;
+        --headless)
+          if [[ $((idx + 1)) -lt ${#args[@]} && "${args[$((idx + 1))]}" != *=* && "${args[$((idx + 1))]}" != --* ]]; then
+            idx=$((idx + 1))
+            headless_arg="${args[$idx]}"
+          else
+            headless_arg="true"
+          fi
+          ;;
+        name=*|--name=*) name_arg="${arg#*=}" ;;
+        --name)
+          idx=$((idx + 1))
+          name_arg="${args[$idx]:-}"
+          ;;
+        auto_respawn=*|auto-respawn=*|--auto-respawn=*) auto_respawn_arg="${arg#*=}" ;;
+        --auto-respawn) auto_respawn_arg="true" ;;
+        --no-auto-respawn) auto_respawn_arg="false" ;;
+        *) positionals+=("$arg") ;;
+      esac
+    done
+
+    if [[ ${#positionals[@]} -gt 0 ]]; then bots_arg="${positionals[0]}"; fi
+    if [[ ${#positionals[@]} -gt 1 ]]; then config_arg="${positionals[1]}"; fi
+    if [[ ${#positionals[@]} -gt 2 ]]; then port_arg="${positionals[2]}"; fi
+    if [[ ${#positionals[@]} -gt 3 ]]; then client_id_arg="${positionals[3]}"; fi
+    if [[ ${#positionals[@]} -gt 4 ]]; then first_bot_id_arg="${positionals[4]}"; fi
+    if [[ ${#positionals[@]} -gt 5 ]]; then room_arg="${positionals[5]}"; fi
+    if [[ ${#positionals[@]} -gt 6 ]]; then release_arg="${positionals[6]}"; fi
+    if [[ ${#positionals[@]} -gt 7 ]]; then headless_arg="${positionals[7]}"; fi
+    if [[ ${#positionals[@]} -gt 8 ]]; then name_arg="${positionals[8]}"; fi
+    if [[ ${#positionals[@]} -gt 9 ]]; then auto_respawn_arg="${positionals[9]}"; fi
+
     if [[ -f secrets/admin.env ]]; then
       set -a
       source secrets/admin.env
@@ -99,11 +127,19 @@ local bots="4" config="config/test.ron" port="5000" client_id="1" first_bot_id="
     fi
     cargo run "${cargo_args[@]}" -p server --bin lightrider-server -- --headless --port "$port_arg" --config "$config_arg" &
     sleep 2
-    for i in $(seq 0 $((bots_arg - 1))); do
-      cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $((first_bot_id_arg + i)) --server-port "$port_arg" --config "$config_arg" --room "$room_arg" &
-      sleep 1
-    done
+    if (( bots_arg > 0 )); then
+      for i in $(seq 0 $((bots_arg - 1))); do
+        cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $((first_bot_id_arg + i)) --server-port "$port_arg" --config "$config_arg" --room "$room_arg" &
+        sleep 1
+      done
+    fi
     foreground_client_args=(--client-id "$client_id_arg" --server-port "$port_arg" --config "$config_arg" --room "$room_arg")
+    if [[ -n "$name_arg" ]]; then
+      foreground_client_args+=(--name "$name_arg")
+    fi
+    if [[ "$auto_respawn_arg" == "true" || "$auto_respawn_arg" == "1" || "$auto_respawn_arg" == "yes" ]]; then
+      foreground_client_args+=(--auto-respawn)
+    fi
     if [[ "$headless_arg" == "true" || "$headless_arg" == "1" || "$headless_arg" == "yes" ]]; then
       foreground_client_args=(--headless --mode bot "${foreground_client_args[@]}")
     fi

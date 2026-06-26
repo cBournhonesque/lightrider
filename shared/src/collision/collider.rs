@@ -107,7 +107,7 @@ pub(crate) fn snake_friction(
             (
                 entity,
                 *room,
-                tail.polyline(head, length_value),
+                tail.polyline(head, length_value).axis_aligned(),
                 length,
                 history,
             )
@@ -446,7 +446,7 @@ mod tests {
     use lightyear::prelude::{Interpolated, Predicted, Replicated};
 
     use crate::network::bundle::snake::SnakeBundle;
-    use crate::network::protocol::prelude::Direction;
+    use crate::network::protocol::prelude::{Direction, TailTurn};
 
     use super::*;
 
@@ -639,6 +639,72 @@ mod tests {
                 Direction::Up,
             ),
         ]));
+
+        run_fixed_update(&mut app);
+
+        let result = app
+            .world_mut()
+            .get_resource_mut::<Messages<SnakeFrictionEvent>>()
+            .unwrap()
+            .drain()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            result,
+            vec![SnakeFrictionEvent {
+                main: predicted,
+                other: remote,
+                distance: MAX_FRICTION_DISTANCE / 2.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn predicted_snake_boosts_from_repaired_interpolated_remote_tail() {
+        let mut app = App::new();
+
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(ColliderPlugin);
+
+        let predicted = app
+            .world_mut()
+            .spawn((
+                SnakeBundle {
+                    head: SnakeHead {
+                        position: Vec2::new(0.0, 5.0),
+                        direction: Direction::Up,
+                    },
+                    tail_length: TailLength {
+                        current_size: 10.0,
+                        target_size: 10.0,
+                    },
+                    ..default()
+                },
+                Predicted,
+            ))
+            .id();
+        let remote = app
+            .world_mut()
+            .spawn((
+                SnakeBundle {
+                    head: SnakeHead {
+                        position: Vec2::new(10.0, 10.0),
+                        direction: Direction::Right,
+                    },
+                    tail_points: TailPoints::new(VecDeque::from([TailTurn::new(
+                        Vec2::new(35.0, 0.0),
+                        Direction::Left,
+                    )])),
+                    tail_length: TailLength {
+                        current_size: 80.0,
+                        target_size: 80.0,
+                    },
+                    ..default()
+                },
+                Replicated,
+                Interpolated,
+            ))
+            .id();
 
         run_fixed_update(&mut app);
 

@@ -18,6 +18,7 @@ path = "src/bin/main.rs"
 
 [features]
 default = []
+profile-chrome = ["bevy/trace_chrome", "bevy/detailed_trace"]
 lightyear-matchmaker = [
     "dep:base64",
     "dep:lightyear_matchmaker_bevy_client",
@@ -29,7 +30,7 @@ bevygap-matchmaker-tls = ["bevygap"]
 [dependencies]
 shared = { path = "../shared" }
 lightyear.workspace = true
-lightyear_tools = { path = "../../lightyear/lightyear_tools" }
+lightyear_tools = { path = "../../lightyear/crates/tools/tools" }
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 anyhow.workspace = true

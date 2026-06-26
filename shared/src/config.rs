@@ -166,7 +166,7 @@ impl Default for RenderConfig {
             head_size: 6.0,
             map_outline_width: 3.0,
             background_tile_size: 128.0,
-            normal_camera_scale: 0.24,
+            normal_camera_scale: 0.12,
             normal_camera_growth_per_tail_length: 0.00005,
             normal_camera_scale_smoothing: 6.0,
             normal_camera_max_scale: 0.46,
@@ -311,7 +311,7 @@ impl Default for BotConfig {
             target_count_per_room: 0,
             minimum_total_players_per_room: 5,
             decision_interval_ticks: 10,
-            max_turns_per_second: 6,
+            max_turns_per_second: 3,
             mistake_chance_per_decision_percent: 3,
         }
     }
@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(config.arena.height, 1600.0);
         assert_eq!(config.render.tail_width, 1.25);
         assert_eq!(config.render.map_outline_width, 3.0);
-        assert_eq!(config.render.normal_camera_scale, 0.24);
+        assert_eq!(config.render.normal_camera_scale, 0.12);
         assert_eq!(config.render.normal_camera_growth_per_tail_length, 0.00005);
         assert_eq!(config.render.normal_camera_scale_smoothing, 6.0);
         assert_eq!(config.render.normal_camera_max_scale, 0.46);
@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(config.movement.food_boost_acceleration, 0.012);
         assert_eq!(config.movement.food_boost_decay, 0.94);
         assert_eq!(config.rooms.max_players_per_room, 50);
-        assert_eq!(config.bots.max_turns_per_second, 6);
+        assert_eq!(config.bots.max_turns_per_second, 3);
         assert_eq!(config.bots.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.fake_clients.mistake_chance_per_decision_percent, 3);
         assert_eq!(config.network.server_port, 5000);

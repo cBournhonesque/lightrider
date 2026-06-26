@@ -62,6 +62,10 @@ pub struct Cli {
     #[arg(long, default_value = "false")]
     headless: bool,
 
+    /// Automatically request an initial spawn and later respawns when allowed.
+    #[arg(long, default_value = "false")]
+    auto_respawn: bool,
+
     #[arg(long, value_enum, default_value_t = ClientMode::Player)]
     mode: ClientMode,
 
@@ -130,6 +134,7 @@ impl Cli {
             inspector: false,
             debug: false,
             headless: false,
+            auto_respawn: false,
             mode: ClientMode::Player,
             client_id: 0,
             client_port: CLIENT_PORT,
@@ -252,6 +257,9 @@ pub fn app(cli: Cli) -> App {
         mode: cli.room,
         name: player_name,
     });
+    if cli.auto_respawn {
+        app.insert_resource(network::inputs::AutoRespawnRequests);
+    }
     if matches!(cli.mode, ClientMode::Bot | ClientMode::StressTurns) {
         app.add_plugins(bot::BotClientPlugin {
             decision_interval_ticks: bot_decision_interval_ticks,

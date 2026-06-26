@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::AlphaMode2d;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{Interpolated, Predicted, Replicated};
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
 use crate::collision::death::ConfirmedDeath;
 use crate::render::assets::{PowerlineFrame, PowerlineSpriteSheet};
@@ -21,7 +21,6 @@ const SNAKE_TAIL_Z: f32 = 10.0;
 const SNAKE_DEATH_Z: f32 = 16.0;
 const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.58;
 const MESH_CURVE_SEGMENTS: u32 = 14;
-const AXIS_REPAIR_EPSILON: f32 = 0.001;
 const WIDTH_GROWTH_START_LENGTH: f32 = 2500.0;
 const WIDTH_GROWTH_MAX_LENGTH: f32 = 5000.0;
 const WIDTH_GROWTH_MAX_SCALE: f32 = 2.6;
@@ -426,70 +425,7 @@ fn visible_tail(
     length: Option<&TailLength>,
 ) -> TailPolyline {
     let length = length.map(|length| length.current_size).unwrap_or(0.0);
-    axis_aligned_tail(&points.polyline(head, length))
-}
-
-fn axis_aligned_tail(points: &TailPolyline) -> TailPolyline {
-    let Some(first) = points.0.front().copied() else {
-        return points.clone();
-    };
-
-    let mut repaired = VecDeque::with_capacity(points.0.len());
-    repaired.push_back(first);
-    for point in points.0.iter().skip(1).copied() {
-        let previous = *repaired
-            .back()
-            .expect("axis-aligned tail repair always keeps a front point");
-        if segment_is_axis_aligned(previous.0, point.0) {
-            repaired.push_back(point);
-            continue;
-        }
-
-        let corner = axis_aligned_corner(previous.0, point.0, point.1);
-        if previous.0.distance_squared(corner) > AXIS_REPAIR_EPSILON * AXIS_REPAIR_EPSILON
-            && point.0.distance_squared(corner) > AXIS_REPAIR_EPSILON * AXIS_REPAIR_EPSILON
-        {
-            repaired.push_back((
-                corner,
-                direction_between(corner, previous.0).unwrap_or(previous.1),
-            ));
-        }
-        repaired.push_back(point);
-    }
-
-    TailPolyline::new(repaired)
-}
-
-fn segment_is_axis_aligned(start: Vec2, end: Vec2) -> bool {
-    (start.x - end.x).abs() <= AXIS_REPAIR_EPSILON || (start.y - end.y).abs() <= AXIS_REPAIR_EPSILON
-}
-
-fn axis_aligned_corner(front: Vec2, back: Vec2, back_direction: Direction) -> Vec2 {
-    let delta = back_direction.delta();
-    if delta.x.abs() >= delta.y.abs() {
-        Vec2::new(front.x, back.y)
-    } else {
-        Vec2::new(back.x, front.y)
-    }
-}
-
-fn direction_between(start: Vec2, end: Vec2) -> Option<Direction> {
-    let delta = end - start;
-    if delta.x.abs() >= delta.y.abs() && delta.x.abs() > AXIS_REPAIR_EPSILON {
-        Some(if delta.x > 0.0 {
-            Direction::Right
-        } else {
-            Direction::Left
-        })
-    } else if delta.y.abs() > AXIS_REPAIR_EPSILON {
-        Some(if delta.y > 0.0 {
-            Direction::Up
-        } else {
-            Direction::Down
-        })
-    } else {
-        None
-    }
+    points.polyline(head, length).axis_aligned()
 }
 
 fn snake_visual_color(
@@ -843,6 +779,11 @@ mod tests {
             .all(|(start, end)| segment_is_axis_aligned(start.0, end.0))
     }
 
+    fn segment_is_axis_aligned(start: Vec2, end: Vec2) -> bool {
+        (start.x - end.x).abs() <= f32::EPSILON * 8.0
+            || (start.y - end.y).abs() <= f32::EPSILON * 8.0
+    }
+
     #[test]
     fn death_animation_spawns_position_fallback_without_tail_snapshot() {
         let mut app = App::new();
@@ -886,7 +827,7 @@ mod tests {
             (Vec2::ZERO, Direction::Right),
         ]));
 
-        let visible = axis_aligned_tail(&tail);
+        let visible = tail.axis_aligned();
 
         assert!(tail_is_axis_aligned(&visible));
         assert_eq!(
@@ -906,7 +847,7 @@ mod tests {
             (Vec2::ZERO, Direction::Right),
         ]));
 
-        let visible = axis_aligned_tail(&tail).clipped_to_length(10.0);
+        let visible = tail.axis_aligned().clipped_to_length(10.0);
 
         assert!(tail_is_axis_aligned(&visible));
         assert_eq!(visible.total_length(), 10.0);

@@ -26,7 +26,7 @@ struct RecentlyBoostedFromFood {
 impl Plugin for PredictedFoodPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<ConfirmedFoodPickup>();
-        app.add_rollback::<RecentlyBoostedFromFood>();
+        app.local_rollback::<RecentlyBoostedFromFood>();
         app.add_systems(Update, add_recently_boosted_from_food_history);
         app.add_systems(Update, receive_confirmed_food_pickups);
         app.add_systems(

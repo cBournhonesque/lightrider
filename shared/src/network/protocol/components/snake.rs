@@ -15,6 +15,7 @@ const TAIL_POINT_ROLLBACK_EPSILON: f32 = 0.5;
 const SNAKE_HEAD_ROLLBACK_EPSILON: f32 = 0.5;
 const TAIL_LENGTH_ROLLBACK_EPSILON: f32 = 0.5;
 const TAIL_VISUAL_CORRECTION_EPSILON: f32 = 0.05;
+const TAIL_AXIS_REPAIR_EPSILON: f32 = 0.001;
 const SPEED_ROLLBACK_EPSILON: f32 = 0.02;
 const ACCELERATION_ROLLBACK_EPSILON: f32 = 0.02;
 const FOOD_BOOST_ROLLBACK_EPSILON: f32 = 0.02;
@@ -298,7 +299,7 @@ impl PartialEq for TailPoints {
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
-pub enum TailPointsOp {
+pub enum TailPointsDiff {
     PushTurn(TailTurn),
     RemoveTailTurns(u16),
 }
@@ -360,6 +361,39 @@ impl TailPolyline {
         clipped
     }
 
+    pub fn axis_aligned(&self) -> Self {
+        let Some(first) = self.0.front().copied() else {
+            return self.clone();
+        };
+
+        let mut repaired = VecDeque::with_capacity(self.0.len());
+        repaired.push_back(first);
+        for point in self.0.iter().skip(1).copied() {
+            let previous = *repaired
+                .back()
+                .expect("axis-aligned tail repair always keeps a front point");
+            if tail_segment_is_axis_aligned(previous.0, point.0) {
+                repaired.push_back(point);
+                continue;
+            }
+
+            let corner = tail_axis_aligned_corner(previous.0, point.0, point.1);
+            if previous.0.distance_squared(corner)
+                > TAIL_AXIS_REPAIR_EPSILON * TAIL_AXIS_REPAIR_EPSILON
+                && point.0.distance_squared(corner)
+                    > TAIL_AXIS_REPAIR_EPSILON * TAIL_AXIS_REPAIR_EPSILON
+            {
+                repaired.push_back((
+                    corner,
+                    tail_direction_between(corner, previous.0).unwrap_or(previous.1),
+                ));
+            }
+            repaired.push_back(point);
+        }
+
+        TailPolyline::new(repaired)
+    }
+
     /// Shorten the tail by a certain amount
     pub fn shorten_by(&mut self, mut shorten_amount: f32) {
         if shorten_amount <= 0.0 || self.0.len() < 2 {
@@ -405,15 +439,48 @@ impl TailPolyline {
     }
 }
 
+fn tail_segment_is_axis_aligned(start: Vec2, end: Vec2) -> bool {
+    (start.x - end.x).abs() <= TAIL_AXIS_REPAIR_EPSILON
+        || (start.y - end.y).abs() <= TAIL_AXIS_REPAIR_EPSILON
+}
+
+fn tail_axis_aligned_corner(front: Vec2, back: Vec2, back_direction: Direction) -> Vec2 {
+    let delta = back_direction.delta();
+    if delta.x.abs() >= delta.y.abs() {
+        Vec2::new(front.x, back.y)
+    } else {
+        Vec2::new(back.x, front.y)
+    }
+}
+
+fn tail_direction_between(start: Vec2, end: Vec2) -> Option<Direction> {
+    let delta = end - start;
+    if delta.x.abs() >= delta.y.abs() && delta.x.abs() > TAIL_AXIS_REPAIR_EPSILON {
+        Some(if delta.x > 0.0 {
+            Direction::Right
+        } else {
+            Direction::Left
+        })
+    } else if delta.y.abs() > TAIL_AXIS_REPAIR_EPSILON {
+        Some(if delta.y > 0.0 {
+            Direction::Up
+        } else {
+            Direction::Down
+        })
+    } else {
+        None
+    }
+}
+
 impl RepliconDiffable for TailPoints {
-    type Patch = TailPointsOp;
+    type Diff = TailPointsDiff;
 
     const HISTORY_LEN: usize = 512;
 
-    fn apply_patch(&mut self, patch: &Self::Patch) -> Result<()> {
-        match *patch {
-            TailPointsOp::PushTurn(turn) => self.push_turn(turn),
-            TailPointsOp::RemoveTailTurns(count) => self.remove_tail_turns(usize::from(count)),
+    fn apply_diff(&mut self, diff: &Self::Diff) -> Result<()> {
+        match *diff {
+            TailPointsDiff::PushTurn(turn) => self.push_turn(turn),
+            TailPointsDiff::RemoveTailTurns(count) => self.remove_tail_turns(usize::from(count)),
         }
         Ok(())
     }
@@ -625,7 +692,7 @@ mod tests {
 
     fn tail_is_axis_aligned(tail: &TailPolyline) -> bool {
         tail.pairs_front_to_back()
-            .all(|(start, end)| start.0.x == end.0.x || start.0.y == end.0.y)
+            .all(|(start, end)| tail_segment_is_axis_aligned(start.0, end.0))
     }
 
     #[test]
@@ -688,6 +755,26 @@ mod tests {
     }
 
     #[test]
+    fn tail_polyline_axis_alignment_repairs_transient_diagonal_segments() {
+        let tail = TailPolyline::new(VecDeque::from([
+            (Vec2::new(10.0, 10.0), Direction::Right),
+            (Vec2::ZERO, Direction::Right),
+        ]));
+
+        let repaired = tail.axis_aligned();
+
+        assert!(tail_is_axis_aligned(&repaired));
+        assert_eq!(
+            repaired.0,
+            VecDeque::from([
+                (Vec2::new(10.0, 10.0), Direction::Right),
+                (Vec2::new(10.0, 0.0), Direction::Up),
+                (Vec2::ZERO, Direction::Right),
+            ])
+        );
+    }
+
+    #[test]
     fn pruning_removes_turns_past_tail_endpoint() {
         let head = SnakeHead {
             position: Vec2::new(50.0, 100.0),
@@ -706,20 +793,20 @@ mod tests {
     }
 
     #[test]
-    fn turn_patches_update_topology() {
+    fn turn_diffs_update_topology() {
         let mut tail = TailPoints::empty();
 
-        RepliconDiffable::apply_patch(
+        RepliconDiffable::apply_diff(
             &mut tail,
-            &TailPointsOp::PushTurn(TailTurn::new(Vec2::new(25.0, 0.0), Direction::Left)),
+            &TailPointsDiff::PushTurn(TailTurn::new(Vec2::new(25.0, 0.0), Direction::Left)),
         )
         .unwrap();
-        RepliconDiffable::apply_patch(
+        RepliconDiffable::apply_diff(
             &mut tail,
-            &TailPointsOp::PushTurn(TailTurn::new(Vec2::new(25.0, 10.0), Direction::Down)),
+            &TailPointsDiff::PushTurn(TailTurn::new(Vec2::new(25.0, 10.0), Direction::Down)),
         )
         .unwrap();
-        RepliconDiffable::apply_patch(&mut tail, &TailPointsOp::RemoveTailTurns(1)).unwrap();
+        RepliconDiffable::apply_diff(&mut tail, &TailPointsDiff::RemoveTailTurns(1)).unwrap();
 
         assert_eq!(
             tail.turns,
@@ -782,7 +869,7 @@ mod tests {
             interpolate_tail_points_correction(TailPointsCorrection::default(), error, 0.5);
         let mut smoothed = corrected.clone();
 
-        smoothed.apply_diff(&residual);
+        LightyearDiffable::apply_diff(&mut smoothed, &residual);
 
         assert_eq!(
             smoothed.turns,

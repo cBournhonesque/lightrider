@@ -1,6 +1,9 @@
+use bevy::ecs::relationship::Relationship;
 use bevy::prelude::*;
 use lightyear::prelude::input::bei::{Action, ActionOf, Bindings, Cardinal, InputMarker};
-use lightyear::prelude::{PeerId, PreSpawned};
+use lightyear::prelude::{
+    InterpolationTarget, NetworkTarget, PeerId, PreSpawned, PredictionTarget, Replicate,
+};
 
 pub use movement::{MoveSnake, SnakeInput};
 
@@ -27,12 +30,17 @@ fn action_prespawn(client_id: PeerId, salt: u64, context: Entity, is_server: boo
 
 fn configure_action_entity(
     action: &mut EntityCommands,
-    _client_id: PeerId,
+    client_id: PeerId,
     is_server: bool,
     input_marker: impl Bundle,
 ) {
     if is_server {
-        action.insert(ServerAction);
+        action.insert((
+            ServerAction,
+            Replicate::to_clients(NetworkTarget::Single(client_id)),
+            PredictionTarget::manual(Vec::new()),
+            InterpolationTarget::manual(Vec::new()),
+        ));
     } else {
         action.insert(input_marker);
     }
@@ -69,4 +77,40 @@ pub fn spawn_snake_input_actions(
         is_server,
         InputMarker::<SnakeInput>::default(),
     );
+}
+
+pub(crate) fn cleanup_orphaned_snake_input_actions(
+    mut commands: Commands,
+    snakes: Query<(), With<SnakeInput>>,
+    actions: Query<(Entity, &ActionOf<SnakeInput>), With<Action<MoveSnake>>>,
+) {
+    for (action, action_of) in &actions {
+        if !snakes.contains(action_of.get()) {
+            commands.entity(action).try_despawn();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn despawning_snake_cleans_up_input_actions() {
+        let mut app = App::new();
+        app.add_systems(Update, cleanup_orphaned_snake_input_actions);
+        let snake = app.world_mut().spawn(SnakeInput).id();
+        let action = app
+            .world_mut()
+            .spawn((
+                ActionOf::<SnakeInput>::new(snake),
+                Action::<MoveSnake>::new(),
+            ))
+            .id();
+
+        app.world_mut().entity_mut(snake).despawn();
+        app.update();
+
+        assert!(app.world().get_entity(action).is_err());
+    }
 }

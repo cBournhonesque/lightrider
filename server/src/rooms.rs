@@ -1,3 +1,4 @@
+use bevy::ecs::schedule::ApplyDeferred;
 use bevy::prelude::*;
 use bevy_turborand::prelude::*;
 use lightyear::connection::client::{Connected, Disconnected};
@@ -245,8 +246,11 @@ impl Plugin for ServerRoomsPlugin {
             (
                 handle_player_name_updates,
                 handle_room_join_requests,
+                ApplyDeferred,
+                spawn_pending_named_players,
                 update_player_ranks,
-            ),
+            )
+                .chain(),
         );
         app.add_observer(handle_disconnected);
     }
@@ -430,6 +434,58 @@ fn handle_room_join_requests(
             );
             current_room = Some(assignment.game_room);
         }
+    }
+}
+
+fn spawn_pending_named_players(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut directory: ResMut<RoomDirectory>,
+    clients: Query<
+        (
+            Entity,
+            &RemoteId,
+            &ClientRoom,
+            &PendingPlayerName,
+            Option<&RegisteredHumanRoom>,
+        ),
+        With<Connected>,
+    >,
+    players: Query<&Player>,
+) {
+    for (client_entity, remote_id, client_room, pending_name, registered_room) in &clients {
+        if players.iter().any(|player| player.id == remote_id.0) {
+            continue;
+        }
+        let Some(lightyear_room) = directory.lightyear_room(client_room.room) else {
+            continue;
+        };
+        match registered_room.map(|room| room.0) {
+            Some(registered_room) if registered_room != client_room.room => {
+                directory.move_human(registered_room, client_room.room);
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(client_room.room));
+            }
+            Some(_) => {}
+            None => {
+                directory.register_human(client_room.room);
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(client_room.room));
+            }
+        }
+        spawn_client_player(
+            &mut commands,
+            client_entity,
+            remote_id.0,
+            RoomAssignment {
+                game_room: client_room.room,
+                lightyear_room,
+            },
+            &config,
+            pending_name.0.clone(),
+        );
     }
 }
 
@@ -778,6 +834,66 @@ mod tests {
             results.private.unwrap().game_room,
             RoomCode::parse("WXYZ").unwrap().room_id()
         );
+    }
+
+    #[test]
+    fn pending_named_client_in_room_gets_player_and_snake() {
+        let client_id = PeerId::Netcode(1);
+        let game_room = RoomId(0);
+        let mut room_allocator = RoomAllocator::default();
+        let lightyear_room = room_allocator.allocate();
+
+        let mut app = App::new();
+        app.insert_resource(GameConfig::default());
+        app.insert_resource(RoomDirectory {
+            rooms: vec![RoomState {
+                game_room,
+                lightyear_room,
+                human_count: 0,
+                private: false,
+            }],
+            next_room_id: 1,
+        });
+        app.add_systems(Update, spawn_pending_named_players);
+
+        let client_entity = app
+            .world_mut()
+            .spawn((
+                RemoteId(client_id),
+                ClientRoom { room: game_room },
+                PendingPlayerName("Alice".to_string()),
+            ))
+            .id();
+        app.world_mut().entity_mut(client_entity).insert(Connected);
+
+        app.update();
+
+        let players = {
+            let mut query = app.world_mut().query::<(&Player, &RoomId)>();
+            query
+                .iter(app.world())
+                .map(|(player, room)| (player.clone(), *room))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(players.len(), 1);
+        let (player, room) = &players[0];
+        assert_eq!(player.id, client_id);
+        assert_eq!(player.name, "Alice");
+        assert_eq!(*room, game_room);
+        assert!(player.snake.is_some());
+        assert_eq!(
+            app.world()
+                .entity(client_entity)
+                .get::<RegisteredHumanRoom>(),
+            Some(&RegisteredHumanRoom(game_room))
+        );
+
+        let metrics = app
+            .world()
+            .resource::<RoomDirectory>()
+            .metrics()
+            .collect::<Vec<_>>();
+        assert_eq!(metrics[0].human_count, 1);
     }
 
     #[test]

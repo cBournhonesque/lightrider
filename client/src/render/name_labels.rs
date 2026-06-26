@@ -204,7 +204,7 @@ fn label_world_translation(head: &SnakeHead, layer: NameLabelLayer) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightyear::prelude::{ConfirmedState, Tick};
+    use lightyear::prelude::{HistoryState, Tick};
 
     #[test]
     fn visible_snake_priority_prefers_rendered_entities() {
@@ -225,7 +225,7 @@ mod tests {
     fn snake_owner_falls_back_to_confirmed_history() {
         let player = Entity::from_bits(42);
         let mut history = ConfirmedHistory::default();
-        history.insert(Tick(10), ConfirmedState::Confirmed(HasPlayer(player)));
+        history.insert(Tick(10), HistoryState::Updated(HasPlayer(player)));
 
         assert_eq!(snake_owner(None, Some(&history)), Some(player));
     }

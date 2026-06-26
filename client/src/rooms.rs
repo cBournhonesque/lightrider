@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use lightyear::connection::client::Connected;
-use lightyear::prelude::{Client, InputTimeline, IsSynced, MessageSender};
+use lightyear::prelude::{Client, MessageSender};
 
 use shared::network::protocol::prelude::{
     GameChannel, PlayerNameUpdate, RoomCode, RoomId, RoomJoinMode, RoomJoinRequest,
@@ -69,10 +69,7 @@ pub(crate) fn parse_room_join_mode(value: &str) -> Result<RoomJoinMode, String> 
 fn send_player_name_update(
     settings: Res<RoomJoinSettings>,
     mut last_sent: ResMut<LastSentRoomJoinSettings>,
-    mut clients: Query<
-        &mut MessageSender<PlayerNameUpdate>,
-        (With<Client>, With<Connected>, With<IsSynced<InputTimeline>>),
-    >,
+    mut clients: Query<&mut MessageSender<PlayerNameUpdate>, (With<Client>, With<Connected>)>,
 ) {
     if settings.name.is_empty() || last_sent.name.as_deref() == Some(settings.name.as_str()) {
         return;
@@ -89,10 +86,7 @@ fn send_player_name_update(
 fn send_room_join_request(
     settings: Res<RoomJoinSettings>,
     mut last_sent: ResMut<LastSentRoomJoinSettings>,
-    mut clients: Query<
-        &mut MessageSender<RoomJoinRequest>,
-        (With<Client>, With<Connected>, With<IsSynced<InputTimeline>>),
-    >,
+    mut clients: Query<&mut MessageSender<RoomJoinRequest>, (With<Client>, With<Connected>)>,
 ) {
     if last_sent.mode == Some(settings.mode) {
         return;

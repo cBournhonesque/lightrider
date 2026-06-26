@@ -7,9 +7,7 @@ use crate::rooms::{add_replicated_entity_to_room, RoomAssignment, RoomDirectory}
 use crate::spawning::snake_spawn_pose_avoiding;
 use shared::bot::{BotController, BotMarker};
 use shared::config::GameConfig;
-use shared::movement::{
-    is_perpendicular_turn, turn_tail_with_log, SimulationSet, TailPointsDiffLog,
-};
+use shared::movement::{is_perpendicular_turn, turn_tail_with_diff, SimulationSet};
 use shared::network::bundle::player::PlayerBundle;
 use shared::network::bundle::snake::SnakeBundle;
 use shared::network::protocol::prelude::*;
@@ -268,6 +266,7 @@ fn spawn_bot_snake<'a>(
 }
 
 fn drive_bots(
+    mut commands: Commands,
     config: Res<GameConfig>,
     mut queries: ParamSet<(
         Query<(
@@ -282,9 +281,8 @@ fn drive_bots(
                 Entity,
                 &RoomId,
                 &mut SnakeHead,
-                &mut TailPoints,
+                &TailPoints,
                 &TailLength,
-                Option<&mut TailPointsDiffLog>,
                 &mut BotController,
             ),
             With<BotMarker>,
@@ -298,7 +296,7 @@ fn drive_bots(
         .collect::<Vec<_>>();
 
     let mut bot_query = queries.p1();
-    for (entity, room, mut head, mut tail, length, log, mut controller) in bot_query.iter_mut() {
+    for (entity, room, mut head, tail, length, mut controller) in bot_query.iter_mut() {
         let obstacle_tails = tail_snapshots
             .iter()
             .filter(|(other_entity, other_room, _)| *other_entity != entity && other_room == room)
@@ -313,7 +311,7 @@ fn drive_bots(
             config.movement.tick_rate_hz.round().max(1.0) as u32,
         );
         if is_perpendicular_turn(head.direction, direction) {
-            let _ = turn_tail_with_log(head.as_mut(), tail.as_mut(), log, direction);
+            turn_tail_with_diff(&mut commands, entity, head.as_mut(), direction);
         }
     }
 }

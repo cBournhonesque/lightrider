@@ -3,7 +3,7 @@ use bevy::ecs::relationship::Relationship;
 use bevy::prelude::*;
 use lightyear::prelude::input::bei::{Action, ActionOf, InputMarker};
 use lightyear::prelude::{
-    Client, Connected, Controlled, InputTimeline, IsSynced, LocalId, MessageSender,
+    Client, Connected, Controlled, ControlledBy, LocalId, MessageSender, PeerId, Predicted,
 };
 
 use crate::collision::death::DeathView;
@@ -16,7 +16,7 @@ pub(crate) struct AutoRespawnRequests;
 
 impl Plugin for NetworkInputsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (send_player_spawn_requests, add_snake_inputs));
+        app.add_systems(Update, (send_player_spawn_requests, ensure_snake_inputs));
     }
 }
 
@@ -26,11 +26,8 @@ fn send_player_spawn_requests(
     death_view: Option<Res<DeathView>>,
     auto_respawn: Option<Res<AutoRespawnRequests>>,
     mut next_auto_request_at: Local<f64>,
-    mut clients: Query<
-        &mut MessageSender<PlayerSpawnRequest>,
-        (With<Client>, With<Connected>, With<IsSynced<InputTimeline>>),
-    >,
-    players: Query<(&Player, &PlayerStatus), With<Controlled>>,
+    mut clients: Query<&mut MessageSender<PlayerSpawnRequest>, (With<Client>, With<Connected>)>,
+    players: Query<(&Player, &PlayerStatus), Or<(With<Controlled>, With<Predicted>)>>,
 ) {
     let respawn_ready = can_respawn_from_death_view(death_view.as_deref(), time.elapsed_secs());
     let wants_keyboard_respawn = respawn_ready
@@ -63,30 +60,60 @@ fn can_respawn_from_death_view(death_view: Option<&DeathView>, now_seconds: f32)
     })
 }
 
-fn add_snake_inputs(
+fn ensure_snake_inputs(
     mut commands: Commands,
-    client: Query<&LocalId, With<Client>>,
+    client: Query<(Entity, &LocalId), With<Client>>,
     snakes: Query<
-        Entity,
+        (Entity, Has<InputMarker<SnakeInput>>, Option<&ControlledBy>),
         (
-            With<Controlled>,
             With<TailPoints>,
             With<SnakeInput>,
-            Without<InputMarker<SnakeInput>>,
+            Or<(With<Controlled>, With<Predicted>)>,
         ),
     >,
-    actions: Query<&ActionOf<SnakeInput>, With<Action<MoveSnake>>>,
+    actions: Query<&ActionOf<SnakeInput>, (With<Action<MoveSnake>>, With<InputMarker<SnakeInput>>)>,
 ) {
-    let Ok(client_id) = client.single().map(|id| id.0) else {
+    let Ok((client_entity, client_id)) = client.single() else {
         return;
     };
-    for snake in &snakes {
+    for (snake, has_input_marker, controlled_by) in &snakes {
+        add_snake_inputs(
+            &mut commands,
+            snake,
+            client_id.0,
+            client_entity,
+            has_input_marker,
+            controlled_by,
+            &actions,
+        );
+    }
+}
+
+fn add_snake_inputs(
+    commands: &mut Commands,
+    snake: Entity,
+    client_id: PeerId,
+    client_entity: Entity,
+    has_input_marker: bool,
+    controlled_by: Option<&ControlledBy>,
+    actions: &Query<
+        &ActionOf<SnakeInput>,
+        (With<Action<MoveSnake>>, With<InputMarker<SnakeInput>>),
+    >,
+) {
+    if let Some(controlled_by) = controlled_by {
+        if controlled_by.owner != client_entity {
+            return;
+        }
+    }
+
+    if !has_input_marker {
         commands
             .entity(snake)
             .insert(InputMarker::<SnakeInput>::default());
-        if !actions.iter().any(|action| action.get() == snake) {
-            spawn_snake_input_actions(&mut commands, snake, client_id, false);
-        }
+    }
+    if !actions.iter().any(|action| action.get() == snake) {
+        spawn_snake_input_actions(commands, snake, client_id, false);
     }
 }
 

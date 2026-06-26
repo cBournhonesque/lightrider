@@ -721,7 +721,7 @@ mod tests {
         let food = vec![FoodPoint {
             entity: food_entity,
             room,
-            position: Vec2::new(60.0, 0.0),
+            position: Vec2::new(55.0, 0.0),
         }];
         let food_index = FoodSpatialIndex::from_food(food.iter().copied());
         let tail_index = TailSpatialIndex::from_tails(

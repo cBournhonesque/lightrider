@@ -4,7 +4,7 @@ use bevy_enhanced_input::prelude::{
     ActionMock, ActionValue, EnhancedInputSystems, MockSpan, TriggerState,
 };
 use lightyear::prelude::input::bei::{Action, ActionOf, InputMarker};
-use lightyear::prelude::{Controlled, LocalTimeline};
+use lightyear::prelude::{Controlled, LocalTimeline, Predicted};
 
 use crate::network::inputs::AutoRespawnRequests;
 use shared::bot::{direction_to_input, BotController};
@@ -43,7 +43,14 @@ impl Plugin for BotClientPlugin {
 fn attach_bot_controllers(
     mut commands: Commands,
     settings: Res<BotClientSettings>,
-    snakes: Query<Entity, (With<Controlled>, With<TailPoints>, Without<BotController>)>,
+    snakes: Query<
+        Entity,
+        (
+            Or<(With<Controlled>, With<Predicted>)>,
+            With<TailPoints>,
+            Without<BotController>,
+        ),
+    >,
 ) {
     for snake in &snakes {
         commands
@@ -98,7 +105,7 @@ fn update_move_action_mocks(
                 &RoomId,
                 &mut BotController,
             ),
-            With<Controlled>,
+            Or<(With<Controlled>, With<Predicted>)>,
         >,
     )>,
     mut actions: Query<
@@ -118,10 +125,25 @@ fn update_move_action_mocks(
         return;
     };
     let tail = visible_tail(head, tail, length);
+    let obstacle_tails = tail_snapshots
+        .iter()
+        .filter(|(other_entity, other_room, _)| *other_entity != snake && other_room == room)
+        .map(|(_, _, tail)| tail)
+        .collect::<Vec<_>>();
     let direction = if settings.stress_turns {
         let (left, right) = shared::bot::legal_turns(head.direction);
-        let direction = if *stress_turn_left { left } else { right };
-        *stress_turn_left = !*stress_turn_left;
+        let requested = if *stress_turn_left { left } else { right };
+        let direction = controller.choose_limited_tail_turn(
+            &tail,
+            &config.arena,
+            &obstacle_tails,
+            requested,
+            config.bots.max_turns_per_second,
+            config.movement.tick_rate_hz.round().max(1.0) as u32,
+        );
+        if direction != head.direction {
+            *stress_turn_left = !*stress_turn_left;
+        }
         tracing::trace!(
             target: "lightyear_debug::manual",
             kind = "stress_turn_input",
@@ -131,16 +153,12 @@ fn update_move_action_mocks(
             tick_id = u64::from(timeline.tick().0),
             entity = ?snake,
             current_direction = ?head.direction,
+            requested_direction = ?requested,
             direction = ?direction,
             "stress client queued turn input"
         );
         direction
     } else {
-        let obstacle_tails = tail_snapshots
-            .iter()
-            .filter(|(other_entity, other_room, _)| *other_entity != snake && other_room == room)
-            .map(|(_, _, tail)| tail)
-            .collect::<Vec<_>>();
         controller.choose_direction_avoiding_limited(
             &tail,
             &config.arena,

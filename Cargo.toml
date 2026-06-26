@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.dependencies]
-lightyear = { path = "../lightyear/lightyear", features = [
+lightyear = { path = "../lightyear/crates/core/lightyear", features = [
   "input_bei",
   "frame_interpolation",
   "netcode",
@@ -39,6 +39,9 @@ bevy_seedling = { version = "0.7.2", default-features = false, features = [
 derive_more = { version = "0.99", features = ["add", "mul"] }
 clap = { version = "4.4", features = ["derive"] }
 bevy_turborand = "0.13"
+
+[patch."https://github.com/cBournhonesque/bevy_replicon"]
+bevy_replicon = { path = "../bevy_replicon" }
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

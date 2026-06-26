@@ -20,7 +20,7 @@
         head_size: 6.0,
         map_outline_width: 3.0,
         background_tile_size: 128.0,
-        normal_camera_scale: 0.24,
+        normal_camera_scale: 0.12,
         normal_camera_growth_per_tail_length: 0.00005,
         normal_camera_scale_smoothing: 6.0,
         normal_camera_max_scale: 0.46,
@@ -71,7 +71,7 @@
         target_count_per_room: 0,
         minimum_total_players_per_room: 5,
         decision_interval_ticks: 5,
-        max_turns_per_second: 6,
+        max_turns_per_second: 3,
         mistake_chance_per_decision_percent: 3,
     ),
     fake_clients: (

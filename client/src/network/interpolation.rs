@@ -215,7 +215,7 @@ fn tail_sample_indices<'a>(
         tick_filter(tick)
             && tail_history
                 .get_state_at(tick)
-                .is_some_and(|state| matches!(state, ConfirmedState::Confirmed(_)))
+                .is_some_and(|state| matches!(state, HistoryState::Updated(_)))
     })
 }
 
@@ -225,7 +225,7 @@ fn tail_driven_sample_at_index(
     length_history: &ConfirmedHistory<TailLength>,
     index: usize,
 ) -> Option<(Tick, SnakeHead, TailLength, TailPoints)> {
-    let (tick, ConfirmedState::Confirmed(tail)) = tail_history.get_nth_state(index)? else {
+    let (tick, HistoryState::Updated(tail)) = tail_history.get_nth_state(index)? else {
         return None;
     };
     let head = *head_history.get_present(tick)?;

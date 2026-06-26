@@ -181,6 +181,7 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 MiniMapDot(MiniMapDotKind::PlayerArrow),
                 minimap_node(Vec2::splat(MINIMAP_ARROW_SIZE)),
                 Text::new(">"),
+                TextLayout::new_with_justify(Justify::Center),
                 TextFont {
                     font_size: 10.0,
                     ..default()
@@ -310,6 +311,8 @@ fn minimap_node(size: Vec2) -> Node {
         position_type: PositionType::Absolute,
         width: Val::Px(size.x),
         height: Val::Px(size.y),
+        align_items: AlignItems::Center,
+        justify_content: JustifyContent::Center,
         ..default()
     }
 }
@@ -671,10 +674,15 @@ fn minimap_position_for_size(
     size: Vec2,
     offset: Vec2,
 ) -> Vec2 {
+    let point = minimap_point(position, arena);
+    let max = Vec2::new(MINIMAP_WIDTH - size.x, MINIMAP_HEIGHT - size.y).max(Vec2::ZERO);
+    (point - size * 0.5 + offset).clamp(Vec2::ZERO, max)
+}
+
+fn minimap_point(position: Vec2, arena: &ArenaConfig) -> Vec2 {
     let normalized_x = ((position.x / arena.width) + 0.5).clamp(0.0, 1.0);
     let normalized_y = (0.5 - (position.y / arena.height)).clamp(0.0, 1.0);
-    let max = Vec2::new(MINIMAP_WIDTH - size.x, MINIMAP_HEIGHT - size.y).max(Vec2::ZERO);
-    (Vec2::new(normalized_x * max.x, normalized_y * max.y) + offset).clamp(Vec2::ZERO, max)
+    Vec2::new(normalized_x * MINIMAP_WIDTH, normalized_y * MINIMAP_HEIGHT)
 }
 
 fn minimap_trail_nodes(tail: &TailPolyline, arena: &ArenaConfig) -> Vec<(usize, Node)> {
@@ -905,6 +913,13 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
+    fn assert_vec2_close(actual: Vec2, expected: Vec2) {
+        assert!(
+            actual.distance(expected) <= f32::EPSILON * 8.0,
+            "actual {actual:?} != expected {expected:?}"
+        );
+    }
+
     fn entry(id: u64, score: u32, is_local: bool) -> LeaderboardEntry {
         LeaderboardEntry {
             id,
@@ -971,6 +986,21 @@ mod tests {
                 (MINIMAP_WIDTH - MINIMAP_ARROW_SIZE) * 0.5,
                 (MINIMAP_HEIGHT - MINIMAP_ARROW_SIZE) * 0.5
             )
+        );
+    }
+
+    #[test]
+    fn minimap_player_arrow_is_centered_on_head_point() {
+        let arena = ArenaConfig {
+            width: 1000.0,
+            height: 500.0,
+        };
+        let head = Vec2::new(100.0, -50.0);
+        let arrow_position = minimap_position_for_kind(head, &arena, MiniMapDotKind::PlayerArrow);
+
+        assert_vec2_close(
+            arrow_position + Vec2::splat(MINIMAP_ARROW_SIZE * 0.5),
+            Vec2::new(MINIMAP_WIDTH * 0.6, MINIMAP_HEIGHT * 0.6),
         );
     }
 

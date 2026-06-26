@@ -8,7 +8,12 @@ const LOOKAHEAD_DISTANCE: f32 = 420.0;
 const DANGER_DISTANCE: f32 = 140.0;
 const MIN_SAFE_TURN_DISTANCE: f32 = 180.0;
 const MIN_SEGMENT_BEFORE_VOLUNTARY_TURN: f32 = 140.0;
+const MIN_SEGMENT_BEFORE_LIMITED_TURN: f32 = 48.0;
+const EMERGENCY_TURN_DISTANCE: f32 = 24.0;
 const MAX_TRACKED_TURNS: usize = 16;
+// With the normal one-second window, this caps short bursts to 3 turns per 200ms.
+const BURST_WINDOW_DIVISOR: u32 = 5;
+const MAX_BURST_TURNS: u8 = 3;
 
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 pub struct BotMarker;
@@ -74,8 +79,55 @@ impl BotController {
         if direction == current {
             return direction;
         }
+        if !turn_allowed_for_tail(tail, arena, obstacle_tails, current) {
+            return current;
+        }
         if self.try_consume_turn(max_turns, window_ticks.max(1)) {
             direction
+        } else {
+            current
+        }
+    }
+
+    pub fn choose_limited_turn(
+        &mut self,
+        current: Direction,
+        requested: Direction,
+        max_turns: u8,
+        window_ticks: u32,
+    ) -> Direction {
+        self.tick = self.tick.wrapping_add(1);
+        let (left, right) = legal_turns(current);
+        if requested != left && requested != right {
+            return current;
+        }
+        if self.try_consume_turn(max_turns, window_ticks.max(1)) {
+            requested
+        } else {
+            current
+        }
+    }
+
+    pub fn choose_limited_tail_turn(
+        &mut self,
+        tail: &TailPolyline,
+        arena: &ArenaConfig,
+        obstacle_tails: &[&TailPolyline],
+        requested: Direction,
+        max_turns: u8,
+        window_ticks: u32,
+    ) -> Direction {
+        self.tick = self.tick.wrapping_add(1);
+        let current = tail.front().1;
+        let (left, right) = legal_turns(current);
+        if requested != left && requested != right {
+            return current;
+        }
+        if !turn_allowed_for_tail(tail, arena, obstacle_tails, current) {
+            return current;
+        }
+        if self.try_consume_turn(max_turns, window_ticks.max(1)) {
+            requested
         } else {
             current
         }
@@ -146,21 +198,40 @@ impl BotController {
         }
         self.prune_turn_history(window_ticks);
         let max_turns = usize::from(max_turns).min(MAX_TRACKED_TURNS);
-        let min_spacing_ticks = window_ticks
-            .div_ceil(u32::try_from(max_turns).unwrap_or(1))
-            .max(1);
+        let burst_window_ticks = window_ticks.div_ceil(BURST_WINDOW_DIVISOR).max(1);
+        let max_burst_turns = max_turns.min(usize::from(MAX_BURST_TURNS)).max(1);
+        let min_spacing_ticks = minimum_turn_spacing_ticks(window_ticks, max_turns).max(
+            minimum_turn_spacing_ticks(burst_window_ticks, max_burst_turns),
+        );
         if self.last_turn_tick.is_some_and(|last_turn_tick| {
             self.tick.saturating_sub(last_turn_tick) < min_spacing_ticks
         }) {
             return false;
         }
-        if usize::from(self.recent_turn_count) >= max_turns {
+        if self.turn_count_within(window_ticks) >= max_turns
+            || self.turn_count_within(burst_window_ticks) >= max_burst_turns
+        {
             return false;
+        }
+        self.record_turn();
+        self.last_turn_tick = Some(self.tick);
+        true
+    }
+
+    fn turn_count_within(&self, window_ticks: u32) -> usize {
+        self.recent_turn_ticks
+            .iter()
+            .take(usize::from(self.recent_turn_count))
+            .filter(|turn_tick| self.tick.saturating_sub(**turn_tick) < window_ticks)
+            .count()
+    }
+
+    fn record_turn(&mut self) {
+        if usize::from(self.recent_turn_count) >= MAX_TRACKED_TURNS {
+            return;
         }
         self.recent_turn_ticks[usize::from(self.recent_turn_count)] = self.tick;
         self.recent_turn_count += 1;
-        self.last_turn_tick = Some(self.tick);
-        true
     }
 
     fn prune_turn_history(&mut self, window_ticks: u32) {
@@ -201,6 +272,12 @@ impl BotController {
             .wrapping_add(1442695040888963407);
         (self.seed >> 32) as u32
     }
+}
+
+fn minimum_turn_spacing_ticks(window_ticks: u32, max_turns: usize) -> u32 {
+    window_ticks
+        .div_ceil(u32::try_from(max_turns).unwrap_or(1))
+        .max(1)
 }
 
 pub fn direction_to_input(direction: Direction) -> Vec2 {
@@ -300,6 +377,16 @@ fn front_segment_length(tail: &TailPolyline) -> f32 {
         .get(1)
         .map(|(next, _)| tail.front().0.distance(*next))
         .unwrap_or(f32::INFINITY)
+}
+
+fn turn_allowed_for_tail(
+    tail: &TailPolyline,
+    arena: &ArenaConfig,
+    obstacle_tails: &[&TailPolyline],
+    current: Direction,
+) -> bool {
+    front_segment_length(tail) >= MIN_SEGMENT_BEFORE_LIMITED_TURN
+        || safety_distance(tail, obstacle_tails, current, arena) <= EMERGENCY_TURN_DISTANCE
 }
 
 fn boundary_avoidance_direction(
@@ -531,6 +618,86 @@ mod tests {
             bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
             Direction::Right
         );
+    }
+
+    #[test]
+    fn bot_rejects_turns_that_would_create_tiny_segments() {
+        let arena = ArenaConfig {
+            width: 200.0,
+            height: 100.0,
+        };
+        let tail = TailPolyline::new(VecDeque::from([
+            (Vec2::new(72.0, 0.0), Direction::Right),
+            (Vec2::new(62.0, 0.0), Direction::Right),
+        ]));
+        let mut bot = BotController::new(1, 1);
+
+        assert_eq!(
+            bot.choose_direction_avoiding_limited(&tail, &arena, &[], 10, 50),
+            Direction::Right
+        );
+    }
+
+    #[test]
+    fn bot_allows_emergency_turns_from_tiny_segments() {
+        let arena = ArenaConfig {
+            width: 200.0,
+            height: 100.0,
+        };
+        let tail = TailPolyline::new(VecDeque::from([
+            (Vec2::new(98.0, 0.0), Direction::Right),
+            (Vec2::new(88.0, 0.0), Direction::Right),
+        ]));
+        let mut bot = BotController::new(1, 1);
+
+        assert_ne!(
+            bot.choose_direction_avoiding_limited(&tail, &arena, &[], 10, 50),
+            Direction::Right
+        );
+    }
+
+    #[test]
+    fn bot_turn_budget_limits_requested_turns() {
+        let mut bot = BotController::new(1, 1);
+
+        assert_eq!(
+            bot.choose_limited_turn(Direction::Up, Direction::Left, 2, 4),
+            Direction::Left
+        );
+        assert_eq!(
+            bot.choose_limited_turn(Direction::Left, Direction::Up, 2, 4),
+            Direction::Left
+        );
+        assert_eq!(
+            bot.choose_limited_turn(Direction::Left, Direction::Up, 2, 4),
+            Direction::Up
+        );
+    }
+
+    #[test]
+    fn bot_turn_budget_limits_short_bursts() {
+        let mut bot = BotController::new(1, 1);
+        let mut current = Direction::Up;
+        let mut accepted_ticks = Vec::new();
+
+        for tick in 1..=20 {
+            let (left, right) = legal_turns(current);
+            let requested = if tick % 2 == 0 { left } else { right };
+            let direction = bot.choose_limited_turn(current, requested, 30, 50);
+            if direction != current {
+                current = direction;
+                accepted_ticks.push(tick);
+            }
+        }
+
+        assert_eq!(accepted_ticks, vec![1, 5, 9, 13, 17]);
+        for index in 0..accepted_ticks.len() {
+            let turns_in_200ms = accepted_ticks[index..]
+                .iter()
+                .take_while(|tick| **tick - accepted_ticks[index] < 10)
+                .count();
+            assert!(turns_in_200ms <= usize::from(MAX_BURST_TURNS));
+        }
     }
 
     #[test]
