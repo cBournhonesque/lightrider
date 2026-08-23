@@ -12,6 +12,10 @@ categories = ["game-development", "network-programming"]
 license = "MIT OR Apache-2.0"
 publish = false
 
+[features]
+default = []
+client = []
+server = []
 
 [dependencies]
 lightyear.workspace = true
@@ -25,7 +29,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 bevy.workspace = true
 clap.workspace = true
-bevy_turborand.workspace = true
+bevy_rand.workspace = true
+rand_core.workspace = true
 parry2d = "0.13"
 derive_more = { version = "0.99", features = ["add", "mul"] }
 #bevy-inspector-egui = "0.22.1"

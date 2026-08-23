@@ -80,7 +80,7 @@ fn spawn_shortcut_help(commands: &mut Commands) {
                 ui_style::body_color(),
                 ui_style::text_glow(),
                 TextFont {
-                    font_size: 14.0,
+                    font_size: FontSize::Px(14.0),
                     ..default()
                 },
             ));

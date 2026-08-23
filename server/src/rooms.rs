@@ -1,14 +1,17 @@
+use bevy::ecs::relationship::Relationship;
 use bevy::ecs::schedule::ApplyDeferred;
 use bevy::prelude::*;
-use bevy_turborand::prelude::*;
+use bevy_rand::prelude::{GlobalRng, WyRand};
 use lightyear::connection::client::{Connected, Disconnected};
+use lightyear::prelude::input::bei::{Action, ActionOf};
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
     ControlledBy, MessageReceiver, PeerId, RemoteId, RoomAllocator, RoomId as LightyearRoomId,
     RoomPlugin as LightyearRoomPlugin, Rooms,
 };
+use rand_core::Rng;
 
-use crate::spawning::snake_spawn_pose;
+use crate::spawning::snake_spawn_pose_avoiding;
 use shared::config::GameConfig;
 use shared::map::spawn_room_map;
 use shared::network::bundle::player::PlayerBundle;
@@ -290,6 +293,7 @@ fn handle_player_name_updates(
         &RoomId,
         Option<&ControlledBy>,
     )>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
 ) {
     for (client_entity, remote_id, mut receiver, client_room, registered_room) in &mut clients {
         for message in receiver.receive() {
@@ -327,6 +331,7 @@ fn handle_player_name_updates(
                     game_room: *room,
                     lightyear_room,
                 };
+                let obstacle_tails = obstacle_tails_for_room(*room, &tails);
                 let head_entity = spawn_client_snake(
                     &mut commands,
                     client_entity,
@@ -334,6 +339,7 @@ fn handle_player_name_updates(
                     player_entity,
                     assignment,
                     &config,
+                    &obstacle_tails,
                 );
                 if let Some(controlled_by) = controlled_by.copied() {
                     commands.entity(head_entity).insert(controlled_by);
@@ -367,6 +373,7 @@ fn handle_player_name_updates(
                     .entity(client_entity)
                     .insert(RegisteredHumanRoom(client_room.room));
             }
+            let obstacle_tails = obstacle_tails_for_room(client_room.room, &tails);
             spawn_client_player(
                 &mut commands,
                 client_entity,
@@ -374,6 +381,7 @@ fn handle_player_name_updates(
                 assignment,
                 &config,
                 name,
+                &obstacle_tails,
             );
         }
     }
@@ -389,7 +397,7 @@ fn handle_room_join_requests(
     config: Res<GameConfig>,
     mut directory: ResMut<RoomDirectory>,
     mut room_allocator: ResMut<RoomAllocator>,
-    mut rng: ResMut<GlobalRng>,
+    mut rng: Single<&mut WyRand, With<GlobalRng>>,
     mut clients: Query<
         (
             Entity,
@@ -402,7 +410,11 @@ fn handle_room_join_requests(
         With<Connected>,
     >,
     players: Query<(Entity, &Player)>,
-    mut room_components: Query<&mut RoomId>,
+    input_actions: Query<(Entity, &ActionOf<SnakeInput>), With<Action<MoveSnake>>>,
+    mut room_queries: ParamSet<(
+        Query<&mut RoomId>,
+        Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
+    )>,
 ) {
     for (client_entity, remote_id, mut receiver, client_room, pending_name, registered_room) in
         &mut clients
@@ -410,7 +422,7 @@ fn handle_room_join_requests(
         let mut current_room = client_room.map(|room| room.room);
         let mut registered_room = registered_room.map(|room| room.0);
         for request in receiver.receive() {
-            let roll = rng.usize(..);
+            let roll = rng.next_u64() as usize;
             let assignment = directory.assign_for_mode(
                 &mut commands,
                 &mut room_allocator,
@@ -418,6 +430,11 @@ fn handle_room_join_requests(
                 request.mode,
                 roll,
             );
+            let obstacle_tails = {
+                let tails = room_queries.p1();
+                obstacle_tails_for_room(assignment.game_room, &tails)
+            };
+            let mut room_components = room_queries.p0();
 
             registered_room = move_client_to_room(
                 &mut commands,
@@ -430,7 +447,9 @@ fn handle_room_join_requests(
                 &config,
                 pending_name,
                 &players,
+                &input_actions,
                 &mut room_components,
+                &obstacle_tails,
             );
             current_room = Some(assignment.game_room);
         }
@@ -452,6 +471,7 @@ fn spawn_pending_named_players(
         With<Connected>,
     >,
     players: Query<&Player>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
 ) {
     for (client_entity, remote_id, client_room, pending_name, registered_room) in &clients {
         if players.iter().any(|player| player.id == remote_id.0) {
@@ -485,6 +505,7 @@ fn spawn_pending_named_players(
             },
             &config,
             pending_name.0.clone(),
+            &obstacle_tails_for_room(client_room.room, &tails),
         );
     }
 }
@@ -551,7 +572,9 @@ fn move_client_to_room(
     config: &GameConfig,
     pending_name: Option<&PendingPlayerName>,
     players: &Query<(Entity, &Player)>,
+    input_actions: &Query<(Entity, &ActionOf<SnakeInput>), With<Action<MoveSnake>>>,
     room_components: &mut Query<&mut RoomId>,
+    obstacle_tails: &[TailPolyline],
 ) -> Option<RoomId> {
     add_replicated_entity_to_room(commands, assignment.lightyear_room, client_entity);
     commands.entity(client_entity).insert(ClientRoom {
@@ -578,6 +601,7 @@ fn move_client_to_room(
                 assignment,
                 config,
                 pending_name.0.clone(),
+                obstacle_tails,
             );
             return Some(assignment.game_room);
         }
@@ -601,6 +625,12 @@ fn move_client_to_room(
     if let Some(snake_entity) = player.snake {
         if let Ok(mut snake_room) = room_components.get_mut(snake_entity) {
             move_replicated_entity_to_room(commands, snake_entity, assignment.lightyear_room);
+            move_snake_input_actions_to_room(
+                commands,
+                snake_entity,
+                assignment.lightyear_room,
+                input_actions,
+            );
             *snake_room = assignment.game_room;
         }
     }
@@ -614,6 +644,7 @@ fn spawn_client_player(
     assignment: RoomAssignment,
     config: &GameConfig,
     name: String,
+    obstacle_tails: &[TailPolyline],
 ) {
     info!(
         "Client {client_id:?} joined room {}",
@@ -635,6 +666,7 @@ fn spawn_client_player(
         player_entity,
         assignment,
         config,
+        obstacle_tails,
     );
 
     let controlled_by = ControlledBy {
@@ -658,9 +690,14 @@ fn spawn_client_snake(
     player_entity: Entity,
     assignment: RoomAssignment,
     config: &GameConfig,
+    obstacle_tails: &[TailPolyline],
 ) -> Entity {
-    let (spawn_position, spawn_direction) =
-        snake_spawn_pose(config, assignment.game_room, client_id.to_bits());
+    let (spawn_position, spawn_direction) = snake_spawn_pose_avoiding(
+        config,
+        assignment.game_room,
+        client_id.to_bits(),
+        obstacle_tails,
+    );
     let head_entity = SnakeBundle::spawn_with_room_at(
         commands,
         client_id,
@@ -677,8 +714,27 @@ fn spawn_client_snake(
         },
     ));
     add_replicated_entity_to_room(commands, assignment.lightyear_room, head_entity);
-    spawn_snake_input_actions(commands, head_entity, client_id, true);
+    let input_action = spawn_snake_input_actions(commands, head_entity);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, input_action);
     head_entity
+}
+
+fn obstacle_tails_for_room(
+    room: RoomId,
+    tails: &Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
+) -> Vec<TailPolyline> {
+    tails
+        .iter()
+        .filter(|(_, _, _, tail_room)| **tail_room == room)
+        .map(|(head, tail, length, _)| visible_tail(head, tail, length))
+        .collect()
+}
+
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }
 
 pub(crate) fn add_replicated_entity_to_room(
@@ -703,6 +759,20 @@ fn move_replicated_entity_to_room(
     lightyear_room: LightyearRoomId,
 ) {
     add_replicated_entity_to_room(commands, lightyear_room, entity);
+}
+
+fn move_snake_input_actions_to_room(
+    commands: &mut Commands,
+    snake_entity: Entity,
+    lightyear_room: LightyearRoomId,
+    input_actions: &Query<(Entity, &ActionOf<SnakeInput>), With<Action<MoveSnake>>>,
+) {
+    for (action, _action_of) in input_actions
+        .iter()
+        .filter(|(_, action_of)| action_of.get() == snake_entity)
+    {
+        add_replicated_entity_to_room(commands, lightyear_room, action);
+    }
 }
 
 fn handle_disconnected(
@@ -894,6 +964,89 @@ mod tests {
             .metrics()
             .collect::<Vec<_>>();
         assert_eq!(metrics[0].human_count, 1);
+    }
+
+    #[test]
+    fn pending_named_client_spawn_avoids_existing_room_tail() {
+        let client_id = PeerId::Netcode(1);
+        let game_room = RoomId(0);
+        let mut room_allocator = RoomAllocator::default();
+        let lightyear_room = room_allocator.allocate();
+        let config = GameConfig::default();
+        let (unsafe_position, unsafe_direction) =
+            crate::spawning::snake_spawn_pose(&config, game_room, client_id.to_bits());
+        let obstacle_direction = match unsafe_direction {
+            Direction::Up | Direction::Down => Direction::Right,
+            Direction::Left | Direction::Right => Direction::Up,
+        };
+        let obstacle_mid = unsafe_position
+            - unsafe_direction.delta() * (config.movement.starting_tail_length / 2.0);
+        let obstacle_start = obstacle_mid - obstacle_direction.delta() * 100.0;
+        let obstacle_end = obstacle_mid + obstacle_direction.delta() * 100.0;
+        assert!(shared::utils::geometry::ray_segment_intersection(
+            unsafe_position - unsafe_direction.delta() * config.movement.starting_tail_length,
+            unsafe_direction.delta(),
+            config.movement.starting_tail_length,
+            obstacle_start,
+            obstacle_end,
+        )
+        .is_some());
+
+        let mut app = App::new();
+        app.insert_resource(config.clone());
+        app.insert_resource(RoomDirectory {
+            rooms: vec![RoomState {
+                game_room,
+                lightyear_room,
+                human_count: 0,
+                private: false,
+            }],
+            next_room_id: 1,
+        });
+        app.add_systems(Update, spawn_pending_named_players);
+        app.world_mut().spawn((
+            SnakeHead {
+                position: obstacle_start,
+                direction: obstacle_direction.opposite(),
+            },
+            TailPoints::empty(),
+            TailLength {
+                current_size: 200.0,
+                target_size: 200.0,
+            },
+            game_room,
+        ));
+        let client_entity = app
+            .world_mut()
+            .spawn((
+                RemoteId(client_id),
+                ClientRoom { room: game_room },
+                PendingPlayerName("Alice".to_string()),
+            ))
+            .id();
+        app.world_mut().entity_mut(client_entity).insert(Connected);
+
+        app.update();
+
+        let player = {
+            let mut query = app.world_mut().query::<&Player>();
+            query
+                .iter(app.world())
+                .find(|player| player.id == client_id)
+                .cloned()
+                .unwrap()
+        };
+        let snake = app.world().entity(player.snake.unwrap());
+        let head = snake.get::<SnakeHead>().unwrap();
+        let length = snake.get::<TailLength>().unwrap();
+        assert!(shared::utils::geometry::ray_segment_intersection(
+            head.position - head.direction.delta() * length.current_size,
+            head.direction.delta(),
+            length.current_size,
+            obstacle_start,
+            obstacle_end,
+        )
+        .is_none());
     }
 
     #[test]

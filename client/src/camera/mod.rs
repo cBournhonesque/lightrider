@@ -12,6 +12,11 @@ pub struct CameraPlugin {
     pub(crate) debug_enabled: bool,
 }
 
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum CameraSystems {
+    Follow,
+}
+
 #[derive(Resource, Clone, Copy, Debug)]
 struct CameraSettings {
     debug_enabled: bool,
@@ -54,6 +59,7 @@ impl Plugin for CameraPlugin {
             PostUpdate,
             (trigger_death_camera_shake, follow_camera)
                 .chain()
+                .in_set(CameraSystems::Follow)
                 .after(FrameInterpolationSystems::Interpolate),
         );
         app.add_observer(toggle_camera);

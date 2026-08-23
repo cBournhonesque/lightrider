@@ -4,6 +4,7 @@ use lightyear::prelude::PeerId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
+#[component(map_entities)]
 pub struct Player {
     pub id: PeerId,
     pub name: String,
@@ -109,5 +110,20 @@ mod tests {
         assert_eq!(PlayerScore::from_tail_length(200.0, 200.0).value, 0);
         assert_eq!(PlayerScore::from_tail_length(220.0, 200.0).value, 20);
         assert_eq!(PlayerScore::from_tail_length(180.0, 200.0).value, 0);
+    }
+
+    #[test]
+    fn player_component_maps_snake_entity() {
+        let server_snake = Entity::from_bits(1);
+        let client_snake = Entity::from_bits(2);
+        let mut player = Player {
+            id: PeerId::Netcode(7),
+            name: "local".to_string(),
+            snake: Some(server_snake),
+        };
+
+        Component::map_entities(&mut player, &mut (server_snake, client_snake));
+
+        assert_eq!(player.snake, Some(client_snake));
     }
 }

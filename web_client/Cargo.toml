@@ -14,15 +14,16 @@ name = "lightrider-web"
 path = "src/main.rs"
 
 [dependencies]
-client = { path = "../client", default-features = false }
-shared = { path = "../shared" }
+client = { path = "../client", default-features = false, features = ["client"] }
+shared = { path = "../shared", default-features = false, features = ["client"] }
 bevy.workspace = true
 leptos = { version = "0.8", features = ["csr"] }
-leptos-bevy-canvas = "0.5.2"
+leptos-bevy-canvas = "0.6.0"
+lightyear_matchmaker_core = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_core", optional = true }
 
 [features]
 default = []
-lightyear-matchmaker = ["client/lightyear-matchmaker"]
+lightyear-matchmaker = ["client/lightyear-matchmaker", "dep:lightyear_matchmaker_core"]
 bevygap = ["lightyear-matchmaker"]
 bevygap-matchmaker-tls = ["bevygap", "client/bevygap-matchmaker-tls"]
 

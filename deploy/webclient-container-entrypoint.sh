@@ -50,6 +50,10 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Embedder-Policy "require-corp" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+
     gzip on;
     gzip_static on;
     gzip_vary on;
@@ -71,23 +75,38 @@ ${matchmaker_location}    location / {
     }
 
     location = /index.html {
-        add_header Cache-Control "no-cache";
+        add_header Cache-Control "no-cache" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
     }
 
     location = /bootstrap.js {
-        add_header Cache-Control "no-cache";
+        add_header Cache-Control "no-cache" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
     }
 
     location ~* ^/pkg/.+\\.wasm$ {
-        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
     }
 
     location /pkg/ {
-        add_header Cache-Control "no-cache";
+        add_header Cache-Control "no-cache" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
     }
 
     location /assets/ {
-        add_header Cache-Control "public, max-age=86400";
+        add_header Cache-Control "public, max-age=86400" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
     }
 }
 NGINX

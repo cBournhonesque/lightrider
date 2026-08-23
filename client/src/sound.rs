@@ -1,15 +1,19 @@
 use bevy::ecs::query::Or;
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy_seedling::prelude::CpalBackend;
 use bevy_seedling::prelude::{
     sample_effects, AudioSample, DefaultPoolSize, EffectsQuery, FirewheelConfig, SampleEffects,
     SamplePlayer, SeedlingPlugin, SpatialBasicNode, SpatialListener2D, SpatialScale, Volume,
     VolumeNode,
 };
-use lightyear::prelude::{Controlled, Interpolated, Predicted, Replicated};
+use lightyear::prelude::{
+    Client, ConfirmedHistory, Controlled, Interpolated, LocalId, PeerId, Predicted, Replicated,
+};
 use shared::config::{GameConfig, MovementConfig, SoundConfig};
 use shared::network::protocol::prelude::{
-    Acceleration, DeathReason, Direction, FoodBoost, Player, PlayerStatus, RoomId, SnakeHead,
-    Speed, TailPoints,
+    Acceleration, DeathReason, Direction, FoodBoost, HasPlayer, Player, PlayerStatus, RoomId,
+    SnakeHead, Speed, TailPoints,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -24,7 +28,9 @@ const FOOD_GRAB_SLICE: SoundSlice = SoundSlice::new(5_000.0, 461.29251700680294)
 const LINE_LOOP_SLICE: SoundSlice = SoundSlice::new(7_000.0, 2_946.1224489795923);
 const LINE_FAST_LOOP_SLICE: SoundSlice = SoundSlice::new(11_000.0, 2_000.0);
 const SPARK_SLICE: SoundSlice = SoundSlice::new(14_000.0, 87.93650793650798);
-const TURN_SLICE: SoundSlice = SoundSlice::new(16_000.0, 500.0);
+const TURN_SLICE: SoundSlice = SoundSlice::new(8_720.0, 120.0);
+const ONE_SHOT_EDGE_FADE_MS: f64 = 2.5;
+const LOOP_SEAM_FADE_MS: f64 = 8.0;
 const SILENT_VOLUME_EPSILON: f32 = 0.001;
 const VOLUME_UPDATE_EPSILON: f32 = 0.005;
 const REMOTE_LOOP_POSITION_UPDATE_DISTANCE: f32 = 8.0;
@@ -34,7 +40,7 @@ const MAX_ONE_SHOT_SOUND_TOKENS: f32 = 24.0;
 const ONE_SHOT_SOUND_TOKENS_PER_SECOND: f32 = 24.0;
 const FOOD_SOUND_COOLDOWN_SECONDS: f64 = 0.075;
 const PROXIMITY_BOOST_SOUND_RETRIGGER_SECONDS: f64 = 0.35;
-const LOCAL_ELECTRO_BASE_VOLUME_RATIO: f32 = 0.58;
+const LOCAL_ELECTRO_BASE_VOLUME_RATIO: f32 = 0.68;
 const FIREWHEEL_CHANNEL_CAPACITY: u32 = 65_536;
 const FIREWHEEL_EVENT_QUEUE_CAPACITY: usize = 1024;
 const FIREWHEEL_IMMEDIATE_EVENT_CAPACITY: usize = 4096;
@@ -144,10 +150,7 @@ struct RemoteLoopCandidate {
 
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(SeedlingPlugin {
-            config: firewheel_config(),
-            ..default()
-        });
+        add_seedling_plugin(app);
         app.insert_resource(DefaultPoolSize(SAMPLE_POOL_MIN_SIZE..=SAMPLE_POOL_MAX_SIZE));
         app.init_resource::<PowerlineSounds>();
         app.init_resource::<LocalSpeedLoopState>();
@@ -172,6 +175,20 @@ impl Plugin for SoundPlugin {
                 .chain(),
         );
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn add_seedling_plugin(app: &mut App) {
+    let mut plugin = SeedlingPlugin::new_web_audio();
+    plugin.config = firewheel_config();
+    app.add_plugins(plugin);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn add_seedling_plugin(app: &mut App) {
+    let mut plugin = SeedlingPlugin::<CpalBackend>::default();
+    plugin.config = firewheel_config();
+    app.add_plugins(plugin);
 }
 
 fn firewheel_config() -> FirewheelConfig {
@@ -279,17 +296,27 @@ fn build_powerline_sound_slices(
 
 fn powerline_sound_samples_from_atlas(atlas: &AudioSample) -> PowerlineSoundSamples {
     PowerlineSoundSamples {
-        crash: audio_sprite_slice(atlas, CRASH_SLICE),
-        food_grab: audio_sprite_slice(atlas, FOOD_GRAB_SLICE),
-        line_loop: audio_sprite_slice(atlas, LINE_LOOP_SLICE),
-        line_fast_loop: audio_sprite_slice(atlas, LINE_FAST_LOOP_SLICE),
-        electro_loop: audio_sprite_slice(atlas, ELECTRO_LOOP_SLICE),
-        spark: audio_sprite_slice(atlas, SPARK_SLICE),
-        turn: audio_sprite_slice(atlas, TURN_SLICE),
+        crash: audio_sprite_slice(atlas, CRASH_SLICE, SlicePlayback::OneShot),
+        food_grab: audio_sprite_slice(atlas, FOOD_GRAB_SLICE, SlicePlayback::OneShot),
+        line_loop: audio_sprite_slice(atlas, LINE_LOOP_SLICE, SlicePlayback::Loop),
+        line_fast_loop: audio_sprite_slice(atlas, LINE_FAST_LOOP_SLICE, SlicePlayback::Loop),
+        electro_loop: audio_sprite_slice(atlas, ELECTRO_LOOP_SLICE, SlicePlayback::Loop),
+        spark: audio_sprite_slice(atlas, SPARK_SLICE, SlicePlayback::OneShot),
+        turn: audio_sprite_slice(atlas, TURN_SLICE, SlicePlayback::OneShot),
     }
 }
 
-fn audio_sprite_slice(atlas: &AudioSample, slice: SoundSlice) -> AudioSample {
+#[derive(Clone, Copy)]
+enum SlicePlayback {
+    OneShot,
+    Loop,
+}
+
+fn audio_sprite_slice(
+    atlas: &AudioSample,
+    slice: SoundSlice,
+    playback: SlicePlayback,
+) -> AudioSample {
     let sample = atlas.get();
     let range = sound_slice_frame_range(sample.len_frames(), slice);
     let frame_count = range.end.saturating_sub(range.start).max(1);
@@ -299,7 +326,75 @@ fn audio_sprite_slice(atlas: &AudioSample, slice: SoundSlice) -> AudioSample {
         .map(Vec::as_mut_slice)
         .collect::<Vec<_>>();
     sample.fill_buffers(&mut buffers, 0..frame_count, range.start as u64);
+    let sample_rate = atlas.original_sample_rate().get();
+    match playback {
+        SlicePlayback::OneShot => {
+            apply_edge_fade(&mut channels, sample_rate, ONE_SHOT_EDGE_FADE_MS)
+        }
+        SlicePlayback::Loop => smooth_loop_seam(&mut channels, sample_rate, LOOP_SEAM_FADE_MS),
+    }
     AudioSample::new(channels, atlas.original_sample_rate())
+}
+
+fn apply_edge_fade(channels: &mut [Vec<f32>], sample_rate: u32, fade_ms: f64) {
+    let Some(frame_count) = channels.first().map(Vec::len) else {
+        return;
+    };
+    let fade_frames = fade_frame_count(sample_rate, fade_ms, frame_count);
+    if fade_frames == 0 {
+        return;
+    }
+    for channel in channels {
+        for index in 0..fade_frames {
+            let fade_in = fade_ratio(index, fade_frames);
+            let fade_out = fade_ratio(fade_frames - 1 - index, fade_frames);
+            channel[index] *= fade_in;
+            let end = frame_count - 1 - index;
+            channel[end] *= fade_out;
+        }
+    }
+}
+
+fn smooth_loop_seam(channels: &mut [Vec<f32>], sample_rate: u32, fade_ms: f64) {
+    let Some(frame_count) = channels.first().map(Vec::len) else {
+        return;
+    };
+    if frame_count < 3 {
+        return;
+    }
+    let fade_frames = fade_frame_count(sample_rate, fade_ms, frame_count / 2);
+    for channel in channels {
+        let start = channel[0];
+        let end = channel[frame_count - 1];
+        let offset = end - start;
+        if offset.is_finite() && offset.abs() > f32::EPSILON {
+            let divisor = (frame_count - 1) as f32;
+            for (index, sample) in channel.iter_mut().enumerate() {
+                *sample -= offset * (index as f32 / divisor);
+            }
+        }
+        if fade_frames == 0 {
+            continue;
+        }
+        for index in 0..fade_frames {
+            let ratio = fade_ratio(index, fade_frames);
+            let end_index = frame_count - fade_frames + index;
+            let blended = channel[end_index] * (1.0 - ratio) + channel[index] * ratio;
+            channel[index] = blended;
+            channel[end_index] = blended;
+        }
+    }
+}
+
+fn fade_frame_count(sample_rate: u32, fade_ms: f64, max_frames: usize) -> usize {
+    (((sample_rate as f64 * fade_ms) / 1000.0).round() as usize).min(max_frames)
+}
+
+fn fade_ratio(index: usize, frame_count: usize) -> f32 {
+    if frame_count <= 1 {
+        return 1.0;
+    }
+    (index as f32 / (frame_count - 1) as f32).clamp(0.0, 1.0)
 }
 
 fn sound_slice_frame_range(total_frames: u64, slice: SoundSlice) -> std::ops::Range<usize> {
@@ -329,6 +424,7 @@ impl SoundSlice {
 fn sync_spatial_listener(
     mut commands: Commands,
     config: Res<GameConfig>,
+    clients: Query<&LocalId, With<Client>>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
@@ -342,7 +438,7 @@ fn sync_spatial_listener(
     }
 
     let Some(listener) = controlled_listener_snapshot(&controlled_snakes)
-        .or_else(|| listener_snapshot(&players, &heads))
+        .or_else(|| listener_snapshot(&players, &heads, local_peer_id(&clients)))
     else {
         return;
     };
@@ -366,8 +462,20 @@ fn play_turn_sounds(
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<TurnSoundState>,
     mut budget: ResMut<OneShotSoundBudget>,
+    clients: Query<&LocalId, With<Client>>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     local_snakes: Query<(Entity, &SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
+    player_ownership: Query<(&Player, Has<Controlled>)>,
+    owned_snakes: Query<
+        (
+            Entity,
+            &SnakeHead,
+            &RoomId,
+            Option<&HasPlayer>,
+            Option<&ConfirmedHistory<HasPlayer>>,
+        ),
+        With<TailPoints>,
+    >,
     remote_snakes: Query<
         (Entity, &SnakeHead, &RoomId),
         (
@@ -382,18 +490,23 @@ fn play_turn_sounds(
         state.directions.clear();
         return;
     }
+    let local_id = local_peer_id(&clients);
 
-    let listener = local_snakes
+    let local_snake = local_snakes
         .iter()
         .next()
+        .map(|(snake, head, room)| (snake, *head, *room))
+        .or_else(|| local_player_turn_snake(&players, &heads, local_id))
+        .or_else(|| local_owned_turn_snake(&owned_snakes, &player_ownership, local_id));
+    let listener = local_snake
         .map(|(_, head, room)| ListenerSnapshot {
             position: head.position,
-            room: *room,
+            room,
         })
-        .or_else(|| remote_listener_snapshot(&players, &heads));
+        .or_else(|| remote_listener_snapshot(&players, &heads, local_id));
     let mut seen = HashSet::new();
 
-    if let Some((snake, head, _)) = local_snakes.iter().next() {
+    if let Some((snake, head, _)) = local_snake {
         seen.insert(snake);
         if direction_changed(&mut state.directions, snake, head.direction) {
             if let Some(turn_sound) = sounds.turn() {
@@ -416,6 +529,9 @@ fn play_turn_sounds(
     };
 
     for (snake, head, room) in &remote_snakes {
+        if Some(snake) == local_snake.map(|(local, _, _)| local) {
+            continue;
+        }
         if *room != listener.room {
             continue;
         }
@@ -454,6 +570,7 @@ fn play_proximity_boost_sounds(
     time: Res<Time>,
     mut state: ResMut<ProximityBoostSoundState>,
     mut budget: ResMut<OneShotSoundBudget>,
+    clients: Query<&LocalId, With<Client>>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     local_snakes: Query<(Entity, &Acceleration, &FoodBoost), (With<Controlled>, With<TailPoints>)>,
     controlled_heads: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
@@ -473,7 +590,7 @@ fn play_proximity_boost_sounds(
     }
 
     let listener = controlled_listener_snapshot(&controlled_heads)
-        .or_else(|| remote_listener_snapshot(&players, &heads));
+        .or_else(|| remote_listener_snapshot(&players, &heads, local_peer_id(&clients)));
     let now = time.elapsed_secs_f64();
     let mut active_now = HashSet::new();
 
@@ -542,6 +659,7 @@ fn play_confirmed_death_sounds(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     mut budget: ResMut<OneShotSoundBudget>,
+    clients: Query<&LocalId, With<Client>>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     heads: Query<&SnakeHead>,
@@ -557,7 +675,7 @@ fn play_confirmed_death_sounds(
     };
 
     let listener = controlled_listener_snapshot(&controlled_snakes)
-        .or_else(|| listener_snapshot(&players, &heads));
+        .or_else(|| listener_snapshot(&players, &heads, local_peer_id(&clients)));
     for death in deaths.read() {
         let volume = death_sound_volume(death, listener, &config.sound);
         if volume <= 0.0 {
@@ -582,6 +700,7 @@ fn play_confirmed_food_sounds(
     time: Res<Time>,
     mut cooldown: ResMut<FoodSoundCooldown>,
     mut budget: ResMut<OneShotSoundBudget>,
+    clients: Query<&LocalId, With<Client>>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     snakes: Query<(&SnakeHead, &RoomId)>,
@@ -596,9 +715,10 @@ fn play_confirmed_food_sounds(
         return;
     };
 
-    let listener = controlled_listener_snapshot(&controlled_snakes)
-        .or_else(|| listener_snapshot_from_roomed_tails(&players, &snakes));
-    let local_snake = local_player_snake(&players);
+    let listener = controlled_listener_snapshot(&controlled_snakes).or_else(|| {
+        listener_snapshot_from_roomed_tails(&players, &snakes, local_peer_id(&clients))
+    });
+    let local_snake = local_player_snake(&players, local_peer_id(&clients));
     for pickup in pickups.read() {
         let collision = &pickup.collision;
         if !food_sound_ready(time.elapsed_secs_f64(), &cooldown) {
@@ -654,16 +774,35 @@ fn update_local_speed_loops(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<LocalSpeedLoopState>,
+    clients: Query<&LocalId, With<Client>>,
     players: Query<(&Player, &RoomId, Has<Controlled>)>,
     controlled_snakes: Query<
         (&Speed, &Acceleration, &FoodBoost),
         (With<Controlled>, With<TailPoints>),
     >,
+    player_ownership: Query<(&Player, Has<Controlled>)>,
+    owned_speeds: Query<
+        (
+            &Speed,
+            Option<&Acceleration>,
+            Option<&FoodBoost>,
+            Option<&HasPlayer>,
+            Option<&ConfirmedHistory<HasPlayer>>,
+        ),
+        With<TailPoints>,
+    >,
     speeds: Query<(&Speed, Option<&Acceleration>, Option<&FoodBoost>)>,
     sample_effects: Query<&SampleEffects, With<LocalSpeedLoopSound>>,
     mut volume_nodes: Query<&mut VolumeNode>,
 ) {
-    let state_snapshot = local_player_sound_state(&controlled_snakes, &players, &speeds);
+    let state_snapshot = local_player_sound_state(
+        &controlled_snakes,
+        &players,
+        &speeds,
+        &owned_speeds,
+        &player_ownership,
+        local_peer_id(&clients),
+    );
     let (line_volume, fast_volume) = speed_loop_volumes(
         state_snapshot.map(|state| state.speed),
         &config.sound,
@@ -709,6 +848,7 @@ fn update_remote_speed_loops(
     config: Res<GameConfig>,
     sounds: Res<PowerlineSounds>,
     mut state: ResMut<RemoteSpeedLoopState>,
+    clients: Query<&LocalId, With<Client>>,
     players: Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     controlled_snakes: Query<(&SnakeHead, &RoomId), (With<Controlled>, With<TailPoints>)>,
     remote_snakes: Query<
@@ -741,7 +881,7 @@ fn update_remote_speed_loops(
     };
 
     let Some(listener) = controlled_listener_snapshot(&controlled_snakes)
-        .or_else(|| remote_listener_snapshot(&players, &heads))
+        .or_else(|| remote_listener_snapshot(&players, &heads, local_peer_id(&clients)))
     else {
         clear_remote_speed_loops(&mut commands, &mut state);
         return;
@@ -1037,10 +1177,11 @@ fn despawn_loop(commands: &mut Commands, entity: Option<Entity>) {
 fn listener_snapshot(
     players: &Query<(&Player, &RoomId, Has<Controlled>)>,
     heads: &Query<&SnakeHead>,
+    local_id: Option<PeerId>,
 ) -> Option<ListenerSnapshot> {
     players
         .iter()
-        .find(|(_, _, is_local)| *is_local)
+        .find(|(player, _, is_local)| player_is_local(player, *is_local, local_id))
         .and_then(|(player, room, _)| {
             player.snake.and_then(|snake| {
                 heads.get(snake).ok().map(|head| ListenerSnapshot {
@@ -1066,10 +1207,11 @@ fn controlled_listener_snapshot(
 fn listener_snapshot_from_roomed_tails(
     players: &Query<(&Player, &RoomId, Has<Controlled>)>,
     tails: &Query<(&SnakeHead, &RoomId)>,
+    local_id: Option<PeerId>,
 ) -> Option<ListenerSnapshot> {
     players
         .iter()
-        .find(|(_, _, is_local)| *is_local)
+        .find(|(player, _, is_local)| player_is_local(player, *is_local, local_id))
         .and_then(|(player, room, _)| {
             player.snake.and_then(|snake| {
                 tails.get(snake).ok().map(|(head, _)| ListenerSnapshot {
@@ -1083,10 +1225,11 @@ fn listener_snapshot_from_roomed_tails(
 fn remote_listener_snapshot(
     players: &Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
     heads: &Query<&SnakeHead>,
+    local_id: Option<PeerId>,
 ) -> Option<ListenerSnapshot> {
     players
         .iter()
-        .find(|(_, _, _, _, is_local)| *is_local)
+        .find(|(_, player, _, _, is_local)| player_is_local(player, *is_local, local_id))
         .and_then(|(_, player, room, _, _)| {
             player.snake.and_then(|snake| {
                 heads.get(snake).ok().map(|head| ListenerSnapshot {
@@ -1097,10 +1240,30 @@ fn remote_listener_snapshot(
         })
 }
 
-fn local_player_snake(players: &Query<(&Player, &RoomId, Has<Controlled>)>) -> Option<Entity> {
+fn local_player_turn_snake(
+    players: &Query<(Entity, &Player, &RoomId, &PlayerStatus, Has<Controlled>)>,
+    heads: &Query<&SnakeHead>,
+    local_id: Option<PeerId>,
+) -> Option<(Entity, SnakeHead, RoomId)> {
     players
         .iter()
-        .find(|(_, _, is_local)| *is_local)
+        .find(|(_, player, _, status, is_local)| {
+            player_is_local(player, *is_local, local_id) && **status == PlayerStatus::Alive
+        })
+        .and_then(|(_, player, room, _, _)| {
+            player
+                .snake
+                .and_then(|snake| heads.get(snake).ok().map(|head| (snake, *head, *room)))
+        })
+}
+
+fn local_player_snake(
+    players: &Query<(&Player, &RoomId, Has<Controlled>)>,
+    local_id: Option<PeerId>,
+) -> Option<Entity> {
+    players
+        .iter()
+        .find(|(player, _, is_local)| player_is_local(player, *is_local, local_id))
         .and_then(|(player, _, _)| player.snake)
 }
 
@@ -1118,6 +1281,18 @@ fn local_player_sound_state(
     >,
     players: &Query<(&Player, &RoomId, Has<Controlled>)>,
     speeds: &Query<(&Speed, Option<&Acceleration>, Option<&FoodBoost>)>,
+    owned_speeds: &Query<
+        (
+            &Speed,
+            Option<&Acceleration>,
+            Option<&FoodBoost>,
+            Option<&HasPlayer>,
+            Option<&ConfirmedHistory<HasPlayer>>,
+        ),
+        With<TailPoints>,
+    >,
+    player_ownership: &Query<(&Player, Has<Controlled>)>,
+    local_id: Option<PeerId>,
 ) -> Option<LocalSoundState> {
     if let Some((speed, acceleration, food_boost)) = controlled_snakes.iter().next() {
         return Some(LocalSoundState {
@@ -1127,15 +1302,96 @@ fn local_player_sound_state(
         });
     }
 
-    let snake = local_player_snake(players)?;
-    speeds
-        .get(snake)
-        .ok()
-        .map(|(speed, acceleration, food_boost)| LocalSoundState {
+    if let Some(snake) = local_player_snake(players, local_id) {
+        if let Ok((speed, acceleration, food_boost)) = speeds.get(snake) {
+            return Some(LocalSoundState {
+                speed: speed.0,
+                acceleration: acceleration.map(|value| value.0).unwrap_or(0.0),
+                food_boost: food_boost.map(|value| value.0).unwrap_or(0.0),
+            });
+        }
+    }
+
+    local_owned_sound_state(owned_speeds, player_ownership, local_id)
+}
+
+fn local_owned_turn_snake(
+    owned_snakes: &Query<
+        (
+            Entity,
+            &SnakeHead,
+            &RoomId,
+            Option<&HasPlayer>,
+            Option<&ConfirmedHistory<HasPlayer>>,
+        ),
+        With<TailPoints>,
+    >,
+    player_ownership: &Query<(&Player, Has<Controlled>)>,
+    local_id: Option<PeerId>,
+) -> Option<(Entity, SnakeHead, RoomId)> {
+    owned_snakes
+        .iter()
+        .find(|(_, _, _, owner, owner_history)| {
+            snake_is_owned_by_local_player(*owner, *owner_history, player_ownership, local_id)
+        })
+        .map(|(snake, head, room, _, _)| (snake, *head, *room))
+}
+
+fn local_owned_sound_state(
+    owned_speeds: &Query<
+        (
+            &Speed,
+            Option<&Acceleration>,
+            Option<&FoodBoost>,
+            Option<&HasPlayer>,
+            Option<&ConfirmedHistory<HasPlayer>>,
+        ),
+        With<TailPoints>,
+    >,
+    player_ownership: &Query<(&Player, Has<Controlled>)>,
+    local_id: Option<PeerId>,
+) -> Option<LocalSoundState> {
+    owned_speeds
+        .iter()
+        .find(|(_, _, _, owner, owner_history)| {
+            snake_is_owned_by_local_player(*owner, *owner_history, player_ownership, local_id)
+        })
+        .map(|(speed, acceleration, food_boost, _, _)| LocalSoundState {
             speed: speed.0,
             acceleration: acceleration.map(|value| value.0).unwrap_or(0.0),
             food_boost: food_boost.map(|value| value.0).unwrap_or(0.0),
         })
+}
+
+fn snake_is_owned_by_local_player(
+    owner: Option<&HasPlayer>,
+    owner_history: Option<&ConfirmedHistory<HasPlayer>>,
+    player_ownership: &Query<(&Player, Has<Controlled>)>,
+    local_id: Option<PeerId>,
+) -> bool {
+    let Some(player_entity) = snake_owner(owner, owner_history) else {
+        return false;
+    };
+    player_ownership
+        .get(player_entity)
+        .is_ok_and(|(player, is_controlled)| player_is_local(player, is_controlled, local_id))
+}
+
+fn player_is_local(player: &Player, is_controlled: bool, local_id: Option<PeerId>) -> bool {
+    is_controlled || local_id.is_some_and(|local_id| player.id == local_id)
+}
+
+fn local_peer_id(clients: &Query<&LocalId, With<Client>>) -> Option<PeerId> {
+    clients.single().ok().map(|local_id| local_id.0)
+}
+
+fn snake_owner(
+    owner: Option<&HasPlayer>,
+    owner_history: Option<&ConfirmedHistory<HasPlayer>>,
+) -> Option<Entity> {
+    owner.map(|owner| owner.0).or_else(|| {
+        owner_history.and_then(|history| history.newest_present().map(|(_, owner)| owner.0))
+    })
 }
 
 fn proximity_boost_active(acceleration: f32, food_boost: f32, movement: &MovementConfig) -> bool {
@@ -1258,12 +1514,13 @@ fn speed_loop_volumes(
         return (0.0, 0.0);
     };
 
+    let line_start_speed = sound.speed_loop_start_speed.min(movement.min_speed);
     let line_ratio = normalized_range(
         speed,
-        sound.speed_loop_start_speed,
-        movement.max_speed.max(sound.speed_loop_start_speed),
+        line_start_speed,
+        movement.max_speed.max(line_start_speed),
     );
-    let line_volume = if speed < sound.speed_loop_start_speed {
+    let line_volume = if speed + f32::EPSILON < line_start_speed {
         0.0
     } else {
         sound.master_volume
@@ -1309,7 +1566,7 @@ fn distance_attenuation(distance: f32, sound: &SoundConfig) -> f32 {
     }
 
     let ratio = 1.0 - ((distance - full_volume_distance) / (max_distance - full_volume_distance));
-    ratio.clamp(0.0, 1.0)
+    ratio.clamp(0.0, 1.0).powi(2)
 }
 
 fn within_remote_one_shot_radius(distance: f32, sound: &SoundConfig) -> bool {
@@ -1349,13 +1606,24 @@ mod tests {
         let sound = SoundConfig::default();
         let movement = MovementConfig::default();
 
-        let slow = speed_loop_volumes(Some(sound.speed_loop_start_speed), &sound, &movement);
+        let slow = speed_loop_volumes(Some(movement.min_speed), &sound, &movement);
         let fast = speed_loop_volumes(Some(movement.max_speed), &sound, &movement);
 
         assert_eq!(slow.0, sound.master_volume * sound.speed_loop_min_volume);
         assert_eq!(slow.1, 0.0);
         assert!(fast.0 > sound.speed_loop_min_volume);
         assert!(fast.1 > 0.0);
+    }
+
+    #[test]
+    fn speed_loop_is_audible_at_minimum_speed() {
+        let sound = SoundConfig::default();
+        let movement = MovementConfig::default();
+
+        let volume = speed_loop_volumes(Some(movement.min_speed), &sound, &movement);
+
+        assert!(volume.0 >= 0.35);
+        assert_eq!(volume.1, 0.0);
     }
 
     #[test]
@@ -1437,7 +1705,7 @@ mod tests {
             distance_attenuation(
                 (sound.remote_sound_full_volume_distance + sound.remote_sound_max_distance) * 0.5,
                 &sound,
-            ) < 1.0
+            ) <= 0.25
         );
     }
 
@@ -1509,6 +1777,74 @@ mod tests {
     }
 
     #[test]
+    fn turn_sound_spawns_for_local_owned_snake_direction_change() {
+        let mut app = App::new();
+        app.insert_resource(GameConfig::default());
+        app.insert_resource(PowerlineSounds {
+            atlas: Handle::default(),
+            crash: None,
+            food_grab: None,
+            line_loop: None,
+            line_fast_loop: None,
+            electro_loop: None,
+            spark: None,
+            turn: Some(Handle::default()),
+        });
+        app.insert_resource(TurnSoundState::default());
+        app.insert_resource(OneShotSoundBudget {
+            spawned_this_frame: 0,
+            tokens: MAX_ONE_SHOT_SOUND_TOKENS,
+            last_refill_seconds: Some(0.0),
+        });
+        app.add_systems(Update, play_turn_sounds);
+
+        let player = app
+            .world_mut()
+            .spawn((
+                Player {
+                    id: lightyear::prelude::PeerId::Netcode(1),
+                    name: "Alice".to_string(),
+                    snake: None,
+                },
+                RoomId(0),
+                PlayerStatus::Alive,
+                Controlled,
+            ))
+            .id();
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeHead {
+                    position: Vec2::ZERO,
+                    direction: Direction::Right,
+                },
+                TailPoints::empty(),
+                RoomId(0),
+                Speed(GameConfig::default().movement.min_speed),
+                HasPlayer(player),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(sample_player_count(&mut app), 0);
+
+        app.world_mut().entity_mut(snake).insert(SnakeHead {
+            position: Vec2::ZERO,
+            direction: Direction::Up,
+        });
+        app.update();
+
+        assert_eq!(sample_player_count(&mut app), 1);
+    }
+
+    fn sample_player_count(app: &mut App) -> usize {
+        app.world_mut()
+            .query_filtered::<Entity, With<SamplePlayer>>()
+            .iter(app.world())
+            .count()
+    }
+
+    #[test]
     fn remote_event_volume_uses_distance_attenuation() {
         let sound = SoundConfig::default();
         let listener = ListenerSnapshot {
@@ -1566,7 +1902,7 @@ mod tests {
 
         assert_eq!(
             sound_slice_frame_range(total_frames, TURN_SLICE),
-            705_600..727_650
+            384_552..389_844
         );
         assert_eq!(
             sound_slice_frame_range(total_frames, LINE_FAST_LOOP_SLICE),

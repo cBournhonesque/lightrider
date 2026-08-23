@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use bevy_turborand::RngComponent;
+use bevy_rand::prelude::WyRand;
+use rand_core::SeedableRng;
 
 use crate::config::GameConfig;
 use crate::network::protocol::prelude::RoomId;
@@ -38,7 +39,7 @@ pub fn spawn_room_map(commands: &mut Commands, config: &GameConfig, room: RoomId
             },
             room,
             MapMarker,
-            RngComponent::with_seed(room_seed(room)),
+            WyRand::from_seed(room_seed(room).to_ne_bytes()),
         ))
         .id()
 }

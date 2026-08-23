@@ -77,11 +77,11 @@ impl Plugin for ClientAdminPlugin {
 
 fn spawn_admin_ui(mut commands: Commands) {
     let title_font = TextFont {
-        font_size: 16.0,
+        font_size: FontSize::Px(16.0),
         ..default()
     };
     let body_font = TextFont {
-        font_size: 13.0,
+        font_size: FontSize::Px(13.0),
         ..default()
     };
 
@@ -222,7 +222,7 @@ fn admin_button(parent: &mut ChildSpawnerCommands, action: AdminButton, label: &
                 ui_style::title_color(),
                 ui_style::text_glow(),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
             ));

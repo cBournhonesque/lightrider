@@ -15,7 +15,7 @@ use lightyear_matchmaker_bevy_client::{ConnectionGrantReady, MatchmakerClientFai
 #[cfg(not(target_arch = "wasm32"))]
 use lightyear_matchmaker_bevy_client::{LightyearMatchmakerClientPlugin, MatchmakerClientConfig};
 use lightyear_matchmaker_core::{
-    ConnectionGrant, ConnectionGrantKind, RoomSelection as MatchmakerRoomSelection,
+    ConnectionGrant, ConnectionGrantKind, ProviderKind, RoomSelection as MatchmakerRoomSelection,
 };
 use shared::network::protocol::prelude::RoomJoinMode;
 use std::net::SocketAddr;
@@ -35,6 +35,7 @@ pub(crate) struct LightriderMatchmakerConfig {
     pub(crate) matchmaker_url: String,
     pub(crate) game_name: String,
     pub(crate) game_version: String,
+    pub(crate) provider: Option<ProviderKind>,
     pub(crate) room: RoomJoinMode,
 }
 
@@ -86,6 +87,7 @@ impl Plugin for LightriderMatchmakerPlugin {
 fn build_matchmaker_request(config: &LightriderMatchmakerConfig) -> RequestPlay {
     let mut request = RequestPlay::new(config.game_name.clone(), config.game_version.clone());
     request.room = matchmaker_room_selection(config.room);
+    request.provider = config.provider;
     request
 }
 
@@ -94,6 +96,7 @@ fn log_matchmaker_request(config: &LightriderMatchmakerConfig, request: &Request
         matchmaker_url = %config.matchmaker_url,
         game = %config.game_name,
         version = %config.game_version,
+        provider = ?request.provider,
         room = ?request.room,
         "requesting matchmaker assignment"
     );
@@ -242,6 +245,7 @@ fn connect_lightyear_client(
         PeerAddr(connect_info.server_addr),
         WebTransportClientIo {
             certificate_digest: connect_info.certificate_digest,
+            target: None,
         },
         netcode,
     ));

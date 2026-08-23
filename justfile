@@ -1,6 +1,6 @@
 set shell := ["bash", "-cu"]
 
-edgegap-default-tag := `git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S`
+edgegap-default-tag := `printf '%s-%s' "$(git rev-parse --short HEAD 2>/dev/null || echo local)" "$(date -u +%Y%m%d%H%M%S)"`
 
 export CARGO_BUILD_JOBS := "2"
 export CARGO_INCREMENTAL := "1"
@@ -27,3 +27,6 @@ netcode-secret protocol_id="":
     printf 'LIGHTRIDER_PROTOCOL_ID=%s\n' "$protocol_id"
     printf 'LIGHTRIDER_PRIVATE_KEY=%s\n' "$private_key"
     printf 'LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1\n'
+
+deploy-tag:
+    @printf '%s\n' "{{ edgegap-default-tag }}"

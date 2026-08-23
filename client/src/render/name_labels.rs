@@ -1,19 +1,18 @@
 use std::collections::HashSet;
 
-use bevy::ecs::query::Or;
 use bevy::prelude::*;
-use bevy::sprite::Text2d;
 use lightyear::frame_interpolation::FrameInterpolationSystems;
 use lightyear::prelude::{ConfirmedHistory, Interpolated, Predicted, Replicated};
 use shared::network::protocol::prelude::{HasPlayer, Player, PlayerStatus, SnakeHead, TailPoints};
 
+use crate::camera::CameraSystems;
 use crate::render::colors::snake_color_for_player;
 
-const LABEL_OFFSET: Vec2 = Vec2::new(14.0, 12.0);
-const LABEL_SHADOW_OFFSET: Vec2 = Vec2::new(1.0, -1.0);
-const LABEL_Z: f32 = 20.0;
-const LABEL_SHADOW_Z: f32 = LABEL_Z - 0.01;
-const LABEL_FONT_SIZE: f32 = 10.0;
+const LABEL_OFFSET_PX: Vec2 = Vec2::new(18.0, 10.0);
+const LABEL_SHADOW_OFFSET_PX: Vec2 = Vec2::new(1.0, -1.0);
+const LABEL_FONT_SIZE_PX: f32 = 13.0;
+const LABEL_Z_INDEX: i32 = 42;
+const LABEL_SHADOW_Z_INDEX: i32 = LABEL_Z_INDEX - 1;
 
 pub(crate) struct NameLabelRenderPlugin;
 
@@ -34,11 +33,22 @@ impl NameLabelLayer {
     const ALL: [Self; 2] = [Self::Shadow, Self::Text];
 }
 
+#[derive(Clone)]
+struct DesiredNameLabel {
+    player: Entity,
+    snake: Entity,
+    head_viewport_position: Option<Vec2>,
+    name: String,
+    color: Color,
+}
+
 impl Plugin for NameLabelRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            update_name_labels.after(FrameInterpolationSystems::Interpolate),
+            update_name_labels
+                .after(FrameInterpolationSystems::Interpolate)
+                .after(CameraSystems::Follow),
         );
     }
 }
@@ -46,6 +56,7 @@ impl Plugin for NameLabelRenderPlugin {
 fn update_name_labels(
     mut commands: Commands,
     players: Query<(Entity, &Player, Option<&PlayerStatus>)>,
+    cameras: Query<(&Camera, &Transform), With<Camera2d>>,
     tails: Query<
         (
             Entity,
@@ -56,75 +67,80 @@ fn update_name_labels(
             Has<Interpolated>,
             Has<Replicated>,
         ),
-        (
-            With<TailPoints>,
-            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
-        ),
+        With<TailPoints>,
     >,
     mut labels: Query<(
         Entity,
         &mut NameLabel,
-        &mut Text2d,
+        &mut Text,
         &mut TextColor,
-        &mut Transform,
+        &mut Node,
         &mut Visibility,
     )>,
 ) {
+    let camera = cameras.single().ok();
     let wanted = players
         .iter()
         .filter(|(_, _, status)| status.is_none_or(|status| *status == PlayerStatus::Alive))
         .filter_map(|(player_entity, player, _)| {
             let (snake, head) = visible_snake_for_player(player_entity, player, &tails)?;
-            Some((
-                player_entity,
+            Some(DesiredNameLabel {
+                player: player_entity,
                 snake,
-                *head,
-                player.name.clone(),
-                snake_color_for_player(player).label(),
-            ))
+                head_viewport_position: head_viewport_position(head, camera),
+                name: label_name(player),
+                color: snake_color_for_player(player).label(),
+            })
         })
         .collect::<Vec<_>>();
 
     let mut existing = HashSet::new();
-    for (label_entity, mut label, mut text, mut text_color, mut transform, mut visibility) in
-        &mut labels
+    for (label_entity, mut label, mut text, mut text_color, mut node, mut visibility) in &mut labels
     {
-        if let Some((_, snake, head, name, color)) =
-            wanted.iter().find(|candidate| candidate.0 == label.player)
+        if let Some(desired) = wanted
+            .iter()
+            .find(|candidate| candidate.player == label.player)
         {
-            label.snake = *snake;
-            existing.insert((label.player, *snake, label.layer));
-            if text.0 != *name {
-                text.0 = name.clone();
+            label.snake = desired.snake;
+            existing.insert((label.player, desired.snake, label.layer));
+            if text.0 != desired.name {
+                text.0 = desired.name.clone();
             }
-            *text_color = TextColor(label_color(label.layer, *color));
-            transform.translation = label_world_translation(head, label.layer);
-            *visibility = Visibility::Visible;
+            *text_color = TextColor(label_color(label.layer, desired.color));
+            if let Some(head_viewport_position) = desired.head_viewport_position {
+                *node = label_node(head_viewport_position, label.layer);
+                *visibility = Visibility::Visible;
+            } else {
+                *visibility = Visibility::Hidden;
+            }
         } else {
             commands.entity(label_entity).despawn();
         }
     }
 
-    for (player_entity, snake, head, name, color) in wanted {
+    for desired in wanted {
         for layer in NameLabelLayer::ALL {
-            if existing.contains(&(player_entity, snake, layer)) {
+            if existing.contains(&(desired.player, desired.snake, layer)) {
                 continue;
             }
+            let visibility = if desired.head_viewport_position.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
             commands.spawn((
                 NameLabel {
-                    player: player_entity,
-                    snake,
+                    player: desired.player,
+                    snake: desired.snake,
                     layer,
                 },
-                Text2d::new(name.clone()),
-                TextFont::from_font_size(LABEL_FONT_SIZE),
-                TextColor(label_color(layer, color)),
-                TextLayout::new_with_justify(Justify::Left),
-                Transform::from_translation(label_world_translation(&head, layer)),
-                GlobalTransform::default(),
-                Visibility::Visible,
-                InheritedVisibility::default(),
-                ViewVisibility::default(),
+                label_node(desired.head_viewport_position.unwrap_or(Vec2::ZERO), layer),
+                Text::new(desired.name.clone()),
+                TextFont::from_font_size(LABEL_FONT_SIZE_PX),
+                TextColor(label_color(layer, desired.color)),
+                TextLayout::justify(Justify::Left),
+                ZIndex(label_z_index(layer)),
+                visibility,
             ));
         }
     }
@@ -143,10 +159,7 @@ fn visible_snake_for_player<'a>(
             Has<Interpolated>,
             Has<Replicated>,
         ),
-        (
-            With<TailPoints>,
-            Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
-        ),
+        With<TailPoints>,
     >,
 ) -> Option<(Entity, &'a SnakeHead)> {
     tails
@@ -189,16 +202,53 @@ fn label_color(layer: NameLabelLayer, color: Color) -> Color {
     }
 }
 
-fn label_world_translation(head: &SnakeHead, layer: NameLabelLayer) -> Vec3 {
+fn label_name(player: &Player) -> String {
+    let trimmed = player.name.trim();
+    if trimmed.is_empty() {
+        format!("Player {}", player.id.to_bits())
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn head_viewport_position(head: &SnakeHead, camera: Option<(&Camera, &Transform)>) -> Option<Vec2> {
+    match camera {
+        Some((camera, camera_transform)) => {
+            let camera_transform = GlobalTransform::from(*camera_transform);
+            camera
+                .world_to_viewport(&camera_transform, head.position.extend(0.0))
+                .ok()
+        }
+        None => Some(head.position),
+    }
+}
+
+fn label_node(head_viewport_position: Vec2, layer: NameLabelLayer) -> Node {
+    let position = label_screen_position(head_viewport_position, layer);
+    Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(position.x),
+        top: Val::Px(position.y),
+        ..default()
+    }
+}
+
+fn label_screen_position(head_viewport_position: Vec2, layer: NameLabelLayer) -> Vec2 {
     let offset = match layer {
-        NameLabelLayer::Shadow => LABEL_OFFSET + LABEL_SHADOW_OFFSET,
-        NameLabelLayer::Text => LABEL_OFFSET,
+        NameLabelLayer::Shadow => LABEL_OFFSET_PX + LABEL_SHADOW_OFFSET_PX,
+        NameLabelLayer::Text => LABEL_OFFSET_PX,
     };
-    let z = match layer {
-        NameLabelLayer::Shadow => LABEL_SHADOW_Z,
-        NameLabelLayer::Text => LABEL_Z,
-    };
-    Vec3::new(head.position.x + offset.x, head.position.y + offset.y, z)
+    Vec2::new(
+        head_viewport_position.x + offset.x,
+        head_viewport_position.y - offset.y,
+    )
+}
+
+fn label_z_index(layer: NameLabelLayer) -> i32 {
+    match layer {
+        NameLabelLayer::Shadow => LABEL_SHADOW_Z_INDEX,
+        NameLabelLayer::Text => LABEL_Z_INDEX,
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +278,17 @@ mod tests {
         history.insert(Tick(10), HistoryState::Updated(HasPlayer(player)));
 
         assert_eq!(snake_owner(None, Some(&history)), Some(player));
+    }
+
+    #[test]
+    fn empty_player_name_uses_id_fallback() {
+        let player = Player {
+            id: lightyear::prelude::PeerId::Netcode(7),
+            name: "  ".to_string(),
+            snake: None,
+        };
+
+        assert_eq!(label_name(&player), "Player 7");
     }
 
     #[test]
@@ -262,23 +323,18 @@ mod tests {
 
         let mut labels = app
             .world_mut()
-            .query::<(&NameLabel, &Text2d, &Transform, &Visibility)>();
+            .query::<(&NameLabel, &Text, &Node, &Visibility)>();
         let labels = labels.iter(app.world()).collect::<Vec<_>>();
 
         assert_eq!(labels.len(), NameLabelLayer::ALL.len());
-        for (label, text, transform, visibility) in labels {
+        for (label, text, node, visibility) in labels {
             assert_eq!(label.player, player);
             assert_eq!(label.snake, snake);
             assert_eq!(text.0, "Alice");
+            let position = label_screen_position(Vec2::new(10.0, 20.0), label.layer);
             assert_eq!(
-                transform.translation,
-                label_world_translation(
-                    &SnakeHead {
-                        position: Vec2::new(10.0, 20.0),
-                        ..default()
-                    },
-                    label.layer,
-                )
+                (node.left, node.top),
+                (Val::Px(position.x), Val::Px(position.y))
             );
             assert_eq!(*visibility, Visibility::Visible);
         }
@@ -313,5 +369,43 @@ mod tests {
 
         let mut labels = app.world_mut().query::<&NameLabel>();
         assert_eq!(labels.iter(app.world()).count(), NameLabelLayer::ALL.len());
+    }
+
+    #[test]
+    fn update_name_labels_uses_has_player_when_player_snake_is_missing() {
+        let mut app = App::new();
+        app.add_systems(Update, update_name_labels);
+
+        let snake = app
+            .world_mut()
+            .spawn((
+                SnakeHead {
+                    position: Vec2::new(10.0, 20.0),
+                    ..default()
+                },
+                TailPoints::empty(),
+            ))
+            .id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Player {
+                    id: lightyear::prelude::PeerId::Netcode(1),
+                    name: "Alice".to_string(),
+                    snake: None,
+                },
+                PlayerStatus::Alive,
+            ))
+            .id();
+        app.world_mut().entity_mut(snake).insert(HasPlayer(player));
+
+        app.update();
+
+        let mut labels = app.world_mut().query::<(&NameLabel, &Text)>();
+        let labels = labels.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(labels.len(), NameLabelLayer::ALL.len());
+        assert!(labels
+            .iter()
+            .all(|(label, text)| label.player == player && text.0 == "Alice"));
     }
 }

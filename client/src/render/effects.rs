@@ -60,8 +60,55 @@ impl Plugin for EffectsRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            (sync_boost_marker, sync_speed_particles).after(FrameInterpolationSystems::Interpolate),
+            (draw_boost_marker, sync_boost_marker, sync_speed_particles)
+                .after(FrameInterpolationSystems::Interpolate),
         );
+    }
+}
+
+fn draw_boost_marker(
+    mut gizmos: Gizmos,
+    config: Res<GameConfig>,
+    players: Query<&Player>,
+    snakes: Query<
+        (
+            Entity,
+            &SnakeHead,
+            &TailPoints,
+            Option<&TailLength>,
+            &RoomId,
+            Option<&Speed>,
+            Option<&HasPlayer>,
+            Has<Predicted>,
+            Has<Controlled>,
+        ),
+        Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
+    >,
+) {
+    if config.render.use_assets {
+        return;
+    }
+
+    let Some(contact) = nearest_local_boost_contact(&config, &snakes) else {
+        return;
+    };
+
+    let marker_size = config.render.head_size.max(3.0) * 1.2;
+    let other_color = snake_entity_color(contact.other, &snakes, &players);
+    if contact.lightning_active {
+        draw_gizmo_segment(
+            &mut gizmos,
+            contact.head,
+            contact.core,
+            config.render.tail_width.max(1.0) * 2.0,
+            other_color.lightning(),
+        );
+    }
+    if contact.spark_active {
+        let mut glow = other_color.spark();
+        glow.set_alpha(0.28);
+        gizmos.circle_2d(contact.core, marker_size * 0.55, glow);
+        gizmos.circle_2d(contact.core, marker_size * 0.24, other_color.spark());
     }
 }
 
@@ -80,6 +127,7 @@ fn sync_boost_marker(
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
+            Has<Predicted>,
             Has<Controlled>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -99,7 +147,7 @@ fn sync_boost_marker(
         return;
     }
 
-    let contact = nearest_controlled_boost_contact(&config, &snakes);
+    let contact = nearest_local_boost_contact(&config, &snakes);
     let spark_frame = spark_frame(time.elapsed_secs());
     let mut seen = HashSet::new();
 
@@ -237,25 +285,34 @@ fn desired_speed_particles(
         }
         let speed_t = ((speed - threshold) / (max_speed - threshold)).clamp(0.0, 1.0);
         let direction = head.direction.delta();
+        let wake_direction = -direction;
         let normal = direction.perp();
         let particle_count =
             ((SPEED_PARTICLE_COUNT as f32) * (0.35 + speed_t * 0.65)).ceil() as usize;
         for index in 0..particle_count.min(SPEED_PARTICLE_COUNT) {
             let seed = index as f32 * 0.618_034 + snake.to_bits() as f32 * 0.000_013;
-            let emission_rate = 7.0 + speed_t * 9.0;
+            let emission_rate = 8.0 + speed_t * 12.0;
             let age = (elapsed_seconds * emission_rate + seed).fract();
-            let spread = (seed * std::f32::consts::TAU + elapsed_seconds * 0.7).sin();
-            let behind = head_size * 0.55 + age * (head_size * 3.4 + speed_t * 22.0);
-            let side = spread * (head_size * 0.28 + age * head_size * 0.75);
-            let position = head.position - direction * behind + normal * side;
+            let spread = (seed * std::f32::consts::TAU + elapsed_seconds * 0.45).sin();
+            let travel = head_size * (0.45 + speed_t * 0.15)
+                + age.powf(0.85) * (head_size * 4.2 + speed_t * 34.0);
+            let side = spread * (head_size * (0.18 + age * (0.55 + speed_t * 0.35)));
+            let position = head.position + wake_direction * travel + normal * side;
             let fade = (1.0 - age).powf(1.35);
-            let size = (head_size * (0.62 + speed_t * 0.42) * (0.62 + 0.38 * fade)).max(4.5);
+            let length = (head_size * (0.85 + speed_t * 0.9) * (0.7 + 0.3 * fade)).max(5.5);
+            let width = (head_size * (0.24 + speed_t * 0.08) * (0.75 + 0.25 * fade)).max(2.5);
             let color = Color::srgba(0.74, 0.96, 1.0, fade * (0.22 + speed_t * 0.45));
             desired.push(DesiredParticle {
                 key: SpeedParticleVisual { snake, index },
                 transform: Transform::from_translation(position.extend(SPEED_PARTICLE_Z))
-                    .with_rotation(direction_rotation(direction)),
-                sprite: sheet.sprite(PowerlineFrame::ParticleDot, Vec2::splat(size), color),
+                    .with_rotation(wake_particle_rotation(
+                        wake_direction,
+                        seed,
+                        age,
+                        elapsed_seconds,
+                        speed_t,
+                    )),
+                sprite: sheet.sprite(PowerlineFrame::ParticleDot, Vec2::new(width, length), color),
             });
         }
     }
@@ -263,11 +320,41 @@ fn desired_speed_particles(
     desired
 }
 
-fn direction_rotation(direction: Vec2) -> Quat {
-    Quat::from_rotation_z(direction.y.atan2(direction.x))
+fn wake_particle_rotation(
+    wake_direction: Vec2,
+    seed: f32,
+    age: f32,
+    elapsed_seconds: f32,
+    speed_t: f32,
+) -> Quat {
+    Quat::from_rotation_z(wake_particle_angle(
+        wake_direction,
+        seed,
+        age,
+        elapsed_seconds,
+        speed_t,
+    ))
 }
 
-fn nearest_controlled_boost_contact(
+fn wake_particle_angle(
+    wake_direction: Vec2,
+    seed: f32,
+    age: f32,
+    elapsed_seconds: f32,
+    speed_t: f32,
+) -> f32 {
+    let seeded_tilt = (seed * 12.989_8).sin() * 0.55;
+    let tumble = (age - 0.5) * speed_t * 0.35;
+    let wobble = (elapsed_seconds * (1.4 + speed_t * 1.1) + seed * 4.7).sin() * 0.16;
+
+    local_y_rotation_angle(wake_direction) + seeded_tilt + tumble + wobble
+}
+
+fn local_y_rotation_angle(direction: Vec2) -> f32 {
+    (-direction.x).atan2(direction.y)
+}
+
+fn nearest_local_boost_contact(
     config: &GameConfig,
     snakes: &Query<
         (
@@ -278,6 +365,7 @@ fn nearest_controlled_boost_contact(
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
+            Has<Predicted>,
             Has<Controlled>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -289,8 +377,8 @@ fn nearest_controlled_boost_contact(
     }
 
     let mut nearest = None;
-    for (entity, head, _, _, room, speed, _, controlled) in snakes {
-        if !controlled {
+    for (entity, head, _, _, room, speed, _, predicted, controlled) in snakes {
+        if !is_local_boost_snake(predicted, controlled) {
             continue;
         }
         let speed = speed
@@ -358,6 +446,7 @@ fn nearest_tail_ray_hit(
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
+            Has<Predicted>,
             Has<Controlled>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -365,11 +454,11 @@ fn nearest_tail_ray_hit(
     spark_active: bool,
 ) -> Option<BoostContact> {
     let mut nearest = None;
-    for (other_entity, other_head, other_tail, other_length, other_room, _, _, _) in snakes {
+    for (other_entity, other_head, other_tail, other_length, other_room, _, _, _, _) in snakes {
         if other_entity == excluded || other_room != room {
             continue;
         }
-        let other_tail = visible_tail(other_head, other_tail, other_length);
+        let other_tail = visible_tail(other_head, other_tail, other_length).axis_aligned();
         for (segment_start, segment_end) in other_tail.pairs_front_to_back() {
             let segment = segment_end.0 - segment_start.0;
             let segment_length = segment.length();
@@ -391,19 +480,49 @@ fn nearest_tail_ray_hit(
             };
             if nearest.map_or(true, |nearest: BoostContact| distance < nearest.distance) {
                 let hit = origin + direction * distance;
-                let lightning_active = distance >= lightning_min_distance;
+                let (lightning_active, spark_active) =
+                    boost_visual_activity(distance, lightning_min_distance, spark_active);
                 nearest = Some(BoostContact {
                     head: origin,
                     core: hit,
                     distance,
                     other: other_entity,
                     lightning_active,
-                    spark_active: spark_active || !lightning_active,
+                    spark_active,
                 });
             }
         }
     }
     nearest
+}
+
+fn is_local_boost_snake(predicted: bool, controlled: bool) -> bool {
+    predicted || controlled
+}
+
+fn boost_visual_activity(
+    distance: f32,
+    lightning_min_distance: f32,
+    high_speed_spark_active: bool,
+) -> (bool, bool) {
+    let lightning_active = distance >= lightning_min_distance;
+    let spark_active = high_speed_spark_active || !lightning_active;
+    (lightning_active, spark_active)
+}
+
+fn draw_gizmo_segment(gizmos: &mut Gizmos, start: Vec2, end: Vec2, width: f32, color: Color) {
+    let delta = end - start;
+    let normal = if delta.length_squared() > f32::EPSILON {
+        Vec2::new(-delta.y, delta.x).normalize()
+    } else {
+        Vec2::ZERO
+    };
+    let line_count = width.round().max(1.0) as i32;
+    let center = (line_count - 1) as f32 * 0.5;
+    for line in 0..line_count {
+        let offset = normal * (line as f32 - center);
+        gizmos.line_2d(start + offset, end + offset, color);
+    }
 }
 
 fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
@@ -430,6 +549,7 @@ fn snake_entity_color(
             &RoomId,
             Option<&Speed>,
             Option<&HasPlayer>,
+            Has<Predicted>,
             Has<Controlled>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -438,7 +558,7 @@ fn snake_entity_color(
 ) -> SnakePaletteColor {
     snakes
         .iter()
-        .find_map(|(entity, _, _, _, _, _, has_player, _)| {
+        .find_map(|(entity, _, _, _, _, _, has_player, _, _)| {
             (entity == snake_entity).then(|| {
                 has_player
                     .and_then(|has_player| players.get(has_player.0).ok())
@@ -484,5 +604,57 @@ mod tests {
 
         assert_eq!(top_speed_marker_threshold(&config), expected);
         assert!(top_speed_marker_threshold(&config) < config.movement.max_speed);
+    }
+
+    #[test]
+    fn local_y_rotation_angle_aligns_sprite_height_to_direction() {
+        assert_angle_close(local_y_rotation_angle(Vec2::Y), 0.0);
+        assert_angle_close(
+            local_y_rotation_angle(Vec2::NEG_X),
+            std::f32::consts::FRAC_PI_2,
+        );
+        assert_angle_close(
+            local_y_rotation_angle(Vec2::X),
+            -std::f32::consts::FRAC_PI_2,
+        );
+    }
+
+    #[test]
+    fn wake_particle_angle_varies_by_particle_seed() {
+        let first = wake_particle_angle(Vec2::NEG_Y, 0.1, 0.35, 2.0, 0.8);
+        let second = wake_particle_angle(Vec2::NEG_Y, 0.3, 0.35, 2.0, 0.8);
+
+        assert!((first - second).abs() > 0.05);
+    }
+
+    #[test]
+    fn boost_visual_activity_always_has_indicator_inside_boost_distance() {
+        let config = GameConfig::default();
+        let lightning_min_distance = config.render.head_size.max(4.0) * 1.6;
+
+        for distance in [
+            0.0,
+            lightning_min_distance * 0.5,
+            lightning_min_distance,
+            config.movement.boost_distance,
+        ] {
+            let (lightning_active, spark_active) =
+                boost_visual_activity(distance, lightning_min_distance, false);
+            assert!(lightning_active || spark_active);
+        }
+    }
+
+    #[test]
+    fn boost_visual_tracks_predicted_or_controlled_snakes() {
+        assert!(is_local_boost_snake(true, false));
+        assert!(is_local_boost_snake(false, true));
+        assert!(!is_local_boost_snake(false, false));
+    }
+
+    fn assert_angle_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.0001,
+            "expected {actual} to be close to {expected}"
+        );
     }
 }

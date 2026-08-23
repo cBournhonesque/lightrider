@@ -1,7 +1,7 @@
 use bevy::app::{App, Plugin};
 
-pub mod bot;
 pub mod collision;
+pub mod colors;
 pub mod config;
 pub mod debug;
 

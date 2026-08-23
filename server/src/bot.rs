@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use crate::config::ArenaConfig;
-use crate::network::protocol::prelude::{Direction, TailPolyline};
-use crate::utils::geometry::ray_segment_intersection;
+use shared::config::ArenaConfig;
+use shared::network::protocol::prelude::{Direction, TailPolyline};
+use shared::utils::geometry::ray_segment_intersection;
 
 const LOOKAHEAD_DISTANCE: f32 = 420.0;
 const DANGER_DISTANCE: f32 = 140.0;
@@ -31,10 +31,6 @@ pub struct BotController {
 }
 
 impl BotController {
-    pub fn new(decision_interval_ticks: u32, seed: u64) -> Self {
-        Self::new_with_mistakes(decision_interval_ticks, seed, 0)
-    }
-
     pub fn new_with_mistakes(
         decision_interval_ticks: u32,
         seed: u64,
@@ -50,19 +46,6 @@ impl BotController {
             recent_turn_count: 0,
             seed: seed | 1,
         }
-    }
-
-    pub fn choose_direction(&mut self, tail: &TailPolyline, arena: &ArenaConfig) -> Direction {
-        self.choose_direction_avoiding(tail, arena, &[])
-    }
-
-    pub fn choose_direction_avoiding(
-        &mut self,
-        tail: &TailPolyline,
-        arena: &ArenaConfig,
-        obstacle_tails: &[&TailPolyline],
-    ) -> Direction {
-        self.choose_direction_avoiding_limited(tail, arena, obstacle_tails, u8::MAX, 1)
     }
 
     pub fn choose_direction_avoiding_limited(
@@ -84,50 +67,6 @@ impl BotController {
         }
         if self.try_consume_turn(max_turns, window_ticks.max(1)) {
             direction
-        } else {
-            current
-        }
-    }
-
-    pub fn choose_limited_turn(
-        &mut self,
-        current: Direction,
-        requested: Direction,
-        max_turns: u8,
-        window_ticks: u32,
-    ) -> Direction {
-        self.tick = self.tick.wrapping_add(1);
-        let (left, right) = legal_turns(current);
-        if requested != left && requested != right {
-            return current;
-        }
-        if self.try_consume_turn(max_turns, window_ticks.max(1)) {
-            requested
-        } else {
-            current
-        }
-    }
-
-    pub fn choose_limited_tail_turn(
-        &mut self,
-        tail: &TailPolyline,
-        arena: &ArenaConfig,
-        obstacle_tails: &[&TailPolyline],
-        requested: Direction,
-        max_turns: u8,
-        window_ticks: u32,
-    ) -> Direction {
-        self.tick = self.tick.wrapping_add(1);
-        let current = tail.front().1;
-        let (left, right) = legal_turns(current);
-        if requested != left && requested != right {
-            return current;
-        }
-        if !turn_allowed_for_tail(tail, arena, obstacle_tails, current) {
-            return current;
-        }
-        if self.try_consume_turn(max_turns, window_ticks.max(1)) {
-            requested
         } else {
             current
         }
@@ -278,10 +217,6 @@ fn minimum_turn_spacing_ticks(window_ticks: u32, max_turns: usize) -> u32 {
     window_ticks
         .div_ceil(u32::try_from(max_turns).unwrap_or(1))
         .max(1)
-}
-
-pub fn direction_to_input(direction: Direction) -> Vec2 {
-    direction.delta()
 }
 
 pub fn legal_turns(direction: Direction) -> (Direction, Direction) {
@@ -456,6 +391,18 @@ mod tests {
         ]))
     }
 
+    fn controller(seed: u64) -> BotController {
+        BotController::new_with_mistakes(1, seed, 0)
+    }
+
+    fn choose_unlimited(
+        controller: &mut BotController,
+        tail: &TailPolyline,
+        arena: &ArenaConfig,
+    ) -> Direction {
+        controller.choose_direction_avoiding_limited(tail, arena, &[], u8::MAX, 1)
+    }
+
     #[test]
     fn legal_turns_never_reverse() {
         assert_eq!(
@@ -508,14 +455,14 @@ mod tests {
             height: 500.0,
         };
         let tail = tail(Vec2::ZERO, Direction::Up);
-        let mut first = BotController::new(1, 42);
-        let mut second = BotController::new(1, 42);
+        let mut first = controller(42);
+        let mut second = controller(42);
 
         let first_choices = (0..10)
-            .map(|_| first.choose_direction(&tail, &arena))
+            .map(|_| choose_unlimited(&mut first, &tail, &arena))
             .collect::<Vec<_>>();
         let second_choices = (0..10)
-            .map(|_| second.choose_direction(&tail, &arena))
+            .map(|_| choose_unlimited(&mut second, &tail, &arena))
             .collect::<Vec<_>>();
 
         assert_eq!(first_choices, second_choices);
@@ -532,9 +479,9 @@ mod tests {
             (Vec2::ZERO, Direction::Right),
             (Vec2::new(0.0, -100.0), Direction::Up),
         ]));
-        let mut bot = BotController::new(1, 1);
+        let mut bot = controller(1);
 
-        assert_eq!(bot.choose_direction(&tail, &arena), Direction::Right);
+        assert_eq!(choose_unlimited(&mut bot, &tail, &arena), Direction::Right);
     }
 
     #[test]
@@ -550,9 +497,9 @@ mod tests {
             (Vec2::new(50.0, 20.0), Direction::Down),
             (Vec2::new(-50.0, 20.0), Direction::Right),
         ]));
-        let mut bot = BotController::new(1, 1);
+        let mut bot = controller(1);
 
-        assert_ne!(bot.choose_direction(&tail, &arena), Direction::Up);
+        assert_ne!(choose_unlimited(&mut bot, &tail, &arena), Direction::Up);
     }
 
     #[test]
@@ -566,10 +513,10 @@ mod tests {
             (Vec2::new(50.0, 20.0), Direction::Right),
             (Vec2::new(-50.0, 20.0), Direction::Right),
         ]));
-        let mut bot = BotController::new(1, 1);
+        let mut bot = controller(1);
 
         assert_ne!(
-            bot.choose_direction_avoiding(&own_tail, &arena, &[&obstacle_tail]),
+            bot.choose_direction_avoiding_limited(&own_tail, &arena, &[&obstacle_tail], u8::MAX, 1),
             Direction::Up
         );
     }
@@ -586,7 +533,7 @@ mod tests {
         ]));
         let mut bot = BotController::new_with_mistakes(1, 1, 100);
 
-        assert_ne!(bot.choose_direction(&tail, &arena), Direction::Up);
+        assert_ne!(choose_unlimited(&mut bot, &tail, &arena), Direction::Up);
     }
 
     #[test]
@@ -596,7 +543,7 @@ mod tests {
             height: 100.0,
         };
         let tail = tail(Vec2::new(98.0, 10.0), Direction::Right);
-        let mut bot = BotController::new(1, 1);
+        let mut bot = controller(1);
 
         assert_ne!(
             bot.choose_direction_avoiding_limited(&tail, &arena, &[], 2, 4),
@@ -630,7 +577,7 @@ mod tests {
             (Vec2::new(72.0, 0.0), Direction::Right),
             (Vec2::new(62.0, 0.0), Direction::Right),
         ]));
-        let mut bot = BotController::new(1, 1);
+        let mut bot = controller(1);
 
         assert_eq!(
             bot.choose_direction_avoiding_limited(&tail, &arena, &[], 10, 50),
@@ -648,7 +595,7 @@ mod tests {
             (Vec2::new(98.0, 0.0), Direction::Right),
             (Vec2::new(88.0, 0.0), Direction::Right),
         ]));
-        let mut bot = BotController::new(1, 1);
+        let mut bot = controller(1);
 
         assert_ne!(
             bot.choose_direction_avoiding_limited(&tail, &arena, &[], 10, 50),
@@ -657,35 +604,18 @@ mod tests {
     }
 
     #[test]
-    fn bot_turn_budget_limits_requested_turns() {
-        let mut bot = BotController::new(1, 1);
-
-        assert_eq!(
-            bot.choose_limited_turn(Direction::Up, Direction::Left, 2, 4),
-            Direction::Left
-        );
-        assert_eq!(
-            bot.choose_limited_turn(Direction::Left, Direction::Up, 2, 4),
-            Direction::Left
-        );
-        assert_eq!(
-            bot.choose_limited_turn(Direction::Left, Direction::Up, 2, 4),
-            Direction::Up
-        );
-    }
-
-    #[test]
     fn bot_turn_budget_limits_short_bursts() {
-        let mut bot = BotController::new(1, 1);
-        let mut current = Direction::Up;
+        let arena = ArenaConfig {
+            width: 200.0,
+            height: 100.0,
+        };
+        let tail = tail(Vec2::new(98.0, 10.0), Direction::Right);
+        let mut bot = controller(1);
         let mut accepted_ticks = Vec::new();
 
         for tick in 1..=20 {
-            let (left, right) = legal_turns(current);
-            let requested = if tick % 2 == 0 { left } else { right };
-            let direction = bot.choose_limited_turn(current, requested, 30, 50);
-            if direction != current {
-                current = direction;
+            let direction = bot.choose_direction_avoiding_limited(&tail, &arena, &[], 30, 50);
+            if direction != Direction::Right {
                 accepted_ticks.push(tick);
             }
         }
@@ -698,13 +628,5 @@ mod tests {
                 .count();
             assert!(turns_in_200ms <= usize::from(MAX_BURST_TURNS));
         }
-    }
-
-    #[test]
-    fn direction_to_input_matches_protocol_direction() {
-        assert_eq!(direction_to_input(Direction::Up), Vec2::Y);
-        assert_eq!(direction_to_input(Direction::Down), -Vec2::Y);
-        assert_eq!(direction_to_input(Direction::Right), Vec2::X);
-        assert_eq!(direction_to_input(Direction::Left), -Vec2::X);
     }
 }

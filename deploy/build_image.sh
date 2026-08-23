@@ -42,7 +42,7 @@ fi
 : "${EDGEGAP_REGISTRY_URL:=registry.edgegap.com}"
 : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT is required}"
 
-tag="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
+tag="$(printf '%s-%s' "$(git rev-parse --short HEAD 2>/dev/null || echo local)" "$(date -u +%Y%m%d%H%M%S)")"
 build_memory=""
 build_memory_swap=""
 build_cpus=""
@@ -119,6 +119,7 @@ case "$target" in
       --build-arg "WEB_RELEASE_OPT_LEVEL=${WEB_RELEASE_OPT_LEVEL:-1}"
       --build-arg "WEB_RELEASE_LTO=${WEB_RELEASE_LTO:-false}"
       --build-arg "WEB_RELEASE_CODEGEN_UNITS=${WEB_RELEASE_CODEGEN_UNITS:-16}"
+      --build-arg "WASM_BINDGEN_CLI_VERSION=${WASM_BINDGEN_CLI_VERSION:-0.2.126}"
     )
     ;;
   *)

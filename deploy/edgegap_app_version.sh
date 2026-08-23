@@ -37,10 +37,37 @@ EOF
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+caller_env_vars=(
+  EDGEGAP_NATS_INSECURE
+  LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE
+  LIGHTYEAR_MATCHMAKER_NATS_URL
+  LIGHTYEAR_MATCHMAKER_REQUIRE_SECURE_NATS
+  NATS_HOST
+  NATS_INSECURE
+  NATS_PASSWORD
+  NATS_USER
+)
+for var in "${caller_env_vars[@]}"; do
+  if [[ "${!var+x}" == "x" ]]; then
+    printf -v "caller_has_$var" '%s' "1"
+    printf -v "caller_value_$var" '%s' "${!var}"
+  else
+    printf -v "caller_has_$var" '%s' "0"
+  fi
+done
+
 for env_file in secrets/edgegap.env secrets/prod-netcode.env secrets/nats.env; do
   if [[ -f "$env_file" ]]; then
     # shellcheck disable=SC1090
     source "$env_file"
+  fi
+done
+
+for var in "${caller_env_vars[@]}"; do
+  caller_has_var="caller_has_$var"
+  caller_value_var="caller_value_$var"
+  if [[ "${!caller_has_var}" == "1" ]]; then
+    printf -v "$var" '%s' "${!caller_value_var}"
   fi
 done
 
@@ -70,6 +97,29 @@ require_var() {
   fi
 }
 
+option_value() {
+  local flag="$1"
+  local key="$2"
+  local value="${3:-}"
+  if [[ -z "$value" ]]; then
+    echo "edgegap-app-version: missing value for $flag" >&2
+    exit 2
+  fi
+  case "$value" in
+    "$key="*) value="${value#"$key="}" ;;
+    *=*)
+      echo "edgegap-app-version: $flag expects only the value, not '$value'" >&2
+      echo "edgegap-app-version: use '$flag ${value#*=}' or the just recipe form '$value'" >&2
+      exit 2
+      ;;
+  esac
+  if [[ -z "$value" ]]; then
+    echo "edgegap-app-version: empty value for $flag" >&2
+    exit 2
+  fi
+  printf '%s' "$value"
+}
+
 command="${1:-}"
 if [[ -z "$command" || "$command" == "-h" || "$command" == "--help" ]]; then
   usage
@@ -85,16 +135,28 @@ create_app=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app)
-      app="${2:?missing value for --app}"
+      app="$(option_value --app app "${2:-}")"
       shift 2
+      ;;
+    --app=*)
+      app="$(option_value --app app "${1#--app=}")"
+      shift
       ;;
     --version)
-      version="${2:?missing value for --version}"
+      version="$(option_value --version version "${2:-}")"
       shift 2
       ;;
+    --version=*)
+      version="$(option_value --version version "${1#--version=}")"
+      shift
+      ;;
     --tag)
-      tag="${2:?missing value for --tag}"
+      tag="$(option_value --tag tag "${2:-}")"
       shift 2
+      ;;
+    --tag=*)
+      tag="$(option_value --tag tag "${1#--tag=}")"
+      shift
       ;;
     --create-app)
       create_app=1
@@ -256,14 +318,6 @@ build_desired_payload() {
         empty_ttl: ($session_empty_ttl | tonumber),
         session_max_duration: ($session_max_duration | tonumber)
       },
-      ports: [
-        {
-          name: "game",
-          port: ($game_port | tonumber),
-          protocol: $protocol,
-          to_check: false
-        }
-      ],
       envs: [
         env_item("PORT"; $game_port; false),
         env_item("LIGHTRIDER_CONFIG"; $config_path; false),
@@ -287,7 +341,15 @@ build_desired_payload() {
     }
     + (if $payload_mode == "patch" then {} else {
       req_cpu: ($req_cpu | tonumber),
-      req_memory: ($req_memory | tonumber)
+      req_memory: ($req_memory | tonumber),
+      ports: [
+        {
+          name: "game",
+          port: ($game_port | tonumber),
+          protocol: $protocol,
+          to_check: false
+        }
+      ]
     } end)
     + (if $private_username != "" then {private_username: $private_username} else {} end)
     + (if $private_token != "" then {private_token: $private_token} else {} end)

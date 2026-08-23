@@ -6,6 +6,7 @@ use lightyear::prelude::*;
 
 use crate::config::GameConfig;
 
+pub use bevy_replicon::prelude::DiffIndex;
 pub use inputs::{spawn_snake_input_actions, MoveSnake, ServerAction, SnakeInput};
 
 pub mod channels;
@@ -14,8 +15,7 @@ pub mod inputs;
 pub mod messages;
 
 pub mod prelude {
-    pub use bevy_replicon::prelude::DiffIndex;
-
+    pub use super::DiffIndex;
     // components
     pub use super::components::common::*;
     pub use super::components::food::*;
@@ -104,20 +104,22 @@ fn register_components(app: &mut App) {
     app.component::<components::snake::SnakeHead>()
         .replicate()
         .predict()
-        .with_rollback_condition(components::snake::snake_head_should_rollback)
-        .register_interpolation_fn(components::snake::interpolate_snake_head)
-        .add_custom_interpolation();
+        .with_rollback_condition(components::snake::snake_head_should_rollback);
+    app.interpolate_with::<components::snake::SnakeHead>(
+        InterpolationFns::history_only().interpolate(components::snake::interpolate_snake_head),
+    );
     app.component::<components::snake::TailPoints>()
         .replicate_diff()
         .predict_diff()
-        .with_rollback_condition(components::snake::tail_points_should_rollback)
-        .add_custom_interpolation_diff();
+        .with_rollback_condition(components::snake::tail_points_should_rollback);
+    app.interpolate_diff_with::<components::snake::TailPoints>(InterpolationFns::history_only());
     app.component::<components::snake::TailLength>()
         .replicate()
         .predict()
-        .with_rollback_condition(components::snake::tail_length_should_rollback)
-        .register_interpolation_fn(components::snake::interpolate_tail_length)
-        .add_custom_interpolation();
+        .with_rollback_condition(components::snake::tail_length_should_rollback);
+    app.interpolate_with::<components::snake::TailLength>(
+        InterpolationFns::history_only().interpolate(components::snake::interpolate_tail_length),
+    );
     app.component::<components::snake::Speed>()
         .replicate()
         .predict()
@@ -132,8 +134,8 @@ fn register_components(app: &mut App) {
         .with_rollback_condition(components::snake::food_boost_should_rollback);
     app.component::<components::snake::HasPlayer>()
         .replicate()
-        .predict()
-        .add_custom_interpolation();
+        .predict();
+    app.interpolate_with::<components::snake::HasPlayer>(InterpolationFns::history_only());
     app.component::<inputs::SnakeInput>().replicate().predict();
 
     app.component::<components::player::Player>().replicate();
@@ -142,8 +144,10 @@ fn register_components(app: &mut App) {
     app.component::<components::player::PlayerStatus>()
         .replicate();
     app.component::<components::food::FoodMarker>().replicate();
-    app.component::<components::common::Position>()
-        .replicate()
-        .add_interpolation_with(components::common::interpolate_position);
+    app.component::<components::food::FoodColor>().replicate();
+    app.component::<components::common::Position>().replicate();
+    app.interpolate_with::<components::common::Position>(InterpolationFns::interpolate(
+        components::common::interpolate_position,
+    ));
     app.component::<components::common::RoomId>().replicate();
 }

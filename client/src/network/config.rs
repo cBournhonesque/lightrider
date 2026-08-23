@@ -137,6 +137,7 @@ fn spawn_client(
                 NetcodeClient::new(auth, netcode_config)?,
                 WebTransportClientIo {
                     certificate_digest: normalize_certificate_digest(cert_digest),
+                    target: None,
                 },
             ));
             commands.trigger(Connect {
@@ -159,6 +160,7 @@ fn disconnect_when_prediction_budget_exceeded(
     mut connection_status: ResMut<ClientConnectionStatus>,
     clients: Query<(Entity, &Link), (With<Client>, With<Connected>)>,
     mut next_trace_at: Local<f64>,
+    mut next_budget_warning_at: Local<f64>,
 ) {
     let input_delay = &game_config.network.input_delay;
     let now = time.elapsed_secs_f64();
@@ -210,6 +212,27 @@ fn disconnect_when_prediction_budget_exceeded(
             budget.predicted_ticks,
             input_delay.maximum_predicted_ticks,
         );
+        if !input_delay.disconnect_on_prediction_budget_exceeded {
+            if now >= *next_budget_warning_at {
+                *next_budget_warning_at = now + 2.0;
+                warn!(
+                    entity = ?entity,
+                    rtt_ms = link.stats.rtt.as_secs_f64() * 1000.0,
+                    jitter_ms = link.stats.jitter.as_secs_f64() * 1000.0,
+                    effective_rtt_ticks = budget.effective_rtt_ticks,
+                    input_delay_ticks = budget.input_delay_ticks,
+                    predicted_ticks = budget.predicted_ticks,
+                    maximum_predicted_ticks = input_delay.maximum_predicted_ticks,
+                    maximum_input_delay_before_prediction_ticks = input_delay
+                        .maximum_input_delay_before_prediction_ticks,
+                    maximum_input_delay_ticks = input_delay.maximum_input_delay_ticks,
+                    reason = %reason,
+                    "prediction budget exceeded; continuing because disconnect is disabled"
+                );
+            }
+            continue;
+        }
+
         warn!(
             entity = ?entity,
             rtt_ms = link.stats.rtt.as_secs_f64() * 1000.0,

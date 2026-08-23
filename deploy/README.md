@@ -3,6 +3,7 @@
 Deployment-specific files live here:
 
 - `Dockerfile.server`: game-server image for Edgegap/static deployments.
+- `Dockerfile.gameflow-server`: template copied to the root of the GameFlow server upload zip.
 - `Dockerfile.matchmaker`: matchmaker/control image with NATS and `lightyear_matchmaker_server`.
 - `Dockerfile.webclient`: static web-client image with nginx and the WASM client.
 - `DEPLOYMENT.md`: full operator guide.
@@ -16,15 +17,18 @@ Deployment-specific files live here:
 - `edgegap.just`: Edgegap image, app-version, and release-sync recipes.
 - `static.just`: static/VPS host deployment recipes.
 - `gameflow.just`: GameFlow-compatible deployment aliases.
+- `gameflow_server_zip.sh`: builds the GameFlow `server.zip` archive.
 
 The root `justfile` imports the split files above, so command names stay the
 same. Common entry points:
 
 ```bash
 just deploy-help
+just deploy-tag
 just prod-images-build-push tag=<tag>
-just edgegap-release-sync tag=<tag> nats_host=<host:4222>
-just control-host-deploy host=<vps-host> tag=<tag>
+just prebuilt-images-build-push tag=<tag>
+just edgegap-release-sync tag=<tag> version=dev nats_host=<host:4222>
+just control-host-deploy host=<vps-host> tag=<tag> game_version=dev
 just control-host-deploy-pull host=<vps-host> tag=<already-pushed-tag>
 just control-host-pull-game-server host=<vps-host> tag=<already-pushed-tag>
 ```
@@ -53,6 +57,7 @@ GameFlow-compatible wrappers are also available:
 
 ```bash
 just gameflow-build-push tag=<tag>
+just gameflow-server-zip output=.edgegap-build/gameflow/server.zip port=7898
 just gameflow-sync tag=<tag> nats_host=<host:4222>
 just gameflow-deploy-host host=<vps-host> tag=<tag>
 just gameflow-smoke-local

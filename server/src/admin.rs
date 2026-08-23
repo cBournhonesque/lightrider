@@ -6,9 +6,9 @@ use lightyear::prelude::{
 };
 use tracing::{error, warn};
 
+use crate::bot::BotMarker;
 use crate::bots::BotTargetOverrides;
 use crate::rooms::ClientRoom;
-use shared::bot::BotMarker;
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::*;
 

@@ -85,10 +85,11 @@ pub(crate) fn handle_spawn_requests(
             if let Some(controlled_by) = controlled_by.copied() {
                 commands.entity(head_entity).insert(controlled_by);
             }
+            let input_action = spawn_snake_input_actions(&mut commands, head_entity);
             if let Some(lightyear_room) = directory.lightyear_room(*room) {
                 add_replicated_entity_to_room(&mut commands, lightyear_room, head_entity);
+                add_replicated_entity_to_room(&mut commands, lightyear_room, input_action);
             }
-            spawn_snake_input_actions(&mut commands, head_entity, client_id, true);
             commands.entity(player_entity).remove::<RespawnReadyAt>();
             player.snake = Some(head_entity);
             *score = PlayerScore::default();

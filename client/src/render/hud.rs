@@ -112,11 +112,11 @@ impl Plugin for HudRenderPlugin {
 
 fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
     let title_font = TextFont {
-        font_size: 16.0,
+        font_size: FontSize::Px(16.0),
         ..default()
     };
     let body_font = TextFont {
-        font_size: 13.0,
+        font_size: FontSize::Px(13.0),
         ..default()
     };
 
@@ -181,9 +181,9 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 MiniMapDot(MiniMapDotKind::PlayerArrow),
                 minimap_node(Vec2::splat(MINIMAP_ARROW_SIZE)),
                 Text::new(">"),
-                TextLayout::new_with_justify(Justify::Center),
+                TextLayout::justify(Justify::Center),
                 TextFont {
-                    font_size: 10.0,
+                    font_size: FontSize::Px(10.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.44, 1.0, 0.93)),
@@ -254,7 +254,7 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 ui_style::title_color(),
                 ui_style::text_glow(),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
             ));
@@ -292,7 +292,7 @@ fn spawn_hud(mut commands: Commands, sheet: Res<PowerlineSpriteSheet>) {
                 ui_style::title_color(),
                 ui_style::text_glow(),
                 TextFont {
-                    font_size: 28.0,
+                    font_size: FontSize::Px(28.0),
                     ..default()
                 },
             ));
@@ -479,13 +479,7 @@ fn update_minimap(
     sync_minimap_trail(
         &mut commands,
         minimap_root.single().ok(),
-        desired_minimap_trails(
-            &players,
-            local_room,
-            local_tail.as_ref(),
-            &tails,
-            &config.arena,
-        ),
+        desired_minimap_trails(&players, local_room, local_tail.as_ref(), &config.arena),
         &mut trail_segments,
     );
 }
@@ -578,41 +572,31 @@ fn desired_minimap_trails(
     players: &Query<(Entity, &Player, &RoomId, Has<Controlled>)>,
     local_room: Option<RoomId>,
     local_tail: Option<&TailPolyline>,
-    tails: &Query<(&SnakeHead, &TailPoints, Option<&TailLength>)>,
     arena: &ArenaConfig,
 ) -> Vec<DesiredMiniMapTrailSegment> {
     let mut desired = Vec::new();
-    let Some(local_room) = local_room else {
+    let (Some(local_room), Some(local_tail)) = (local_room, local_tail) else {
         return desired;
     };
 
-    for (player_entity, player, room, is_local) in players.iter() {
-        if *room != local_room {
-            continue;
-        }
-        let tail = if is_local {
-            local_tail.cloned()
-        } else {
-            player
-                .snake
-                .and_then(|snake| tails.get(snake).ok())
-                .map(|(head, tail, length)| visible_tail(head, tail, length))
-        };
-        let Some(tail) = tail else {
-            continue;
-        };
-        let color = minimap_trail_color(player, is_local);
-        desired.extend(
-            minimap_trail_nodes(&tail, arena)
-                .into_iter()
-                .map(|(index, node)| DesiredMiniMapTrailSegment {
-                    owner: player_entity,
-                    index,
-                    node,
-                    color,
-                }),
-        );
-    }
+    let Some((player_entity, player, _, _)) = players
+        .iter()
+        .find(|(_, _, room, is_local)| *is_local && **room == local_room)
+    else {
+        return desired;
+    };
+
+    let color = minimap_trail_color(player, true);
+    desired.extend(
+        minimap_trail_nodes(local_tail, arena)
+            .into_iter()
+            .map(|(index, node)| DesiredMiniMapTrailSegment {
+                owner: player_entity,
+                index,
+                node,
+                color,
+            }),
+    );
 
     desired
 }

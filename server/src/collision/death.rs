@@ -1,4 +1,5 @@
-use crate::food::spawn_food_entity;
+use crate::bot::BotMarker;
+use crate::food::spawn_colored_food_entity;
 use crate::respawn::{respawn_delay_seconds, RespawnReadyAt};
 use crate::rooms::{remove_replicated_entity_from_room, ClientRoom, RoomDirectory};
 use bevy::ecs::entity::EntityHashSet;
@@ -6,8 +7,8 @@ use bevy::prelude::*;
 use lightyear::prelude::{
     server::ClientOf, NetworkTarget, RemoteId, Server, ServerMultiMessageSender,
 };
-use shared::bot::BotMarker;
 use shared::collision::collider::ColliderSet;
+use shared::colors::death_food_tone_for_name;
 use shared::config::GameConfig;
 use shared::network::protocol::prelude::*;
 use tracing::{debug, error};
@@ -99,7 +100,7 @@ pub fn handle_collision(
             killer_snake: collision_event.killer,
             killed_snake: collision_event.killed,
             killer_name,
-            killed_name,
+            killed_name: killed_name.clone(),
             room: *killed_room,
             reason: collision_event.reason,
             position: killed_head.position,
@@ -128,6 +129,7 @@ pub fn handle_collision(
             &rooms,
             &config,
             *killed_room,
+            &killed_name,
             &killed_tail.polyline(killed_head, killed_length.current_size),
             &mut room_food_counts,
         );
@@ -156,11 +158,6 @@ fn reserve_collision_death(
     killed_snakes: &mut EntityHashSet,
     collision_event: &SnakeCollision,
 ) -> bool {
-    if collision_event.killer != collision_event.killed
-        && killed_snakes.contains(&collision_event.killer)
-    {
-        return false;
-    }
     killed_snakes.insert(collision_event.killed)
 }
 
@@ -179,6 +176,7 @@ fn spawn_death_food(
     rooms: &RoomDirectory,
     config: &GameConfig,
     room: RoomId,
+    player_name: &str,
     tail: &TailPolyline,
     room_food_counts: &mut std::collections::HashMap<RoomId, usize>,
 ) {
@@ -187,12 +185,16 @@ fn spawn_death_food(
     if available_slots == 0 {
         return;
     }
-    for position in death_food_positions(
+    for (index, position) in death_food_positions(
         tail,
         config.food.death_food_spacing,
         config.food.death_food_max.min(available_slots),
-    ) {
-        spawn_food_entity(commands, rooms, room, Position(position));
+    )
+    .into_iter()
+    .enumerate()
+    {
+        let color = FoodColor::from(death_food_tone_for_name(player_name, index));
+        spawn_colored_food_entity(commands, rooms, room, Position(position), color);
         *room_food_counts.entry(room).or_insert(0) += 1;
     }
 }
@@ -320,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn reciprocal_same_tick_collisions_do_not_kill_both_snakes() {
+    fn reciprocal_same_tick_collisions_can_kill_both_snakes() {
         let mut world = World::new();
         let first = world.spawn_empty().id();
         let second = world.spawn_empty().id();
@@ -334,7 +336,7 @@ mod tests {
                 reason: DeathReason::Collision,
             },
         ));
-        assert!(!reserve_collision_death(
+        assert!(reserve_collision_death(
             &mut killed,
             &SnakeCollision {
                 killer: first,
@@ -344,6 +346,6 @@ mod tests {
         ));
 
         assert!(killed.contains(&first));
-        assert!(!killed.contains(&second));
+        assert!(killed.contains(&second));
     }
 }

@@ -17,7 +17,8 @@ name = "lightrider-client"
 path = "src/bin/main.rs"
 
 [features]
-default = []
+default = ["client"]
+client = ["shared/client"]
 profile-chrome = ["bevy/trace_chrome", "bevy/detailed_trace"]
 lightyear-matchmaker = [
     "dep:base64",
@@ -28,9 +29,9 @@ bevygap = ["lightyear-matchmaker"]
 bevygap-matchmaker-tls = ["bevygap"]
 
 [dependencies]
-shared = { path = "../shared" }
+shared = { path = "../shared", default-features = false }
 lightyear.workspace = true
-lightyear_tools = { path = "../../lightyear/crates/tools/tools" }
+lightyear_tools.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 anyhow.workspace = true
@@ -40,6 +41,7 @@ bevy = { workspace = true, features = [
     "2d_bevy_render",
     "3d_bevy_render",
     "bevy_core_pipeline",
+    "default_platform",
     "picking",
     "ui_api",
     "ui_bevy_render",
@@ -53,6 +55,9 @@ base64 = { version = "0.22", optional = true }
 lightyear_matchmaker_bevy_client = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_bevy_client", optional = true }
 lightyear_matchmaker_core = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_core", optional = true }
 
+[dev-dependencies]
+bevy_replicon.workspace = true
+
 [target."cfg(not(target_family = \"wasm\"))".dependencies]
 tokio = { version = "1.34", features = [
     "macros",
@@ -64,6 +69,11 @@ tokio = { version = "1.34", features = [
 
 [target."cfg(target_family = \"wasm\")".dependencies]
 bevy_seedling = { workspace = true, features = ["web_audio"] }
+# The WASM client pulls multiple getrandom major versions through Lightyear,
+# crypto, and Bevy-side dependencies. Each major version needs its own web RNG
+# feature enabled because Cargo does not unify features across package versions.
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 js-sys = "0.3"
 tokio = { version = "1.34", features = ["macros", "rt"] }

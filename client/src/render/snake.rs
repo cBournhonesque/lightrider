@@ -20,7 +20,7 @@ const SNAKE_HEAD_GLOW_Z: f32 = 10.8;
 const SNAKE_TAIL_Z: f32 = 10.0;
 const SNAKE_DEATH_Z: f32 = 16.0;
 const SNAKE_DEATH_ANIMATION_SECONDS: f32 = 0.58;
-const MESH_CURVE_SEGMENTS: u32 = 14;
+const MESH_CURVE_SEGMENTS: u32 = 28;
 const WIDTH_GROWTH_START_LENGTH: f32 = 2500.0;
 const WIDTH_GROWTH_MAX_LENGTH: f32 = 5000.0;
 const WIDTH_GROWTH_MAX_SCALE: f32 = 2.6;
@@ -145,7 +145,6 @@ fn sync_asset_snake_visuals(
             &TailPoints,
             Option<&TailLength>,
             Option<&Speed>,
-            Option<&Acceleration>,
             Option<&HasPlayer>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -209,7 +208,7 @@ fn sync_asset_snake_visuals(
         for (_, visual, mut transform, mesh, material) in &mut mesh_visuals {
             if visual.key == desired.key {
                 *transform = desired.transform;
-                if let Some(mesh_asset) = mesh_assets.get_mut(&mesh.0) {
+                if let Some(mut mesh_asset) = mesh_assets.get_mut(&mesh.0) {
                     *mesh_asset = desired.shape.mesh();
                 }
                 set_material_color(&mut materials, material, desired.color);
@@ -253,7 +252,6 @@ fn desired_snake_visuals(
             &TailPoints,
             Option<&TailLength>,
             Option<&Speed>,
-            Option<&Acceleration>,
             Option<&HasPlayer>,
         ),
         Or<(With<Predicted>, With<Interpolated>, Without<Replicated>)>,
@@ -264,7 +262,7 @@ fn desired_snake_visuals(
     let mut sprite_desired = Vec::new();
     let mut mesh_desired = Vec::new();
 
-    for (owner, head, points, length, speed, acceleration, player) in tails.iter() {
+    for (owner, head, points, length, speed, player) in tails.iter() {
         let width_scale = snake_width_scale(length);
         let tail_width = base_tail_width * width_scale;
         let head_size = base_head_size * width_scale;
@@ -272,7 +270,7 @@ fn desired_snake_visuals(
         let points = visible_tail(head, points, length);
         let color = snake_visual_color(owner, player, players);
         let head = points.front().0;
-        let head_glow = head_glow_visual(head_diameter, speed, acceleration, config);
+        let head_glow = head_glow_visual(head_diameter, speed, config);
         sprite_desired.push(DesiredSnakeSpriteVisual {
             key: SnakeVisualKey {
                 owner,
@@ -307,9 +305,7 @@ fn desired_snake_visuals(
             }
             let rotation = Quat::from_rotation_z(delta.y.atan2(delta.x));
             for layer in TailLayer::ALL {
-                let Some((center, length)) =
-                    layer.segment_center_and_length(start.0, end.0, index, head_diameter)
-                else {
+                let Some((center, length)) = layer.segment_center_and_length(start.0, end.0) else {
                     continue;
                 };
                 let layer_width = layer.width(tail_width);
@@ -344,7 +340,7 @@ fn desired_snake_visuals(
                         owner,
                         part: SnakeVisualPart::Joint { index, layer },
                     },
-                    transform: Transform::from_translation((*point).extend(layer.z())),
+                    transform: Transform::from_translation((*point).extend(layer.joint_z())),
                     shape: TailMeshShape::Circle {
                         radius: layer_width * 0.5,
                     },
@@ -360,20 +356,9 @@ fn desired_snake_visuals(
 fn head_glow_visual(
     head_diameter: f32,
     speed: Option<&Speed>,
-    acceleration: Option<&Acceleration>,
     config: &GameConfig,
 ) -> HeadGlowVisual {
     let base_diameter = head_diameter * 3.0;
-    let acceleration = acceleration
-        .map(|acceleration| acceleration.0)
-        .unwrap_or(0.0);
-    if acceleration <= 0.0 {
-        return HeadGlowVisual {
-            diameter: base_diameter,
-            alpha: 0.0,
-        };
-    }
-
     let speed = speed
         .map(|speed| speed.0)
         .unwrap_or(config.movement.min_speed);
@@ -391,15 +376,11 @@ fn head_glow_visual(
             alpha: 0.0,
         };
     }
-    let typical_acceleration = (config.movement.base_acceleration.abs()
-        * config.movement.boost_acceleration_ratio
-        + config.movement.food_boost_acceleration * 2.0)
-        .max(0.01);
-    let acceleration_t = (acceleration / typical_acceleration).clamp(0.0, 1.0);
+    let eased_speed_t = speed_t * speed_t * (3.0 - 2.0 * speed_t);
 
     HeadGlowVisual {
-        diameter: base_diameter * (1.0 + speed_t * 0.22 + acceleration_t * 0.10),
-        alpha: 0.05 + speed_t * 0.06 + acceleration_t * 0.03,
+        diameter: base_diameter * (1.0 + eased_speed_t * 0.32),
+        alpha: eased_speed_t * 0.14,
     }
 }
 
@@ -466,31 +447,17 @@ impl TailLayer {
         }
     }
 
-    fn is_glow(self) -> bool {
-        !matches!(self, Self::Core)
+    fn joint_z(self) -> f32 {
+        self.z() + 0.01
     }
 
-    fn segment_center_and_length(
-        self,
-        start: Vec2,
-        end: Vec2,
-        index: usize,
-        head_length: f32,
-    ) -> Option<(Vec2, f32)> {
+    fn segment_center_and_length(self, start: Vec2, end: Vec2) -> Option<(Vec2, f32)> {
         let delta = end - start;
         let length = delta.length();
         if length <= f32::EPSILON {
             return None;
         }
-        if !self.is_glow() || index != 0 {
-            return Some(((start + end) * 0.5, length));
-        }
-
-        let direction = delta / length;
-        let clear_from_head = (head_length * 0.58).min(length);
-        let trimmed_end = end - direction * clear_from_head;
-        let trimmed_length = trimmed_end.distance(start);
-        (trimmed_length > f32::EPSILON).then_some(((start + trimmed_end) * 0.5, trimmed_length))
+        Some(((start + end) * 0.5, length))
     }
 }
 
@@ -657,7 +624,7 @@ fn set_material_color(
     handle: &MeshMaterial2d<ColorMaterial>,
     color: Color,
 ) {
-    if let Some(material) = materials.get_mut(&handle.0) {
+    if let Some(mut material) = materials.get_mut(&handle.0) {
         material.color = color;
         material.alpha_mode = alpha_mode_for_color(color);
     }
@@ -861,42 +828,38 @@ mod tests {
     }
 
     #[test]
-    fn accelerating_snake_head_glow_starts_after_minimum_speed_and_expands() {
+    fn snake_head_glow_increases_with_speed() {
         let config = GameConfig::default();
         let head_diameter = 4.0;
         let idle = head_glow_visual(
             head_diameter,
             Some(&Speed(config.movement.min_speed)),
-            Some(&Acceleration(config.movement.base_acceleration)),
             &config,
         );
-        let accelerating_at_minimum = head_glow_visual(
+        let at_minimum = head_glow_visual(
             head_diameter,
             Some(&Speed(config.movement.min_speed)),
-            Some(&Acceleration(0.01)),
             &config,
         );
-        let accelerating_mid = head_glow_visual(
+        let mid = head_glow_visual(
             head_diameter,
             Some(&Speed(
                 (config.movement.min_speed + config.movement.max_speed) * 0.5,
             )),
-            Some(&Acceleration(0.01)),
             &config,
         );
-        let accelerating_fast = head_glow_visual(
+        let fast = head_glow_visual(
             head_diameter,
             Some(&Speed(config.movement.max_speed)),
-            Some(&Acceleration(0.01)),
             &config,
         );
 
         assert_eq!(idle.alpha, 0.0);
-        assert_eq!(accelerating_at_minimum.alpha, 0.0);
-        assert!(accelerating_mid.diameter > idle.diameter);
-        assert!(accelerating_mid.alpha > idle.alpha);
-        assert!(accelerating_fast.diameter > accelerating_mid.diameter);
-        assert!(accelerating_fast.alpha > accelerating_mid.alpha);
+        assert_eq!(at_minimum.alpha, 0.0);
+        assert!(mid.diameter > idle.diameter);
+        assert!(mid.alpha > idle.alpha);
+        assert!(fast.diameter > mid.diameter);
+        assert!(fast.alpha > mid.alpha);
     }
 
     #[test]

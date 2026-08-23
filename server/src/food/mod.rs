@@ -1,12 +1,13 @@
 use crate::rooms::{add_replicated_entity_to_room, ClientRoom, RoomDirectory};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use bevy_turborand::prelude::*;
+use bevy_rand::prelude::WyRand;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
     InterpolationTarget, NetworkTarget, RemoteId, Replicate, ReplicationSender, Server,
     ServerMultiMessageSender,
 };
+use rand_core::Rng;
 use shared::collision::collider::ColliderSet;
 use shared::config::GameConfig;
 use shared::map::{MapMarker, MapSize};
@@ -24,7 +25,7 @@ fn spawn_food(
     time: Res<Time>,
     mut timer: Local<Option<Timer>>,
     mut seeded_rooms: Local<HashSet<RoomId>>,
-    mut maps: Query<(&RoomId, &MapSize, &mut RngComponent), With<MapMarker>>,
+    mut maps: Query<(&RoomId, &MapSize, &mut WyRand), With<MapMarker>>,
     food: Query<&RoomId, With<FoodMarker>>,
     config: Res<GameConfig>,
     rooms: Res<RoomDirectory>,
@@ -62,11 +63,15 @@ fn spawn_random_food(
     rooms: &RoomDirectory,
     room: RoomId,
     map_size: &MapSize,
-    rng: &mut RngComponent,
+    rng: &mut WyRand,
 ) -> Entity {
-    let x = rng.f32_normalized() * map_size.width * 0.5;
-    let y = rng.f32_normalized() * map_size.height * 0.5;
+    let x = f32_normalized(rng) * map_size.width * 0.5;
+    let y = f32_normalized(rng) * map_size.height * 0.5;
     spawn_food_entity(commands, rooms, room, Position(Vec2::new(x, y)))
+}
+
+fn f32_normalized(rng: &mut WyRand) -> f32 {
+    (rng.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0
 }
 
 pub(crate) fn spawn_food_entity(
@@ -75,13 +80,35 @@ pub(crate) fn spawn_food_entity(
     room: RoomId,
     position: Position,
 ) -> Entity {
-    let food = commands
-        .spawn((
-            FoodBundle::new_in_room(position, room),
-            Replicate::to_clients(NetworkTarget::All),
-            InterpolationTarget::to_clients(NetworkTarget::All),
-        ))
-        .id();
+    spawn_food_entity_inner(commands, rooms, room, position, None)
+}
+
+pub(crate) fn spawn_colored_food_entity(
+    commands: &mut Commands,
+    rooms: &RoomDirectory,
+    room: RoomId,
+    position: Position,
+    color: FoodColor,
+) -> Entity {
+    spawn_food_entity_inner(commands, rooms, room, position, Some(color))
+}
+
+fn spawn_food_entity_inner(
+    commands: &mut Commands,
+    rooms: &RoomDirectory,
+    room: RoomId,
+    position: Position,
+    color: Option<FoodColor>,
+) -> Entity {
+    let mut food_entity = commands.spawn((
+        FoodBundle::new_in_room(position, room),
+        Replicate::to_clients(NetworkTarget::All),
+        InterpolationTarget::to_clients(NetworkTarget::All),
+    ));
+    if let Some(color) = color {
+        food_entity.insert(color);
+    }
+    let food = food_entity.id();
     if let Some(lightyear_room) = rooms.lightyear_room(room) {
         add_replicated_entity_to_room(commands, lightyear_room, food);
     }
@@ -240,6 +267,7 @@ mod tests {
     #![allow(unused_variables)]
     use bevy::prelude::*;
     use lightyear::prelude::{Interpolated, Replicated};
+    use rand_core::SeedableRng;
     use shared::movement::MovementPlugin;
     use shared::network::bundle::snake::SnakeBundle;
     use shared::utils::SimulationAuthority;
@@ -294,7 +322,7 @@ mod tests {
             },
             RoomId(7),
             MapMarker,
-            RngComponent::with_seed(7),
+            WyRand::from_seed(7_u64.to_ne_bytes()),
         ));
 
         app.update();

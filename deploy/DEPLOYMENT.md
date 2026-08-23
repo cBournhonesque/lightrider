@@ -1,1246 +1,730 @@
 # Lightrider Deployment Guide
 
-This document is the operational checklist for running Lightrider locally and for deploying the current Bevygap/Edgegap production shape.
+This guide is the operator checklist for running Lightrider locally and deploying
+the production images.
 
-The current production shape uses three images:
+The deployable images are:
 
-- `lightrider-server`: the Edgegap game-server image. It runs the Bevy/Lightyear server with Bevygap enabled.
-- `lightrider-matchmaker`: the matchmaker/control image. It bundles NATS and `lightyear_matchmaker_server`.
-- `lightrider-webclient`: the static browser client image. It serves the WASM client files with nginx.
+- `lightrider-server`: game-server image used by the VPS/static provider,
+  Edgegap, and GameFlow.
+- `lightrider-matchmaker`: control image that runs NATS and
+  `lightyear_matchmaker_server`.
+- `lightrider-webclient`: static browser client image served by nginx.
 
-The same `lightrider-server` image can also run as an optional static game server on the control VPS. That lets US public traffic use the VPS first, then fall back to Edgegap when the static deployment is full or above policy limits. Private/specific room codes ignore location so invited players can reach the room even when they are outside the static deployment's preferred region.
+The root `justfile` imports the deployment recipes under `deploy/`, so run the
+commands below from the repository root.
 
-Do not put real credentials in this document. Store local secrets in `secrets/edgegap.env`, which is ignored by git.
+## Quickstart Local
 
-## Prerequisites
+Use this path for local development. It runs the native server and a rendered
+native client directly, without building container images.
 
-Install or make available:
-
-- Rust/Cargo with the repository toolchain.
-- `just`.
-- `podman` for NATS and production image builds.
-- `curl`.
-- `rg` for smoke-test log checks.
-- `duckdb` if you want to run trace summaries.
-
-The repository intentionally limits local Cargo work to two jobs through the `justfile`.
-
-## Local Test Without Bevygap
-
-This is the fastest development path. It does not use NATS, Bevygap, Edgegap, or the matchmaker. The native client connects directly to the local WebTransport server.
-
-### One-Terminal Headless/Rendered Test
-
-From the repo root:
-
-```bash
-just local 4 config/test.ron 5000 1 1001 auto
-```
-
-This starts:
-
-- one local headless server on port `5000`,
-- four headless bot clients,
-- one rendered client with client id `1`.
-
-Stop it with `Ctrl-C`.
-
-### Separate Terminals
-
-Terminal 1, server:
+Terminal 1:
 
 ```bash
 just server config/test.ron 5000
 ```
 
-Terminal 2, optional bots:
-
-```bash
-just bots 4 1001 config/test.ron 127.0.0.1 5000 auto
-```
-
-Terminal 3, rendered client:
+Terminal 2:
 
 ```bash
 just client 1 config/test.ron 127.0.0.1 5000 auto
 ```
 
-Debug rendered client:
+For a larger arena, use the default config:
 
 ```bash
-just client-debug 1 config/test.ron 127.0.0.1 5000 auto
+just server config/default.ron 5000
+just client 1 config/default.ron 127.0.0.1 5000 auto
 ```
 
-Single headless bot:
+Optional browser asset smoke:
 
 ```bash
-just bot 1001 config/test.ron 127.0.0.1 5000 auto
+just web-serve 127.0.0.1 8000 false
 ```
 
-For a full-size arena, replace `config/test.ron` with `config/default.ron`.
+## Quickstart Prod
 
-### Runtime Trace Smoke
-
-Use this when you want a non-visual check that the simulation connects and moves:
+Set the common variables once:
 
 ```bash
-just trace-local 4 20 config/test.ron 5000 2001 auto
+export TAG="$(just deploy-tag)"
+export GAME_VERSION="dev"
+export VPS_HOST="<vps-ip-or-hostname>"
+export DOMAIN="<public-domain>"
+export SSH_KEY="$HOME/.ssh/<key>"
 ```
 
-Output goes under `logs/debug/<timestamp>/`, and `logs/debug/latest` points at the most recent run. If `duckdb` is installed, the recipe writes a summary to `summary.txt`.
-
-Rerun the summary on an existing trace:
-
-```bash
-just trace-summary logs/debug/latest
-```
-
-Expected result:
-
-- server and client logs exist,
-- `.ndjson` traces exist,
-- the summary reports moving snake rows,
-- stuck-snake and invariant-violation counts should be zero.
-
-## Local Test With Bevygap
-
-The local Bevygap path tests the production-style token flow without creating real Edgegap sessions:
-
-1. NATS starts locally with JetStream.
-2. Lightrider server starts with `--features bevygap -- --bevygap` and `BEVYGAP_CONTEXT_MODE=local`.
-3. The server synthesizes local Edgegap context in-process.
-4. The server publishes its context and WebTransport certificate digest into NATS.
-5. `bevygap_matchmaker` runs in mock Edgegap mode.
-6. `bevygap_matchmaker_httpd` exposes `/matchmaker/ws`.
-7. A headless Lightrider bot client requests a token over WebSocket and connects to the game server with that token.
-
-Local recipes default `BEVYGAP_NATS_NAMESPACE=lightrider_dev`. This prefixes Bevygap NATS subjects, streams, and KV buckets so local smoke tests do not collide with a real app/version using the same NATS server.
-
-### One-Command Smoke
-
-First pull the NATS image once:
-
-```bash
-just bevygap-nats-pull
-```
-
-Then run the smoke:
-
-```bash
-just bevygap-local-smoke 8 config/test.ron 7777 3000 9876 3001
-```
-
-Output goes under `logs/bevygap/<timestamp>/`, and `logs/bevygap/latest` points at the most recent run.
-
-Expected terminal result:
-
-```text
-bevygap local smoke passed: logs/bevygap/<timestamp>
-```
-
-The smoke checks for:
-
-- server certificate digest extraction,
-- certificate digest publication to NATS,
-- mock Edgegap session creation,
-- matchmaker `Session Ready`,
-- client matchmaker response,
-- client connection attempt,
-- server-side Lightyear connect event,
-- server active-connection KV write,
-- matchmaker active-connection watcher observation.
-
-### Manual Bevygap Smoke
-
-Use this when you want to inspect each process.
-
-Terminal 1, NATS:
-
-```bash
-just bevygap-nats
-```
-
-Health check from another terminal:
-
-```bash
-just bevygap-nats-health
-```
-
-Terminal 2, Lightrider server with Bevygap:
-
-```bash
-just bevygap-server-local config/test.ron 7777
-```
-
-`bevygap-server-local` defaults `BEVYGAP_CONTEXT_MODE=local`, so it does not need a fake Edgegap context HTTP server.
-
-Terminal 3, mock matchmaker worker plus HTTP/WebSocket gateway:
-
-```bash
-just bevygap-matchmaker-mock-stack-local lightrider dev 127.0.0.1 7777 127.0.0.1:3000 http://localhost:8000 81.128.157.100
-```
-
-`bevygap_matchmaker_httpd` is not the TLS terminator. It is the public HTTP/WebSocket gateway that forwards browser matchmaking requests into NATS. In production, nginx/Caddy/load-balancer TLS sits in front of it. For process-level debugging, the split recipes remain available:
-
-```bash
-just bevygap-matchmaker-mock-local lightrider dev 127.0.0.1 7777
-just bevygap-matchmaker-httpd-local 127.0.0.1:3000 http://localhost:8000 81.128.157.100
-```
-
-Terminal 4, headless token-path client:
-
-```bash
-just bevygap-client-bot 3001 config/test.ron ws://127.0.0.1:3000/matchmaker/ws lightrider dev auto
-```
-
-For a rendered native client through the matchmaker:
-
-```bash
-cargo run -j 2 -p client --features bevygap --bin lightrider-client -- \
-  --client-id 1 \
-  --config config/test.ron \
-  --room auto \
-  --matchmaker-url ws://127.0.0.1:3000/matchmaker/ws \
-  --matchmaker-game lightrider \
-  --matchmaker-version dev
-```
-
-### Local Browser UI And Webserver Test
-
-Use this to test the Leptos browser shell, `leptos-bevy-canvas`, the Bevy WASM client, and the local matchmaker WebSocket flow without deploying the control image.
-
-First run the local Bevygap services from the manual smoke section:
-
-Terminal 1:
-
-```bash
-just bevygap-nats
-```
-
-Terminal 2:
-
-```bash
-just bevygap-server-local config/test.ron 7777
-```
-
-Terminal 3:
-
-```bash
-just bevygap-matchmaker-mock-stack-local lightrider dev 127.0.0.1 7777 127.0.0.1:3000 http://localhost:8000 81.128.157.100
-```
-
-Then build and serve the browser files:
-
-```bash
-just web-serve 127.0.0.1 8000
-```
-
-Open:
-
-```text
-http://localhost:8000/?matchmaker_url=ws://127.0.0.1:3000/matchmaker/ws&matchmaker_game=lightrider&matchmaker_version=dev
-```
-
-`just web-serve` runs `just web-build`, which installs the `wasm32-unknown-unknown` target if needed, installs `wasm-bindgen-cli 0.2.122` under ignored `.edgegap-build/tools/`, builds `web_client` with `rustup run nightly cargo`, writes `web/pkg/`, and serves the static `web/` directory with Python's HTTP server.
-
-Expected result:
-
-- the Powerline-style menu appears over the Bevy canvas,
-- entering a name and pressing Play requests a token from `bevygap_matchmaker_httpd`,
-- the browser connects to the local WebTransport server on `127.0.0.1:7777`,
-- the game server logs a Lightyear connect event.
-
-For UI-only iteration, you can run only:
-
-```bash
-just web-serve 127.0.0.1 8000
-```
-
-The page and modal should render, but the game connection will fail until the local Bevygap stack is running.
-
-#### Local Browser Through SSH Port Forwarding
-
-If the game is running on a remote development host and the browser is on your laptop, forward both the web page and the matchmaker WebSocket:
-
-```bash
-ssh -o ExitOnForwardFailure=yes -L 127.0.0.1:4200:127.0.0.1:8000 -L 127.0.0.1:3000:127.0.0.1:3000 <user>@<dev-host>
-```
-
-On the remote development host, run:
-
-```bash
-just bevygap-nats
-just bevygap-server-local config/test.ron 7777
-just bevygap-matchmaker-mock-stack-local lightrider dev 127.0.0.1 7777 127.0.0.1:3000 http://127.0.0.1:4200 81.128.157.100
-just web-serve 127.0.0.1 8000
-```
-
-On your laptop, open:
-
-```text
-http://127.0.0.1:4200/?matchmaker_url=ws://127.0.0.1:3000/matchmaker/ws&matchmaker_game=lightrider&matchmaker_version=dev
-```
-
-The `cors` argument must match the browser origin, so use `http://127.0.0.1:4200` when the laptop opens forwarded port `4200`. Using `127.0.0.1` instead of `localhost` also avoids IPv4/IPv6 loopback mismatches in some SSH-forwarding setups.
-
-This verifies the web UI and matchmaker WebSocket path. A full browser game connection also requires the browser to reach the game server's WebTransport/QUIC endpoint. Normal SSH `-L` forwarding is TCP-only and will not forward WebTransport UDP traffic on `7777`. If the matchmaker logs an unclaimed session and the game server only logs that the client id is admissible, the browser received a token but never connected to the game server. For a full remote browser test, either run the game server on the laptop, expose the remote server's UDP/WebTransport port on an address the laptop can reach and pass that address as the mock `public_ip`, or use a real Edgegap deployment.
-
-### Local Bevygap With Real Edgegap Session Creation
-
-This still runs NATS, HTTPD, and the client locally, but the matchmaker calls the real Edgegap API.
-
-Requirements:
-
-- `EDGEGAP_API_KEY`, `EDGEGAP_API_TOKEN`, or `EDGEGAP_TOKEN` exported, or present in `secrets/edgegap.env`.
-- A valid Edgegap application and version matching the image you want to deploy.
-- `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` exported if the real game server uses production netcode identity.
-- A NATS instance reachable by both the local matchmaker and the Edgegap-hosted game server. A local `127.0.0.1:4222` NATS is not enough for this real-session flow unless it is exposed through a public TCP tunnel and the Edgegap app version points at that public address.
-
-Start NATS and HTTPD as above, then run:
-
-```bash
-just bevygap-matchmaker-local lightrider <edgegap-version>
-```
-
-Then connect the client through:
-
-```bash
-just bevygap-client-bot 3001 config/default.ron ws://127.0.0.1:3000/matchmaker/ws lightrider <edgegap-version> auto
-```
-
-This creates real Edgegap sessions and should be used deliberately.
-
-You do not need to activate Edgegap's managed matchmaker for this flow. `bevygap_matchmaker` is our matchmaker; it calls Edgegap's session API directly. You only need an active Edgegap app/version that can create sessions for the Lightrider server image.
-
-The matchmaker start itself is a safe preflight: it verifies the app/version and listens for requests. The real Edgegap session/deployment is created only after a client request reaches `bevygap_matchmaker_httpd` and is forwarded to `bevygap_matchmaker`.
-
-Current read-only preflight result, as of 2026-05-28:
-
-- Edgegap app `lightrider` exists and is active.
-- Active tested version is `v0.0.1`, not `dev`.
-- Version `v0.0.1` points to `lightyear-6qgcf4w4mrq7/lightrider-server:dev`.
-- Version `v0.0.1` currently has no app-version env vars configured, so it is not enough for the full real-session Bevygap flow. It still needs `NATS_HOST`, NATS credentials, and matching `LIGHTRIDER_PROTOCOL_ID`/`LIGHTRIDER_PRIVATE_KEY` before an Edgegap-hosted server can publish readiness and accept matchmaker-issued tokens.
-
-### Edgegap Game Server With Local Matchmaker/Web
-
-This is a valid hybrid smoke test: the browser and Bevygap matchmaker run locally, while the game server is created as a real Edgegap session.
-
-The important constraint is NATS. The Edgegap game server and your local matchmaker must talk to the same NATS server. A plain local `127.0.0.1:4222` NATS works for the local matchmaker only; the Edgegap container cannot reach it. For this hybrid test, use a public NATS endpoint on a VPS/control host, or temporarily expose local NATS through a public TCP tunnel.
-
-You do not need Edgegap's managed matchmaker. `bevygap_matchmaker` is the matchmaker and calls Edgegap's session API.
-
-One-time app/version sync for the server image:
-
-```bash
-tag=<pushed-server-image-tag>
-source secrets/edgegap.env
-source secrets/prod-netcode.env
-export NATS_HOST=<public-nats-host>:4222
-export NATS_USER=<nats-user>
-export NATS_PASSWORD=<nats-password>
-export EDGEGAP_NATS_INSECURE=1
-export BEVYGAP_NATS_NAMESPACE="lightrider_$tag"
-just edgegap-app-sync "$tag" "$tag" lightrider
-just edgegap-app-verify "$tag" "$tag" lightrider
-```
-
-Use `EDGEGAP_NATS_INSECURE=1` only for temporary no-TLS NATS testing. With NATS TLS, remove it and provide the TLS-related env values expected by `deploy/edgegap_app_version.sh`.
-
-The app-version sync defaults `EDGEGAP_FORCE_CACHE=false` because the current Edgegap organization has no enabled image-cache quota. Set `EDGEGAP_FORCE_CACHE=true` only after Edgegap cache capacity is available.
-
-The Edgegap API accepts `req_cpu` and `req_memory` on app-version creation but rejects them on app-version update. The sync tool sends those fields only for create, uses a PATCH-safe payload for updates, and then verifies the refetched deploy-critical state.
-
-Then run the local services in separate terminals:
-
-```bash
-tag=<same-edgegap-version>
-source secrets/edgegap.env
-source secrets/prod-netcode.env
-export NATS_HOST=<public-nats-host>:4222
-export NATS_USER=<nats-user>
-export NATS_PASSWORD=<nats-password>
-export NATS_INSECURE=1
-export BEVYGAP_NATS_NAMESPACE="lightrider_$tag"
-just bevygap-matchmaker-local lightrider "$tag"
-```
-
-```bash
-just bevygap-matchmaker-httpd-local 127.0.0.1:3000 http://127.0.0.1:8000 81.128.157.100
-```
-
-```bash
-just web-serve 127.0.0.1 8000
-```
-
-Open:
-
-```text
-http://127.0.0.1:8000/?matchmaker_url=ws://127.0.0.1:3000/matchmaker/ws&matchmaker_game=lightrider&matchmaker_version=<same-edgegap-version>
-```
-
-Expected flow:
-
-1. Browser opens the local web client.
-2. Browser requests a session from local `bevygap_matchmaker_httpd`.
-3. Local `bevygap_matchmaker` asks Edgegap to create or reuse a session for `lightrider/<version>`.
-4. The Edgegap game-server container starts and publishes context/certificate digest to public NATS.
-5. Local matchmaker returns a Lightyear `ConnectToken`.
-6. Browser connects directly to the Edgegap public WebTransport endpoint.
-
-## Production Deployment
-
-Production currently means:
-
-- browser clients load the WASM page from the matchmaker/control host,
-- browser clients talk to `bevygap_matchmaker_httpd` through WebSocket,
-- the matchmaker routes to an eligible static deployment or creates/reuses Edgegap sessions,
-- the selected game server publishes readiness, deployment metrics, and certificate digest through NATS,
-- the matchmaker returns a Lightyear `ConnectToken`,
-- the browser connects to the selected game server over WebTransport/QUIC.
-
-### Static VPS Plus Edgegap Routing
-
-The static VPS game-server path uses the same Bevygap metrics and token flow as Edgegap, but skips Edgegap session creation:
-
-1. `lightrider-static-server` runs on the control VPS using the `lightrider-server` image, `--network host`, UDP/WebTransport port `7777`, and `BEVYGAP_CONTEXT_MODE=local`.
-2. The static server publishes deployment metrics to NATS with `BEVYGAP_DEPLOYMENT_PROVIDER=static`, `BEVYGAP_DEPLOYMENT_COUNTRY_CODE=US`, and `BEVYGAP_DEPLOYMENT_REGION=us-east`.
-3. `bevygap_matchmaker` reads deployment metrics from NATS KV.
-4. For public `auto`/`new` rooms, the matchmaker only considers static deployments when the client IP GeoIP country is in `BEVYGAP_STATIC_CLIENT_COUNTRY_CODES` such as `US`.
-5. For private four-letter room codes and explicit room ids, the matchmaker ignores location and picks any deployment that can host or already hosts that room.
-6. If no deployment is selected, the matchmaker creates a normal Edgegap session.
-
-Public static routing requires a MaxMind GeoLite2/GeoIP2 country database. Without `BEVYGAP_GEOIP_DB`, public clients have unknown country and fall back to Edgegap. Private/specific rooms still work without GeoIP.
-
-To install a GeoIP DB on the VPS:
-
-```bash
-ssh -i ~/.ssh/lightrider_linode_ed25519 root@45.79.138.102 'mkdir -p /etc/lightrider'
-scp -i ~/.ssh/lightrider_linode_ed25519 GeoLite2-Country.mmdb root@45.79.138.102:/etc/lightrider/GeoLite2-Country.mmdb
-ssh -i ~/.ssh/lightrider_linode_ed25519 root@45.79.138.102 'chmod 644 /etc/lightrider/GeoLite2-Country.mmdb'
-```
-
-Then include the path when generating the control-host env:
-
-```bash
-BEVYGAP_GEOIP_DB=/etc/lightrider/GeoLite2-Country.mmdb \
-  just control-host-deploy-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
-```
-
-The control-host generated env enables the static server by default through `LIGHTRIDER_RUN_STATIC_SERVER=1`. Set `LIGHTRIDER_RUN_STATIC_SERVER=0` before the deploy command to run only the matchmaker/web/NATS service.
-
-The VPS or provider firewall must allow:
-
-- `80/tcp` for the current HTTP web client and `/matchmaker/ws` path,
-- `4222/tcp` for Edgegap game servers to reach NATS,
-- `7777/udp` for the optional static WebTransport game server.
-
-### Linode Control Host
-
-Current control-host target:
-
-- Public IPv4: `45.79.138.102`
-- Linode id: `98268043`
-- Label: `debian-us-east`
-- Region: `us-east`
-- Intended role: public website/WASM client, HTTPS reverse proxy, `bevygap_matchmaker_httpd`, `bevygap_matchmaker`, and NATS.
-
-Local secrets are stored in ignored `secrets/linode.env`. The private SSH key stays on this development host at `~/.ssh/lightrider_linode_ed25519`; only the matching public key should be installed on the Linode.
-
-Access status as of 2026-05-28:
-
-- Linode API access works with the stored token.
-- The Linode instance is running.
-- The local public key fingerprint matches the Linode account key labeled `lightrider`.
-- Shell access from this host over TCP/22 could not be verified because outbound TCP/22 is blocked or filtered from this environment. `github.com:22`, `lish-us-east.linode.com:22`, and `lish-us-east.linode.com:2200` also time out from here, while SSH over TCP/443 to `ssh.github.com` works.
-- Direct SSH to `45.79.138.102:443` reaches a TCP listener, but it closes before sending an SSH banner. That port is not currently SSH.
-- LISH SSH to `lish-us-east.linode.com:443` also reaches TCP, but closes during `kex_exchange_identification` before authentication. The key is not being rejected; the SSH protocol exchange never reaches auth.
-- LISH SSH to `lish-us-east.linode.com:2200` times out from this network.
-- Weblish/Glish browser console does not load from this network because the region console gateway ports are blocked or unreachable here. `us-east.webconsole.linode.com:8181` and `us-east.webconsole.linode.com:8080` both timed out from this host.
-- The Linode profile reports `lish_auth_method=keys_only`, and the profile has the matching public key.
-
-Linode Cloud Firewall status as of 2026-05-28:
-
-- Firewall id `26277595`, label `default`, is enabled and attached to the public Linode interface.
-- Inbound policy is currently `ACCEPT`, outbound policy is `ACCEPT`.
-- Explicit inbound rules allow SSH on TCP/22 and ICMP from all IPv4/IPv6 sources.
-- Because inbound policy is `ACCEPT`, this firewall is permissive. It does not currently explain the TCP/22 timeout, and it is not the final production security posture.
-
-Recommended production firewall shape after shell access is confirmed:
-
-- Inbound default `DROP`.
-- Allow TCP/22 only from trusted admin IPs, or configure SSH on a reachable admin port and restrict that.
-- Allow TCP/80 and TCP/443 from `0.0.0.0/0` and `::/0` for the website and TLS.
-- Allow TCP/4222 for NATS only from Edgegap game-server egress ranges if known. If Edgegap source ranges are not stable, keep NATS TLS enabled with strong credentials and monitor it closely.
-- Do not expose TCP/8222 publicly; access NATS monitoring through SSH tunnel or private network.
-- Do not expose TCP/8080 publicly once a reverse proxy owns 80/443.
-- Keep outbound policy `ACCEPT`.
-
-### 1. Prepare Local Secrets
-
-Create or update `secrets/edgegap.env`:
+`just deploy-tag` returns `<git-sha>-<utc timestamp>`. Use a fresh tag for each
+production deploy so the VPS and Edgegap cannot keep running an older image that
+was pushed with the same mutable tag.
+
+Keep `GAME_VERSION` Edgegap-safe, such as `dev` or `prod`. It is the public
+matchmaker/app version. It does not need to change when `TAG` changes.
+
+Create the secret files once. `secrets/edgegap.env` must contain the registry
+credentials used by the build/push recipes, and the Edgegap API token if you
+deploy the Edgegap provider.
 
 ```bash
 mkdir -p secrets
-chmod 700 secrets
-$EDITOR secrets/edgegap.env
-chmod 600 secrets/edgegap.env
+test -f secrets/prod-netcode.env || just netcode-secret > secrets/prod-netcode.env
+"${EDITOR:-vi}" secrets/edgegap.env
 ```
 
-The file should define registry values for local image build/push:
+Build and upload the VPS/static, Edgegap, matchmaker, and web-client images:
+
+```bash
+just prod-images-build-push tag="$TAG"
+```
+
+Build the GameFlow server upload zip. This archive has `Dockerfile` at the root,
+as required by GameFlow, and builds the game server on port `7898/udp`.
+
+```bash
+just gameflow-server-zip output=.edgegap-build/gameflow/server.zip port=7898
+```
+
+Deploy the VPS/static local provider. This installs or updates the control host,
+web client, matchmaker, NATS, and a static game-server service on the VPS.
+
+```bash
+SKIP_IMAGE_BUILD=1 just control-host-deploy \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  https=1 \
+  ssh_key="$SSH_KEY" \
+  tag="$TAG" \
+  allocation_source=nats_static \
+  game_version="$GAME_VERSION" \
+  manage_static_server=1 \
+  run_static_server=1
+```
+
+After HTTPS is working, optionally enable TLS for the public NATS endpoint.
+Edgegap-hosted and GameFlow-hosted game servers should use this instead of
+plaintext NATS once the command has succeeded.
+
+```bash
+just web-server-enable-nats-tls-from-caddy \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  ssh_key="$SSH_KEY"
+```
+
+Deploy the Edgegap provider. This syncs the Edgegap app version to the already
+pushed `lightrider-server:$TAG` image.
+
+```bash
+# Plaintext NATS mode. Use this when the control host has NATS_ALLOW_INSECURE=1.
+EDGEGAP_NATS_INSECURE=1 just edgegap-release-sync \
+  tag="$TAG" \
+  nats_host="$VPS_HOST:4222" \
+  app=lightrider \
+  version="$GAME_VERSION" \
+  env_file=secrets/web-server.env
+
+# TLS NATS mode. Use this only after verifying the public NATS endpoint reports
+# "tls_required":true in its INFO line.
+EDGEGAP_NATS_INSECURE=0 just edgegap-release-sync \
+  tag="$TAG" \
+  nats_host="$DOMAIN:4222" \
+  app=lightrider \
+  version="$GAME_VERSION" \
+  env_file=secrets/web-server.env
+```
+
+Deploy the GameFlow provider. Upload `.edgegap-build/gameflow/server.zip` in
+GameFlow, configure the primary game port as UDP `7898`, and set the server
+runtime environment from `secrets/web-server.env`.
+
+```bash
+grep -E '^(LIGHTRIDER_PROTOCOL_ID|LIGHTRIDER_PRIVATE_KEY|NATS_USER|NATS_PASSWORD|LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE)=' secrets/web-server.env
+printf 'LIGHTYEAR_MATCHMAKER_NATS_URL=tls://%s:4222\n' "$DOMAIN"
+printf 'PORT=7898\nLIGHTRIDER_MATCHMAKER=1\nLIGHTRIDER_MATCHMAKER_PROVIDER=gameflow\n'
+printf 'LIGHTRIDER_MATCHMAKER_GAME=lightrider\nLIGHTRIDER_MATCHMAKER_VERSION=%s\n' "$GAME_VERSION"
+printf 'LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1\n'
+```
+
+Run one control-host matchmaker that routes between the static VPS server,
+Edgegap, and GameFlow. Clients can force a provider with
+`?provider=static`, `?provider=edgegap`, or `?provider=gameflow`; when no
+provider is requested the router uses static first, then Edgegap, then GameFlow.
+
+```bash
+source secrets/edgegap.env
+
+export GAMEFLOW_GAME_ID="<gameflow-game-id>"
+export GAMEFLOW_API_KEY="<gameflow-api-key>"
+export GAMEFLOW_MODE="fleet"
+# Optional for standalone-style GameFlow setups:
+# export GAMEFLOW_BUILD_ID="<gameflow-build-id>"
+# export GAMEFLOW_REGION="<region>"
+
+SKIP_IMAGE_BUILD=1 just gameflow-deploy-host \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  https=1 \
+  ssh_key="$SSH_KEY" \
+  tag="$TAG" \
+  edgegap_version="$GAME_VERSION" \
+  game_version="$GAME_VERSION" \
+  allocation_source=provider_router \
+  provider_router_default=nats_static \
+  provider_router_fallback=edgegap,gameflow \
+  manage_static_server=1 \
+  run_static_server=1
+```
+
+Verify the host:
+
+```bash
+curl -fsS "https://$DOMAIN/" >/dev/null
+ssh -i "$SSH_KEY" "root@$VPS_HOST" 'systemctl --no-pager --full status lightrider-matchmaker lightrider-webclient || true'
+ssh -i "$SSH_KEY" "root@$VPS_HOST" 'podman logs --tail=200 lightrider-matchmaker'
+```
+
+## Provider Model
+
+The matchmaker can run one allocation backend or a provider router:
+
+- `nats_static`: allocate to a static game server that publishes capacity to
+  NATS. This is the VPS/static local provider.
+- `edgegap`: create or reuse Edgegap sessions.
+- `gameflow`: create or reuse GameFlow sessions.
+- `provider_router`: route between multiple backends. With the standard deploy
+  command, the default is `nats_static` and the fallback order is
+  `edgegap,gameflow`.
+
+Clients can request a backend with `provider=static`, `provider=edgegap`, or
+`provider=gameflow` in the browser URL. Without `provider=`, the router uses its
+configured default and fallback order.
+
+## Secrets
+
+Keep secrets under `secrets/`; the directory is ignored by git.
+
+`secrets/prod-netcode.env` is generated with:
+
+```bash
+just netcode-secret > secrets/prod-netcode.env
+```
+
+`secrets/edgegap.env` is sourced by the image build/push and Edgegap sync
+recipes. A typical file contains:
 
 ```bash
 EDGEGAP_REGISTRY_URL=registry.edgegap.com
-EDGEGAP_REGISTRY_PROJECT=<registry-project>
-EDGEGAP_REGISTRY_USERNAME=<registry-username>
+EDGEGAP_REGISTRY_PROJECT=<project>
+EDGEGAP_REGISTRY_USERNAME=<username>
 EDGEGAP_REGISTRY_TOKEN=<registry-token>
+EDGEGAP_API_TOKEN='token <edgegap-api-token>'
 ```
 
-For real Edgegap session creation, also define one of:
+For GameFlow, export the API variables before deploying the control host, and
+set the game-server runtime variables in the GameFlow dashboard:
 
 ```bash
-EDGEGAP_API_KEY=<edgegap-api-token>
+export GAMEFLOW_GAME_ID=<gameflow-game-id>
+export GAMEFLOW_API_KEY=<gameflow-api-key>
+export GAMEFLOW_MODE=fleet
 ```
 
-or:
+## Images
+
+Build context is staged by:
 
 ```bash
-EDGEGAP_API_TOKEN=<edgegap-api-token>
+just edgegap-context
 ```
 
-or:
+That context includes:
+
+- the current `lightrider` checkout,
+- `../lightyear`,
+- `../lightyear-matchmaker`,
+- `../bevy_replicon`.
+
+Normal production builds should use:
 
 ```bash
-EDGEGAP_TOKEN=<edgegap-api-token>
+just prod-images-build-push tag="$TAG"
 ```
 
-### 2. Generate Shared Netcode Identity
-
-Generate the values once:
+GameFlow does not consume the pushed game-server image in this path. It builds
+the game-server image from a zip upload with `Dockerfile` at the archive root:
 
 ```bash
-just netcode-secret 1
+just gameflow-server-zip output=.edgegap-build/gameflow/server.zip port=7898
 ```
 
-Store the printed values securely. The same values must be configured in both:
+Upload `.edgegap-build/gameflow/server.zip` to GameFlow and configure the
+primary game port as UDP `7898`. The zip Dockerfile builds the server with the
+`gameflow` feature, which enables Agones ready/health calls and uses
+`PORT=7898` by default.
 
-- the matchmaker/control container,
-- the Edgegap game-server container.
-
-The required variables are:
+If the Docker builder is the bottleneck, build the Linux server and matchmaker
+binaries locally with `cargo-zigbuild`, build the web WASM locally, then create
+runtime-only images that copy those artifacts:
 
 ```bash
-LIGHTRIDER_PROTOCOL_ID=<nonzero-u64>
-LIGHTRIDER_PRIVATE_KEY=<64-hex-character-key>
-LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1
+brew install zig
+cargo install cargo-zigbuild
+just prebuilt-images-build-push tag="$TAG"
 ```
 
-Do not regenerate these independently for the matchmaker and server. If they differ, the matchmaker will issue tokens the game server cannot authenticate.
-
-One convenient local option is to save them in an ignored shell file such as `secrets/prod-netcode.env` and source that file when running production image commands locally.
-
-For the current Lightrider deployment, `LIGHTRIDER_PROTOCOL_ID` is fixed at `1`; only the private key is randomly generated.
-
-### 3. Build And Push Images
-
-Choose a tag. Prefer an immutable tag such as a git SHA or date:
+For a separate build/stage/push flow:
 
 ```bash
-tag="$(git rev-parse --short HEAD)"
+just prebuilt-artifacts
+just prebuilt-images-build tag="$TAG"
+just prebuilt-images-push tag="$TAG"
 ```
 
-Build all three images:
-
-```bash
-just prod-images-build "$tag"
-```
-
-Push all three images:
-
-```bash
-just prod-images-push "$tag"
-```
-
-The recipes produce:
+The default prebuilt target is Linux AMD64:
 
 ```text
-registry.edgegap.com/<project>/lightrider-server:<tag>
-registry.edgegap.com/<project>/lightrider-matchmaker:<tag>
-registry.edgegap.com/<project>/lightrider-webclient:<tag>
+zig_target=x86_64-unknown-linux-gnu.2.36
+platform=linux/amd64
 ```
 
-You can build or push separately:
+For Linux ARM64:
 
 ```bash
-just edgegap-build "$tag"
-just edgegap-push "$tag"
-just matchmaker-build "$tag"
-just matchmaker-push "$tag"
-just webclient-build "$tag"
-just webclient-push "$tag"
+just prebuilt-images-build-push \
+  tag="$TAG" \
+  zig_target=aarch64-unknown-linux-gnu.2.36 \
+  platform=linux/arm64
 ```
 
-One-line local build-and-push, with optional Podman resource limits:
+Use `cargo-zigbuild` here instead of `cross` because this path is specifically
+for avoiding Rust compilation inside Docker/Podman. `cross` is useful in CI and
+when you want a Linux container build environment, but it still compiles inside
+a Docker-compatible container. On macOS that means the same Podman/Docker VM,
+disk, cache, and `/var/tmp` failure modes can still be on the critical path.
+`cargo-zigbuild` runs Cargo and Rust compilation locally, uses Zig for the Linux
+linker/sysroot, and then the Docker image build only copies finished artifacts.
+The prebuilt script also configures `cc-rs` build scripts to use `zig cc`,
+which avoids failures from C dependencies such as `ring` looking for
+`x86_64-linux-gnu-gcc`.
+
+If the final native link fails with `ProcessFdQuotaExceeded`, the macOS shell
+open-file limit is too low for the Rust link step. The prebuilt recipe raises
+the limit to `8192` and uses one native Cargo job by default. You can ask for a
+higher limit explicitly:
 
 ```bash
-just prod-images-build-push "$tag" memory=24g cpus=8
+just prebuilt-images-build-push tag="$TAG" nofile_limit=16384 native_jobs=1
 ```
 
-The deployable images can be built on any machine that has this repo, Podman, and registry credentials. They do not need to be built on the VPS. The common path is:
+If the shell cannot raise the limit itself, run this first in the same terminal:
 
 ```bash
-just prod-images-build-push "$tag"
-SKIP_IMAGE_BUILD=1 just control-host-deploy host=<vps-ip> tag="$tag"
+ulimit -n 16384
 ```
 
-That builds and pushes to the Edgegap container registry locally, then makes the VPS pull and run the already-pushed image.
-
-All production Dockerfiles use `cargo-chef` to cache Rust dependencies as separate image layers. The build context includes `lightrider`, `lightyear`, `lightyear-matchmaker`, and `bevy_replicon`. Lightrider source-only edits should mostly hit final app build layers; sibling path dependency edits can still invalidate dependency layers. The first build is still slow, but rebuilds after ordinary Lightrider source edits should reuse more cached dependency work.
-
-Local production image builds use Podman layer caching by default through `podman build --layers`, plus the `cargo-chef` dependency layers in the Dockerfiles. Keep `NO_CACHE=1` for cases where the build cache is known stale. Direct non-container Rust builds still use the repo's local incremental Cargo profile for iteration, but the production image default keeps `CARGO_INCREMENTAL=0` to avoid large incremental state inside image layers.
-
-The image build context also includes the host CA bundle as `host-ca-certificates.crt`. This lets local container builds trust enterprise TLS interception roots when `rustup` downloads the WASM target; CI copies the GitHub runner CA bundle the same way.
-
-#### GitHub Release Image Builds
-
-The workflow [.github/workflows/release-images.yml](/spare/ssd/cbournhonesque/src/other/lightrider/.github/workflows/release-images.yml) builds and pushes all three production images only when a GitHub Release is published. It does not run on every push.
-
-Required GitHub Actions secrets:
-
-```text
-EDGEGAP_REGISTRY_USERNAME
-EDGEGAP_REGISTRY_TOKEN
-```
-
-Required GitHub Actions variable or secret:
-
-```text
-EDGEGAP_REGISTRY_PROJECT
-```
-
-Optional GitHub Actions secret:
-
-```text
-CHECKOUT_TOKEN
-```
-
-Use `CHECKOUT_TOKEN` when the GitHub Actions `GITHUB_TOKEN` cannot read `cBournhonesque/lightyear` or `cBournhonesque/bevygap`. It should be a token with read access to those repos.
-
-Optional GitHub Actions variables:
-
-```text
-EDGEGAP_REGISTRY_URL=registry.edgegap.com
-LIGHTYEAR_REF=main
-BEVYGAP_REF=main
-```
-
-The workflow checks out Lightrider at the published release ref. Lightyear and Bevygap fall back to their `main` branches by default. If a release depends on unmerged work in either sibling repo, push that work and set `LIGHTYEAR_REF` and/or `BEVYGAP_REF` to a branch, tag, or commit SHA before publishing the release.
-
-GitHub image caching is enabled through Docker Buildx GitHub Actions cache scopes:
-
-```text
-lightrider-server
-lightrider-matchmaker
-```
-
-The Buildx cache stores Docker layers, including the `cargo-chef` dependency layers. This should make repeat release builds much faster when `Cargo.toml`/lockfile inputs did not change. The CI build intentionally uses one Cargo job and no Rust incremental state to reduce memory and cache size on GitHub runners.
-
-The release tag is used as the Docker image tag, so use a Docker-compatible release tag such as `v0.1.0`, `test-20260529`, or `webtest-20260529-110706`.
-
-One-line command to create the release and trigger the GitHub build:
+If a registry upload fails with a broken pipe while writing a blob, retry the
+push phase without rebuilding:
 
 ```bash
-just github-release "<release-tag>"
+just prebuilt-images-push tag="$TAG"
 ```
 
-The workflow pushes:
-
-```text
-registry.edgegap.com/<project>/lightrider-server:<release-tag>
-registry.edgegap.com/<project>/lightrider-matchmaker:<release-tag>
-registry.edgegap.com/<project>/lightrider-webclient:<release-tag>
-```
-
-After the workflow succeeds, the VPS can pull the already-built control stack images:
+Pushes are retried four times by default. To use more attempts:
 
 ```bash
-just control-host-deploy-pull <vps-ip> <release-tag>
+PODMAN_PUSH_RETRIES=8 PODMAN_PUSH_RETRY_SLEEP=15 just prebuilt-images-push tag="$TAG"
 ```
 
-If SSH needs an explicit identity file, pass it as a kwarg:
+If a headless server cross-build fails in `wayland-sys` with a `pkg-config has
+not been configured to support cross-compilation` panic, a windowing/rendering
+feature leaked into the server build graph. The server prebuilt path should not
+compile Wayland/X11 dependencies; keep Bevy's `default_platform` feature on the
+rendered client only, not on the workspace-wide Bevy dependency used by the
+server.
+
+The native artifacts must still be Linux binaries. A normal macOS `cargo build`
+produces Mach-O binaries and cannot run in the Debian runtime images. Check with:
 
 ```bash
-just control-host-deploy-pull host=<vps-ip> tag=<release-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
+file .edgegap-build/context/prebuilt/bin/lightrider-server
+file .edgegap-build/context/prebuilt/bin/lightyear_matchmaker_server
 ```
 
-The Edgegap app version still needs to be synced separately with the same tag and the correct NATS/netcode env:
+Both should report `ELF`, and the architecture should match the image platform.
+
+Build only one image when needed:
 
 ```bash
-just edgegap-release-sync "<release-tag>" "<public-nats-host>:4222" lightrider
+just game-server-build-push tag="$TAG"
+just matchmaker-build-push tag="$TAG"
+just webclient-build-push tag="$TAG"
 ```
 
-For a larger build container, pass Podman limits as just kwargs:
+Pull and restart already-pushed images on an existing VPS:
 
 ```bash
-just matchmaker-build "$tag" memory=24g cpus=8
+just control-host-pull-game-server host="$VPS_HOST" ssh_key="$SSH_KEY" tag="$TAG"
+just control-host-pull-matchmaker host="$VPS_HOST" ssh_key="$SSH_KEY" tag="$TAG"
+just control-host-pull-webclient host="$VPS_HOST" ssh_key="$SSH_KEY" tag="$TAG"
 ```
 
-or through the one-command deploy wrapper:
+## VPS/Static Provider
+
+Use this provider when the game server should run directly on the control VPS.
+It is useful for low-cost production testing and for a fixed regional server.
+
+Deploy or update:
 
 ```bash
-just control-host-deploy host=<vps-ip> tag="$tag" memory=24g cpus=8
+SKIP_IMAGE_BUILD=1 just control-host-deploy \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  https=1 \
+  ssh_key="$SSH_KEY" \
+  tag="$TAG" \
+  allocation_source=nats_static \
+  manage_static_server=1 \
+  run_static_server=1
 ```
 
-`podman build` supports `--memory` and `--memory-swap` directly but not `--cpus`; the recipe maps integer `cpus=N` to `--cpu-period 100000 --cpu-quota N00000`. You can also pass `memory_swap=-1`, `cpu_quota=<quota>`, or `cpuset_cpus=0-7` directly.
-
-The `memory=...` kwarg is a Podman build-container cgroup limit. It does not
-increase the memory available to Podman. On macOS/Windows, also check the
-Podman machine limit with `podman machine inspect` and raise it with
-`podman machine set --memory <MiB>` if needed. On Linux, make sure rootless
-Podman has working cgroup memory delegation. If the build still gets SIGKILLed
-with `memory=24g`, either the Podman VM/host does not actually have that much
-free memory, or the Rust/link workload exceeded the cap. Use lower parallelism
-first:
+Useful service commands on the VPS:
 
 ```bash
-MATCHMAKER_CARGO_JOBS=1 \
-MATCHMAKER_RELEASE_LTO=false \
-MATCHMAKER_RELEASE_CODEGEN_UNITS=16 \
-WEB_CARGO_JOBS=1 \
-WEB_RELEASE_OPT_LEVEL=0 \
-just prod-images-build-push "$tag" memory=24g cpus=4
-```
-
-If the host has swap configured and you want to confirm whether a hard memory
-cap is the immediate problem, try:
-
-```bash
-just matchmaker-build "$tag" memory=24g memory_swap=-1 cpus=2
-```
-
-If disk pressure is high:
-
-```bash
-just clean-edgegap-cache
-```
-
-### 4. Run The Control Stack
-
-Run the matchmaker and web-client images on a public host. A VPS is the simplest first option.
-
-The control stack exposes:
-
-- `80/tcp` or `443/tcp`: public web client.
-- `3000/tcp`: matchmaker WebSocket in no-HTTPS smoke tests; with HTTPS it is bound to localhost behind Caddy.
-- `4222/tcp`: NATS for Edgegap game servers.
-- `8222/tcp`: NATS monitoring. Keep this private if possible.
-
-Production should serve the web client over HTTPS. The web-client image itself serves HTTP on `8080`, so put it behind a TLS reverse proxy such as Caddy, nginx, or your platform's load balancer. Browser WebTransport requires a secure browser context. A public `http://<vps-ip>` page can load the UI and call the matchmaker, but it cannot complete the browser WebTransport game connection.
-
-With a real domain, create an `A` record pointing at the VPS public IP, for example:
-
-```text
-play.example.com A 45.79.138.102
-```
-
-Then deploy with `domain=play.example.com`. The installer installs Caddy, serves the web-client container only on `127.0.0.1:8080`, serves the matchmaker container only on `127.0.0.1:3000`, obtains/renews a Let's Encrypt certificate, exposes public `80/tcp` and `443/tcp`, and configures the browser bootstrap/matchmaker CORS for `https://play.example.com` and `wss://play.example.com/matchmaker/ws`.
-
-If you do not have a domain yet, a temporary wildcard DNS name such as `45.79.138.102.sslip.io` can be used the same way.
-
-#### Automated VPS Setup
-
-For the current VPS control host, the repo provides a one-command installer. It installs Podman on the host, logs into the Edgegap registry, pulls `lightrider-matchmaker` and `lightrider-webclient`, creates separate systemd services, routes public web traffic to the web-client service, exposes NATS for game servers, and persists NATS data under `/var/lib/lightrider/nats`.
-
-Use these recipes for distinct deployment scopes:
-
-| Recipe | Scope | Builds/pushes locally? | Pulls on VPS? | Creates/updates systemd/env? |
-| --- | --- | --- | --- | --- |
-| `control-host-deploy` | Whole control host: matchmaker, webclient, optional static game server | Yes | Yes | Yes |
-| `control-host-deploy-pull` | Whole control host using already-pushed images | No | Yes | Yes |
-| `control-host-pull-game-server` | Existing `lightrider-static-server` service only | No | Yes, game-server only | No |
-| `control-host-pull-matchmaker` | Existing `lightrider-matchmaker` service only | No | Yes, matchmaker only | No |
-| `control-host-pull-webclient` | Existing `lightrider-webclient` service only | No | Yes, webclient only | No |
-| `web-server-install` | Low-level installer step used by `control-host-deploy*` | No | Yes, remotely | Yes |
-
-The `static-server-pull-*` and `deploy-web-server*` names are legacy aliases for these clearer `control-host-*` recipes.
-
-Recipe layering:
-
-```text
-control-host-deploy
-  prod-images-build-push
-    prod-images-build
-      edgegap-build        # game-server image
-      matchmaker-build     # matchmaker/NATS image
-      webclient-build      # browser client image
-    prod-images-push
-  web-server-env-template  # writes local secrets/web-server.env
-  web-server-env-check     # validates that env file
-  web-server-install       # uploads env+installer, then remote VPS pulls images and writes systemd
-  web-server-health        # checks public web endpoint
-
-control-host-deploy-pull
-  control-host-deploy with SKIP_IMAGE_BUILD=1
-
-control-host-pull-game-server
-  _remote-pull-service     # pull/restart only lightrider-static-server
-
-control-host-pull-matchmaker
-  _remote-pull-service     # pull/restart only lightrider-matchmaker
-
-control-host-pull-webclient
-  _remote-pull-service     # pull/restart only lightrider-webclient
-```
-
-The `web-server-*` recipes are lower-level building blocks. Use them directly only when you are debugging or intentionally bypassing part of the high-level flow.
-
-On your local machine, run the whole build/push/install flow with one command:
-
-```bash
-just control-host-deploy host=45.79.138.102
-```
-
-This defaults to host `45.79.138.102`, SSH port `22`, tag `git rev-parse --short HEAD`, and env file `secrets/web-server.env`. It builds and pushes the production images, writes the ignored web-server env file, uploads the installer/env to the VPS, starts the services, deletes the temporary uploaded env file, and checks `http://45.79.138.102/`.
-
-Equivalent explicit form:
-
-```bash
-tag="$(git rev-parse --short HEAD)"
-just control-host-deploy host=45.79.138.102 ssh_port=22 tag="$tag" env=secrets/web-server.env
-```
-
-If the VPS key is not loaded in your SSH agent or default identities, pass it explicitly:
-
-```bash
-just control-host-deploy host=45.79.138.102 ssh_port=22 ssh_key=~/.ssh/lightrider_linode_ed25519 tag="$tag" env=secrets/web-server.env
-```
-
-For HTTPS, pass a domain:
-
-```bash
-just control-host-deploy \
-  host=45.79.138.102 \
-  domain=play.example.com \
-  tag="$tag" \
-  edgegap_version=webtest-20260529-110706 \
-  ssh_key=~/.ssh/lightrider_linode_ed25519
-```
-
-To reuse an already pushed image:
-
-```bash
-just control-host-deploy-pull \
-  host=45.79.138.102 \
-  tag=dev \
-  edgegap_version=webtest-20260529-110706 \
-  domain=play.example.com \
-  ssh_key=~/.ssh/lightrider_linode_ed25519
-```
-
-Temporary no-domain HTTPS using `sslip.io`:
-
-```bash
-just control-host-deploy-pull \
-  host=45.79.138.102 \
-  tag=dev \
-  edgegap_version=dev \
-  domain=45.79.138.102.sslip.io \
-  ssh_key=~/.ssh/lightrider_linode_ed25519
-```
-
-Open:
-
-```text
-https://45.79.138.102.sslip.io/
-```
-
-The matchmaker and web-client image builds default to conservative profiles: two Cargo jobs for native matchmaker code, one Cargo job for the WASM web client, thin or disabled LTO, and multiple codegen units. If `rustc` is still killed by the OS on a smaller host, run the same recipe with `MATCHMAKER_CARGO_JOBS=1 MATCHMAKER_RELEASE_LTO=false MATCHMAKER_RELEASE_CODEGEN_UNITS=16 WEB_CARGO_JOBS=1 WEB_RELEASE_OPT_LEVEL=0`.
-
-For a smaller browser download on a larger builder, use a size profile for the web-client image:
-
-```bash
-WEB_RELEASE_OPT_LEVEL=s WEB_RELEASE_LTO=thin WEB_RELEASE_CODEGEN_UNITS=1 WEB_CARGO_JOBS=1 just webclient-build <tag>
-```
-
-The web-client image content-hashes the generated `.wasm`, pre-gzips web artifacts, serves hashed WASM with a long immutable browser cache, and keeps `index.html`/`bootstrap.js` revalidated so deployments can point clients at a new WASM hash.
-
-`MATCHMAKER_CARGO_INCREMENTAL=1` and `WEB_CARGO_INCREMENTAL=1` are available as opt-in build args, but they are not a substitute for Podman layer caching. A changed source tree still invalidates the image build layer unless the builder can reuse cached layers or cache mounts. For repeated deployment attempts, prefer building once locally, pushing the image, and using `SKIP_IMAGE_BUILD=1` for the VPS install.
-
-The image build also installs the `wasm32-unknown-unknown` Rust target after copying the repo, so the target is installed for the active `rust-toolchain.toml` override. If you build the browser client directly outside Docker and see `can't find crate for 'core'`, install the target locally:
-
-```bash
-rustup target add wasm32-unknown-unknown
-```
-
-If the image is already pushed and you only want to reinstall/update the VPS service, skip the local build:
-
-```bash
-SKIP_IMAGE_BUILD=1 just control-host-deploy host=45.79.138.102 tag=<already-pushed-tag>
-```
-
-Equivalent wrapper:
-
-```bash
-just control-host-deploy-pull host=45.79.138.102 tag=<already-pushed-tag> ssh_key=~/.ssh/lightrider_linode_ed25519
-```
-
-The Docker image tag and Edgegap app-version name can differ. This matters when the Edgegap organization has reached its app-version limit. Reuse an existing Edgegap app version by passing `edgegap_version=...`:
-
-```bash
-just edgegap-release-sync dev 45.79.138.102:4222 lightrider webtest-20260529-110706
-just control-host-deploy-pull host=45.79.138.102 tag=dev edgegap_version=webtest-20260529-110706 ssh_key=~/.ssh/lightrider_linode_ed25519
-```
-
-If the service fails to become healthy, the installer prints recent `journalctl` output. The service intentionally keeps the failed container around so these commands are useful:
-
-```bash
-ssh -i ~/.ssh/lightrider_linode_ed25519 root@45.79.138.102 \
-  'systemctl status lightrider-matchmaker --no-pager; systemctl status lightrider-webclient --no-pager; journalctl -u lightrider-matchmaker -n 160 --no-pager; journalctl -u lightrider-webclient -n 160 --no-pager; podman logs lightrider-matchmaker || true; podman logs lightrider-webclient || true'
-```
-
-If a stale container build cache appears to keep an old Rust target/toolchain layer, force a clean image build:
-
-```bash
-NO_CACHE=1 just matchmaker-build <tag>
-```
-
-On a larger machine you can opt into a heavier build:
-
-```bash
-MATCHMAKER_CARGO_JOBS=4 WEB_CARGO_JOBS=2 MATCHMAKER_RELEASE_OPT_LEVEL=3 WEB_RELEASE_OPT_LEVEL=s just prod-images-build <tag>
-```
-
-Before running it on a fresh local machine, make sure `secrets/edgegap.env` exists there. The generated `secrets/web-server.env` should contain the same `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` that will be configured on the Edgegap game-server app version. If `secrets/prod-netcode.env` exists, the template uses it; otherwise it preserves values from an existing `secrets/web-server.env`, or generates new values for first setup. The template also rotates an empty or default `NATS_PASSWORD=lightrider` into a random password because production startup refuses default `lightrider`/`lightrider` NATS credentials.
-
-The remote script is [deploy/setup_web_server_host.sh](/spare/ssd/cbournhonesque/src/other/lightrider/deploy/setup_web_server_host.sh). The installed control services are `lightrider-matchmaker` and `lightrider-webclient`.
-
-After install:
-
-```bash
-ssh root@45.79.138.102
 systemctl status lightrider-matchmaker --no-pager
 systemctl status lightrider-webclient --no-pager
 systemctl status lightrider-static-server --no-pager
 journalctl -u lightrider-matchmaker -f
-journalctl -u lightrider-webclient -f
-journalctl -u lightrider-static-server -f
-podman logs lightrider-matchmaker
-podman logs lightrider-webclient
-podman logs lightrider-static-server
+podman logs -f lightrider-static-server
 ```
 
-The installer publishes without HTTPS:
+## Edgegap Provider
 
-- `80/tcp`: web client.
-- `3000/tcp`: matchmaker WebSocket (`/ws`) for no-HTTPS smoke tests.
-- `4222/tcp`: NATS for Edgegap game servers.
-- `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
-- `7777/udp`: optional static Lightrider game server when `LIGHTRIDER_RUN_STATIC_SERVER=1`.
+Required local inputs:
 
-With `domain=...`, the installer publishes:
+- pushed `lightrider-server:$TAG` image,
+- `secrets/edgegap.env` with registry and API credentials,
+- `secrets/prod-netcode.env`,
+- a public NATS endpoint reachable by Edgegap game servers.
 
-- `80/tcp` and `443/tcp`: Caddy HTTPS reverse proxy for the web client and `/matchmaker/ws`.
-- `127.0.0.1:8080/tcp`: private web-client upstream, not public.
-- `127.0.0.1:3000/tcp`: private matchmaker upstream, not public.
-- `4222/tcp`: NATS for Edgegap game servers.
-- `8222/tcp`: NATS monitoring bound to `127.0.0.1` on the VPS only.
-- `7777/udp`: optional static Lightrider game server when `LIGHTRIDER_RUN_STATIC_SERVER=1`.
-
-The old `bevygap_matchmaker_httpd` log line `got empty response, breaking` was the normal end-of-stream sentinel after the matchmaker had already sent `SessionReady` or `Error`. Current builds log `matchmaker response stream finished after N chunks` for that normal case and only warn if the stream ends before a terminal response. If you still see the old line, rebuild/push/redeploy the `lightrider-matchmaker` image.
-
-The `4222/tcp` NATS port is publicly reachable if the VPS firewall allows it. That is required for Edgegap-hosted game servers to publish readiness/certificate metadata, but it should be treated as a temporary smoke-test setup unless TLS and strong credentials are enabled. If the Linode firewall is restrictive, allow inbound TCP `4222` from Edgegap egress ranges if available, or from `0.0.0.0/0` only for a short test window.
-
-The first setup uses `NATS_ALLOW_INSECURE=1` because there is no domain/TLS yet. This is acceptable for a smoke test but should become TLS plus firewall restrictions before wider use.
-
-Example direct matchmaker container run for initial testing before NATS TLS is configured:
+Sync the app version:
 
 ```bash
-source secrets/edgegap.env
-source secrets/prod-netcode.env
+# Plaintext NATS mode.
+EDGEGAP_NATS_INSECURE=1 just edgegap-release-sync \
+  tag="$TAG" \
+  nats_host="$VPS_HOST:4222" \
+  app=lightrider \
+  version="$GAME_VERSION" \
+  env_file=secrets/web-server.env
 
-podman run -d --name lightrider-matchmaker \
-  -p 3000:3000 \
-  -p 4222:4222 \
-  -p 127.0.0.1:8222:8222 \
-  -v lightrider-nats-data:/data/nats \
-  -e EDGEGAP_API_KEY="$EDGEGAP_API_KEY" \
-  -e EDGEGAP_APP_NAME=lightrider \
-  -e EDGEGAP_APP_VERSION="$tag" \
-  -e LIGHTRIDER_PROTOCOL_ID="$LIGHTRIDER_PROTOCOL_ID" \
-  -e LIGHTRIDER_PRIVATE_KEY="$LIGHTRIDER_PRIVATE_KEY" \
-  -e LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1 \
-  -e BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=800 \
-  -e BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT=16 \
-  -e BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT=85 \
-  -e NATS_ALLOW_INSECURE=1 \
-  -e NATS_USER=<strong-nats-user> \
-  -e NATS_PASSWORD=<strong-nats-password> \
-  -e MATCHMAKER_CORS=https://<your-domain> \
-  registry.edgegap.com/<project>/lightrider-matchmaker:"$tag"
+# TLS NATS mode, only after public NATS TLS is enabled and verified.
+EDGEGAP_NATS_INSECURE=0 just edgegap-release-sync \
+  tag="$TAG" \
+  nats_host="$DOMAIN:4222" \
+  app=lightrider \
+  version="$GAME_VERSION" \
+  env_file=secrets/web-server.env
 ```
 
-The browser files are served by the separate web-client image:
+If you call the lower-level script directly, pass plain values after the flags:
 
 ```bash
-podman run -d --name lightrider-webclient \
-  -p 8080:8080 \
-  -e LIGHTRIDER_MATCHMAKER_URL=ws://<your-host>:3000/ws \
-  -e LIGHTRIDER_MATCHMAKER_GAME=lightrider \
-  -e LIGHTRIDER_MATCHMAKER_VERSION="$tag" \
-  registry.edgegap.com/<project>/lightrider-webclient:"$tag"
+deploy/edgegap_app_version.sh sync \
+  --app lightrider \
+  --version "$GAME_VERSION" \
+  --tag "$TAG"
 ```
 
-`NATS_ALLOW_INSECURE=1` is an explicit temporary override. Remove it for production NATS TLS.
+Do not pass `--app "app=lightrider"` to the lower-level script. The `app=...`
+syntax is for `just` recipe variables, not shell flags.
 
-For a real public deployment, prefer:
-
-- TLS in front of `8080`.
-- TLS for NATS on `4222`, or at minimum a private network/firewall allowlist.
-- A persistent volume mounted at `/data/nats`.
-- Strong `NATS_USER` and `NATS_PASSWORD`.
-- `8222` not exposed publicly.
-- Matchmaker packing limits sized for the server image: `BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT`, `BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT`, and `BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT`.
-
-NATS TLS is supported by the bundled NATS server and by Bevygap clients. It is separate from website HTTPS: Caddy handles browser HTTPS/WebSocket traffic on `443`, while NATS listens directly on `4222`. It is not strictly necessary for a private smoke test with strong credentials and restricted firewall rules, but it is the right production posture because Edgegap game servers must reach NATS over the public internet.
-
-For the `sslip.io` setup, the simplest NATS TLS certificate source is the Let's Encrypt certificate that Caddy already obtains for `45.79.138.102.sslip.io`. Because it is publicly trusted, there is no custom CA file to send to Edgegap; the game-server container should trust it through the normal system root store.
-
-After the HTTPS deploy is healthy, enable NATS TLS from the Caddy certificate:
+For an Edgegap-only matchmaker, switch the control host to Edgegap allocation:
 
 ```bash
-just web-server-enable-nats-tls-from-caddy \
-  host=45.79.138.102 \
-  domain=45.79.138.102.sslip.io \
-  ssh_key=~/.ssh/lightrider_linode_ed25519
+SKIP_IMAGE_BUILD=1 just control-host-deploy \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  https=1 \
+  ssh_key="$SSH_KEY" \
+  tag="$TAG" \
+  edgegap_version="$GAME_VERSION" \
+  game_version="$GAME_VERSION" \
+  allocation_source=edgegap \
+  manage_static_server=1 \
+  run_static_server=0
 ```
 
-Then update the Edgegap app version to use TLS NATS. Note the `EDGEGAP_NATS_INSECURE=0` override; the default release-sync path keeps insecure NATS enabled for early smoke tests.
+## GameFlow Provider
+
+Required local inputs:
+
+- `.edgegap-build/gameflow/server.zip`,
+- GameFlow game/API credentials,
+- a public NATS endpoint reachable by GameFlow game servers.
+
+Build the GameFlow upload zip:
 
 ```bash
-EDGEGAP_NATS_INSECURE=0 \
-  just edgegap-release-sync dev 45.79.138.102.sslip.io:4222 lightrider dev
+just gameflow-server-zip output=.edgegap-build/gameflow/server.zip port=7898
 ```
 
-This helper copies the current Caddy certificate/key into `/etc/lightrider` for NATS. Caddy will renew its own certificate automatically, but NATS will keep using the copied files until the helper is rerun or a renewal hook/timer is added. Let's Encrypt certificates are short-lived, so production should automate this copy-and-restart step.
-
-If the optional VPS static game server is enabled, the same helper updates it to use `NATS_HOST=<domain>:4222` with secure NATS as well.
-
-If using NATS TLS inside the matchmaker image, put the certificate files under `/etc/lightrider` on the VPS because that directory is mounted read-only into the container. Then set these values in `secrets/web-server.env` or export them before running `just control-host-deploy...` so the template writes them:
+Upload `.edgegap-build/gameflow/server.zip` to GameFlow. In the GameFlow
+dashboard, configure the primary game port as UDP `7898`, and set these runtime
+environment variables for the game server:
 
 ```bash
-NATS_TLS_CERT=/etc/lightrider/nats-cert.pem
-NATS_TLS_KEY=/etc/lightrider/nats-key.pem
-BEVYGAP_REQUIRE_SECURE_NATS=1
-```
-
-The matchmaker container's own NATS clients normally connect to `127.0.0.1:4222`. If the NATS certificate only contains the public DNS name, also set:
-
-```bash
-MATCHMAKER_NATS_HOST=<nats-domain>:4222
-```
-
-For Edgegap game-server app versions, sync the app without `EDGEGAP_NATS_INSECURE=1` and provide a public DNS `NATS_HOST`. If the cert is publicly trusted, no CA override is needed. If it is self-signed, provide trust with `NATS_CA` or `NATS_CA_CONTENTS` through `deploy/edgegap_app_version.sh`.
-
-With `BEVYGAP_REQUIRE_SECURE_NATS=1`, the matchmaker/control container refuses `NATS_INSECURE` and refuses default `lightrider/lightrider` NATS credentials. `NATS_INSECURE` is parsed as a truthy flag, so `NATS_INSECURE=0` and `NATS_INSECURE=false` do not disable TLS.
-
-If Edgegap game servers connect to public NATS with TLS, configure their trust with `NATS_CA` or `NATS_CA_CONTENTS`.
-
-Health checks:
-
-```bash
-curl -fsS http://<web-host>/
-curl -fsS http://<matchmaker-host>:3000/health
-curl -fsS http://<matchmaker-host>:8222/healthz
-```
-
-Container logs to inspect:
-
-```bash
-podman logs lightrider-matchmaker
-podman logs lightrider-webclient
-podman exec lightrider-matchmaker tail -n 200 /var/log/nats.log
-podman exec lightrider-matchmaker tail -n 200 /var/log/lightyear_matchmaker_server.log
-```
-
-### 5. Configure The Edgegap Game-Server App Version
-
-The preferred path is to let the local sync script create or update the app version:
-
-```bash
-source secrets/edgegap.env
-source secrets/prod-netcode.env
-
-export NATS_HOST=<public-matchmaker-or-nats-host>:4222
-export NATS_USER=<same-nats-user>
-export NATS_PASSWORD=<same-nats-password>
-
-just edgegap-app-diff "$tag" "$tag" lightrider
-just edgegap-app-sync "$tag" "$tag" lightrider
-just edgegap-app-verify "$tag" "$tag" lightrider
-```
-
-The first argument is the server image tag. The second argument is the Edgegap app-version name. They can be the same value, but they do not have to be.
-
-The sync script calls Edgegap's app-version API and manages:
-
-- server image repository/image/tag,
-- internal game port `7777`,
-- protocol `UDP`,
-- session config for Bevygap-created sessions,
-- required server env vars,
-- registry pull credentials when present in `secrets/edgegap.env`.
-
-It redacts secrets in terminal output and writes a redacted desired manifest to `.edgegap-build/edgegap-app-version.json`.
-
-Manual equivalent: create or update the Edgegap app/version to use:
-
-```text
-Image: registry.edgegap.com/<project>/lightrider-server:<tag>
-Internal port: 7777
-Protocol: UDP
-```
-
-The protocol is listed as UDP because WebTransport runs over QUIC/UDP. This is not the old raw-UDP gameplay path.
-
-Configure these environment variables on the Edgegap app version:
-
-```bash
-PORT=7777
-LIGHTRIDER_CONFIG=/app/config/default.ron
-LIGHTRIDER_BEVYGAP=1
-LIGHTRIDER_PROTOCOL_ID=<same-value-as-matchmaker>
-LIGHTRIDER_PRIVATE_KEY=<same-value-as-matchmaker>
+PORT=7898
+LIGHTRIDER_MATCHMAKER=1
+LIGHTRIDER_MATCHMAKER_PROVIDER=gameflow
+LIGHTRIDER_MATCHMAKER_GAME=lightrider
+LIGHTRIDER_MATCHMAKER_VERSION=$GAME_VERSION
+LIGHTYEAR_MATCHMAKER_NATS_URL=tls://$DOMAIN:4222
+NATS_USER=<from secrets/web-server.env>
+NATS_PASSWORD=<from secrets/web-server.env>
+LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE=<from secrets/web-server.env>
+LIGHTRIDER_PROTOCOL_ID=<from secrets/web-server.env>
+LIGHTRIDER_PRIVATE_KEY=<from secrets/web-server.env>
 LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1
-NATS_HOST=<public-matchmaker-or-nats-host>:4222
-NATS_USER=<same-nats-user>
-NATS_PASSWORD=<same-nats-password>
-BEVYGAP_NATS_NAMESPACE=<app-or-app-version-namespace>
 ```
 
-Optional Bevygap TTL tuning envs are `BEVYGAP_SESSION_MAPPING_TTL_MS`, `BEVYGAP_UNCLAIMED_SESSION_TTL_SECS`, `BEVYGAP_ACTIVE_CONNECTION_TTL_SECS`, `BEVYGAP_CERT_DIGEST_TTL_SECS`, and `BEVYGAP_DEPLOYMENT_METRICS_TTL_SECS`. Defaults are suitable for the first deployment; set them only when you have a clear retention reason.
-
-The matchmaker/control service decides whether to place a new room on an existing Edgegap deployment using game-server room metrics from NATS KV plus these policy env vars:
+For a GameFlow-only matchmaker, deploy the control host with the GameFlow
+allocation backend:
 
 ```bash
-BEVYGAP_MAX_PLAYERS_PER_DEPLOYMENT=800
-BEVYGAP_MAX_ROOMS_PER_DEPLOYMENT=16
-BEVYGAP_MAX_CPU_PERCENT_PER_DEPLOYMENT=85
+export GAMEFLOW_GAME_ID="<gameflow-game-id>"
+export GAMEFLOW_API_KEY="<gameflow-api-key>"
+export GAMEFLOW_MODE="fleet"
+
+SKIP_IMAGE_BUILD=1 just gameflow-deploy-host \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  https=1 \
+  ssh_key="$SSH_KEY" \
+  tag="$TAG" \
+  allocation_source=gameflow \
+  manage_static_server=1 \
+  run_static_server=0
 ```
 
-These are matchmaker-side limits. The server still enforces per-room behavior from `config/default.ron`, including `rooms.max_players_per_room` and `rooms.max_rooms`.
+Use `GAMEFLOW_BUILD_ID` and `GAMEFLOW_REGION` when your GameFlow mode requires
+an explicit build or region.
 
-If NATS is not using TLS during early testing, also set:
+## Matchmaker URLs
 
-```bash
-NATS_INSECURE=1
-```
-
-For production NATS TLS, prefer leaving `NATS_INSECURE` unset and provide trust material:
-
-```bash
-BEVYGAP_REQUIRE_SECURE_NATS=1
-NATS_CA_CONTENTS=<pem-ca-contents>
-```
-
-or:
-
-```bash
-NATS_CA=<path-in-container>
-```
-
-Edgegap should inject the Arbitrium context variables used by Bevygap, including request id, context URL, public IP, and port mapping. The server entrypoint defaults to:
-
-```bash
-/app/lightrider-server --headless --bevygap --port "$PORT" --config "$LIGHTRIDER_CONFIG"
-```
-
-### 6. Verify Production Flow
-
-Open the web client:
+With HTTPS enabled, the default browser matchmaker URL is:
 
 ```text
-https://<your-domain>/
+wss://<domain>/matchmaker/ws
 ```
 
-If the matchmaker WebSocket is not same-origin, pass it explicitly:
+Without HTTPS, the direct matchmaker URL is:
 
 ```text
-https://<your-domain>/?matchmaker_url=wss://<matchmaker-domain>/matchmaker/ws
+ws://<vps-ip>:3000/ws
 ```
 
-Expected flow:
+The deploy recipe writes the URL into the web-client environment as
+`LIGHTRIDER_MATCHMAKER_URL`.
 
-1. Browser loads `index.html` and `pkg/lightrider-web.js`.
-2. Leptos mounts the web shell and embeds the Bevy client canvas behind the join modal.
-3. Browser connects to `/matchmaker/ws`.
-4. Matchmaker creates or reuses an Edgegap session.
-5. Edgegap starts a `lightrider-server` deployment if needed.
-6. Game server publishes its context and certificate digest to NATS.
-7. Matchmaker returns `SessionReady` with a Lightyear connect token and certificate digest.
-8. Browser connects to the Edgegap external game port over WebTransport.
-9. Game server logs a Lightyear connect event and handles the requested room mode.
+## Debugging Deployment Logs
 
-The first-pass browser shell accepts URL parameters `name`, `room`, `matchmaker`, `matchmaker_url`, `matchmaker_game`, and `matchmaker_version`. `matchmaker=local`, `matchmaker=edgegap`, and `matchmaker=gameflow` select same-origin routed matchmakers such as `/matchmaker/edgegap/ws`; `matchmaker_url` remains the explicit override. `room` can be `auto`, `new`, a four-letter private room code, or a numeric room id.
-
-Useful native token-path test:
+Start with the control host. The matchmaker container writes separate logs for
+NATS and the Lightyear matchmaker process:
 
 ```bash
-cargo run -j 2 -p client --features bevygap,bevygap-matchmaker-tls --bin lightrider-client -- \
-  --client-id 1 \
-  --config config/default.ron \
-  --room auto \
-  --matchmaker-url wss://<matchmaker-domain>/matchmaker/ws \
-  --matchmaker-game lightrider \
-  --matchmaker-version "$tag"
+ssh -i "$SSH_KEY" "root@$VPS_HOST" \
+  'systemctl --no-pager --full status lightrider-matchmaker lightrider-static-server || true'
+
+ssh -i "$SSH_KEY" "root@$VPS_HOST" \
+  'podman exec lightrider-matchmaker tail -n 200 /var/log/lightyear_matchmaker_server.log'
+
+ssh -i "$SSH_KEY" "root@$VPS_HOST" \
+  'podman exec lightrider-matchmaker tail -n 200 /var/log/nats.log'
+
+ssh -i "$SSH_KEY" "root@$VPS_HOST" \
+  'podman logs --tail=200 lightrider-static-server'
 ```
 
-If testing against a non-TLS local/public matchmaker endpoint, use only `--features bevygap` and `ws://...`.
+Redact and inspect the generated deployment environment and matchmaker config:
 
-Logs that should appear:
+```bash
+ssh -i "$SSH_KEY" "root@$VPS_HOST" \
+  'sed -E "s/(PASSWORD|PRIVATE_KEY|TOKEN|API_KEY|SECRET|KEY)=.*/\1=<redacted>/" /etc/lightrider/lightrider-matchmaker.env | sort'
 
-- Matchmaker: session request accepted, Edgegap session ready, `SessionReady` sent.
-- Game server: context loaded, certificate digest extracted, Bevygap client id admitted, Lightyear connect event.
-- Client: matchmaker response received, connecting to server, connected.
+ssh -i "$SSH_KEY" "root@$VPS_HOST" \
+  'podman exec lightrider-matchmaker sh -lc '\''sed -E "s/(password = ).*/\1\"<redacted>\"/; s/(private_key = ).*/\1\"<redacted>\"/" /run/lightrider-matchmaker.toml'\'''
+```
 
-### 7. Production Failure Checklist
+Interpret the matchmaker log by stage:
 
-If the browser does not load:
+- `assignment.created` means the provider returned capacity and the matchmaker
+  persisted an assignment for a specific `server_id`.
+- `state_to="preparing"` means the client was told to wait while the selected
+  game server polls NATS.
+- `state_to="timed_out"` after `preparing` means the selected game server did
+  not acknowledge the assignment. Check the hosted game-server env/logs for
+  NATS URL, credentials, namespace, protocol id, private key, and server id.
+- `provider_router.route_no_capacity` means that route had no usable capacity
+  and the router is trying the next fallback route.
 
-- Confirm HTTPS is configured in front of the matchmaker/control host.
-- Confirm nginx is serving `/` and `/pkg/lightrider-web.js`.
-- Check browser console for WASM load errors.
+For Edgegap, compare the active app version against the desired runtime env:
 
-If the client cannot reach the matchmaker:
+```bash
+deploy/edgegap_app_version.sh show --app lightrider --version "$GAME_VERSION"
+deploy/edgegap_app_version.sh diff --app lightrider --version "$GAME_VERSION" --tag "$TAG"
+```
 
-- Confirm `/matchmaker/ws` is proxied with WebSocket upgrade headers.
-- Confirm `MATCHMAKER_CORS` matches the public web origin.
-- Check `bevygap_matchmaker_httpd.log`.
+If `edgegap-release-sync` updated env vars while Edgegap deployments were
+already running, new sessions can still reuse an old container until Edgegap
+stops it. The matchmaker log `server_id` for an Edgegap assignment is the
+Edgegap deployment request id, so use it to inspect that container:
 
-If sessions are not created:
+```bash
+source secrets/edgegap.env
+export EDGEGAP_API_BASE_URL="${EDGEGAP_API_BASE_URL:-https://api.edgegap.com}"
+export EDGEGAP_REQUEST_ID="<server_id-from-assignment-log>"
 
-- Confirm `EDGEGAP_API_KEY`.
-- Confirm `EDGEGAP_APP_NAME` and `EDGEGAP_APP_VERSION`.
-- Confirm the Edgegap app version points at the pushed `lightrider-server:<tag>` image.
-- Check `bevygap_matchmaker.log`.
+curl -fsS \
+  -H "Authorization: ${EDGEGAP_API_KEY:-${EDGEGAP_API_TOKEN:-${EDGEGAP_TOKEN:?}}}" \
+  "$EDGEGAP_API_BASE_URL/v1/deployment/$EDGEGAP_REQUEST_ID/container-logs"
+```
 
-If the matchmaker waits forever for readiness:
+To force a fresh deployment after changing app-version env, stop the old
+deployment from the Edgegap dashboard or use the bulk-stop API:
 
-- Confirm the Edgegap server has `--bevygap` enabled through `LIGHTRIDER_BEVYGAP=1`.
-- Confirm the game server can reach `NATS_HOST`.
-- Confirm `NATS_USER` and `NATS_PASSWORD` match.
-- Confirm `BEVYGAP_NATS_NAMESPACE` matches between the matchmaker/control service and the Edgegap game-server app version.
-- Confirm NATS TLS/insecure settings match on both sides.
-- Check Edgegap game-server logs for context and certificate digest publication.
+```bash
+curl -fsS -X POST \
+  -H "Authorization: ${EDGEGAP_API_KEY:-${EDGEGAP_API_TOKEN:-${EDGEGAP_TOKEN:?}}}" \
+  -H "Content-Type: application/json" \
+  "$EDGEGAP_API_BASE_URL/v1/deployments/bulk-stop" \
+  --data-binary @- <<EOF
+{
+  "filters": [
+    {
+      "field": "request_id",
+      "values": ["$EDGEGAP_REQUEST_ID"],
+      "filter_type": "any"
+    }
+  ]
+}
+EOF
+```
 
-If the token is rejected:
+The Edgegap game-server env must match the control host on:
 
-- Confirm `LIGHTRIDER_PROTOCOL_ID` and `LIGHTRIDER_PRIVATE_KEY` are identical on matchmaker and game server.
-- Confirm `LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE=1` is set on both in production.
-- Confirm the Bevygap server admission watcher logs the issued client id before the client connects.
+- `LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE`,
+- `NATS_USER` / `NATS_PASSWORD`,
+- `LIGHTRIDER_PROTOCOL_ID` / `LIGHTRIDER_PRIVATE_KEY`,
+- NATS transport mode.
 
-If WebTransport connection fails:
+Check the public NATS mode with the server `INFO` line:
 
-- Confirm the Edgegap app version exposes internal port `7777` with UDP protocol.
-- Confirm Edgegap reports an external UDP port for the deployment/session.
-- Confirm the server published a certificate digest and the client received it in `SessionReady`.
-- Confirm the browser page is running in a secure context. `https://...` is required for public hosts; `http://localhost` and `http://127.0.0.1` are acceptable for local tests.
-- If the matchmaker builds a token and the game server logs `Bevygap client id ... is now admissible`, but there is no `BevygapConnectionRequestHandler(...)` or Lightyear connect log, the browser likely never opened WebTransport. Check the browser console and the page origin before chasing NATS or netcode identity.
+```bash
+ssh -i "$SSH_KEY" "root@$VPS_HOST" "DOMAIN='$DOMAIN' bash -s" <<'EOF'
+exec 3<>/dev/tcp/"$DOMAIN"/4222
+IFS= read -r line <&3
+printf '%s\n' "$line"
+EOF
+```
+
+If the line contains `"tls_required":true`, sync Edgegap with
+`EDGEGAP_NATS_INSECURE=0` and `nats_host="$DOMAIN:4222"`. If it does not,
+sync Edgegap with `EDGEGAP_NATS_INSECURE=1` and `nats_host="$VPS_HOST:4222"`.
+
+When NATS is in TLS mode, `nats_host` must be the DNS name on the certificate,
+not the raw VPS IP. A NATS log line like `TLS handshake error: remote error:
+tls: bad certificate` plus hosted game-server logs like `certificate not valid
+for name "45.79.138.102"; certificate is only valid for
+DnsName("45.79.138.102.sslip.io")` means the Edgegap app version is still using
+the IP address in `NATS_HOST` or `LIGHTYEAR_MATCHMAKER_NATS_URL`. Re-run the
+sync with the certificate name, then stop any old Edgegap deployment so the next
+session starts with the updated environment:
+
+```bash
+EDGEGAP_NATS_INSECURE=0 just edgegap-release-sync \
+  tag="$TAG" \
+  nats_host="$DOMAIN:4222" \
+  app=lightrider \
+  version="$GAME_VERSION" \
+  env_file=secrets/web-server.env
+```
+
+## Troubleshooting
+
+If Podman or Buildah fails with `/var/tmp/... input/output error`, treat it as a
+Podman VM or host storage failure, not as a Rust compile error. On macOS, the
+fastest recovery path is usually:
+
+```bash
+podman machine stop
+podman machine start
+podman system df
+podman builder prune -f
+```
+
+If the VM is too small for production image builds, resize or recreate it:
+
+```bash
+podman machine stop
+podman machine set --disk-size 80 --memory 8192 --cpus 4
+podman machine start
+```
+
+If resizing is not supported by your Podman version, recreate the machine after
+backing up anything important:
+
+```bash
+podman machine stop
+podman machine rm
+podman machine init --disk-size 80 --memory 8192 --cpus 4
+podman machine start
+```
+
+If Edgegap or GameFlow servers cannot join the matchmaker:
+
+```bash
+ssh -i "$SSH_KEY" "root@$VPS_HOST" 'podman exec lightrider-matchmaker tail -n 200 /var/log/nats.log'
+ssh -i "$SSH_KEY" "root@$VPS_HOST" 'podman exec lightrider-matchmaker tail -n 200 /var/log/lightyear_matchmaker_server.log'
+ssh -i "$SSH_KEY" "root@$VPS_HOST" "DOMAIN='$DOMAIN' bash -s" <<'EOF'
+exec 3<>/dev/tcp/"$DOMAIN"/4222
+IFS= read -r line <&3
+printf '%s\n' "$line"
+EOF
+```
+
+For the normal [NATS TLS mode](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/tls),
+`openssl s_client -connect "$DOMAIN:4222"` is not a valid health check. NATS
+sends an initial plaintext `INFO` line first, then NATS clients upgrade to TLS
+when that line advertises `"tls_required":true`. Seeing `wrong version number`
+from direct OpenSSL usually means OpenSSL read the expected `INFO ` prefix.
+Check the NATS line instead; it should contain `"tls_required":true`.
+
+If the NATS line does not advertise required TLS, rebuild, push, redeploy with
+the same tag, then rerun the TLS recipe:
+
+```bash
+just prod-images-build-push tag="$TAG"
+
+SKIP_IMAGE_BUILD=1 just control-host-deploy \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  https=1 \
+  ssh_key="$SSH_KEY" \
+  tag="$TAG" \
+  allocation_source=nats_static \
+  game_version="$GAME_VERSION" \
+  manage_static_server=1 \
+  run_static_server=1
+
+just web-server-enable-nats-tls-from-caddy \
+  host="$VPS_HOST" \
+  domain="$DOMAIN" \
+  ssh_key="$SSH_KEY"
+```
+
+Check that the matchmaker allocation source matches the provider you are
+testing, and that hosted game servers use the same `LIGHTRIDER_PROTOCOL_ID`,
+`LIGHTRIDER_PRIVATE_KEY`, NATS credentials, and NATS namespace as the control
+host.

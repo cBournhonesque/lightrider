@@ -1,0 +1,25 @@
+FROM nats:latest AS nats
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=nats /nats-server /app/nats-server
+COPY prebuilt/bin/lightyear_matchmaker_server /app/lightyear_matchmaker_server
+COPY lightrider/deploy/matchmaker-container-entrypoint.sh /app/matchmaker-container-entrypoint.sh
+
+RUN chmod +x \
+    /app/nats-server \
+    /app/lightyear_matchmaker_server \
+    /app/matchmaker-container-entrypoint.sh
+
+EXPOSE 3000/tcp
+EXPOSE 4222/tcp
+EXPOSE 8222/tcp
+
+ENTRYPOINT ["/app/matchmaker-container-entrypoint.sh"]

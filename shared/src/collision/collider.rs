@@ -51,7 +51,7 @@ pub struct SnakeFrictionEvent {
     pub distance: f32,
 }
 
-pub const MAX_FRICTION_DISTANCE: f32 = 20.0;
+pub const MAX_FRICTION_DISTANCE: f32 = 14.0;
 
 #[derive(Clone, Copy)]
 struct FrictionTail<'a> {
@@ -720,7 +720,7 @@ mod tests {
             vec![SnakeFrictionEvent {
                 main: predicted,
                 other: remote,
-                distance: MAX_FRICTION_DISTANCE / 2.0,
+                distance: 10.0,
             }]
         );
     }

@@ -3,6 +3,7 @@ mod wasm {
     use client::WebClientOptions;
     use leptos::prelude::*;
     use leptos_bevy_canvas::prelude::*;
+    use lightyear_matchmaker_core::ProviderKind;
     use shared::network::protocol::prelude::{RoomCode, RoomId, RoomJoinMode};
     use wasm_bindgen::JsCast;
 
@@ -10,13 +11,19 @@ mod wasm {
     const DEFAULT_VERSION: &str = "dev";
     const CANVAS_ID: &str = "bevy_canvas";
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq)]
     struct BrowserSettings {
         matchmaker_url: String,
         matchmaker_game: String,
         matchmaker_version: String,
+        matchmaker_provider: Option<ProviderKind>,
         player_name: String,
         room: RoomJoinMode,
+        headless: bool,
+        auto_respawn: bool,
+        turn_stress_hz: f32,
+        turn_stress_seconds: f32,
+        browser_rtt_probe: bool,
     }
 
     pub fn run() {
@@ -47,7 +54,10 @@ mod wasm {
         let (error, set_error) = signal(String::new());
         let can_start_bevy = startup_error.is_none();
         publish_player_settings(&settings.player_name, settings.room);
-        let initial_bevy_options = can_start_bevy.then(|| settings.bevy_options());
+        let initial_bevy_options = (can_start_bevy && !show_modal).then(|| settings.bevy_options());
+        if initial_bevy_options.is_some() {
+            focus_canvas_soon();
+        }
         let (bevy_options, set_bevy_options) = signal(initial_bevy_options);
         let submit_settings = settings.clone();
         leptos::prelude::window_event_listener(leptos::ev::keydown, move |event| {
@@ -95,6 +105,7 @@ mod wasm {
                             submit_settings.bevy_options_with(player_name, room_mode),
                         ));
                     }
+                    focus_canvas_soon();
                 }
                 Err(message) => set_error.set(message),
             }
@@ -194,6 +205,27 @@ mod wasm {
         web_sys::window()?.document()?.get_element_by_id(id)
     }
 
+    fn focus_canvas_soon() {
+        focus_canvas();
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let callback = wasm_bindgen::closure::Closure::once(focus_canvas);
+        let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+        callback.forget();
+    }
+
+    fn focus_canvas() {
+        let Some(canvas) =
+            document_element_by_id(CANVAS_ID).and_then(|element| element.dyn_into().ok())
+        else {
+            return;
+        };
+        let canvas: web_sys::HtmlElement = canvas;
+        let _ = canvas.set_attribute("tabindex", "0");
+        let _ = canvas.focus();
+    }
+
     fn room_badge_text(room: RoomJoinMode) -> Option<String> {
         match room {
             RoomJoinMode::Private(code) => Some(format!("ROOM {code}")),
@@ -232,11 +264,28 @@ mod wasm {
                     .filter(|value| !value.trim().is_empty())
                     .or_else(|| bootstrap.matchmaker_version.clone())
                     .unwrap_or_else(|| DEFAULT_VERSION.to_string()),
+                matchmaker_provider: parse_provider_param(params.get("provider"))
+                    .or_else(|| parse_provider_param(params.get("matchmaker_provider"))),
                 player_name: params
                     .get("name")
                     .map(|name| sanitize_player_name(&name))
                     .unwrap_or_default(),
                 room,
+                headless: parse_bool_param(&params, "headless")
+                    || matches!(
+                        params.get("render").unwrap_or_default().trim(),
+                        "0" | "false" | "off"
+                    ),
+                auto_respawn: parse_bool_param(&params, "auto_respawn")
+                    || parse_bool_param(&params, "auto-respawn"),
+                turn_stress_hz: parse_positive_f32_param(&params, "turn_stress_hz")
+                    .or_else(|| parse_positive_f32_param(&params, "turn-stress-hz"))
+                    .unwrap_or(0.0),
+                turn_stress_seconds: parse_positive_f32_param(&params, "turn_stress_seconds")
+                    .or_else(|| parse_positive_f32_param(&params, "turn-stress-seconds"))
+                    .unwrap_or(0.0),
+                browser_rtt_probe: parse_bool_param(&params, "rtt_probe")
+                    || parse_bool_param(&params, "browser_rtt_probe"),
             }
         }
 
@@ -249,9 +298,15 @@ mod wasm {
                 matchmaker_url: self.matchmaker_url.clone(),
                 matchmaker_game: self.matchmaker_game.clone(),
                 matchmaker_version: self.matchmaker_version.clone(),
+                matchmaker_provider: self.matchmaker_provider,
                 room,
                 name: player_name,
                 canvas_selector: format!("#{CANVAS_ID}"),
+                headless: self.headless,
+                auto_respawn: self.auto_respawn,
+                turn_stress_hz: self.turn_stress_hz,
+                turn_stress_seconds: self.turn_stress_seconds,
+                browser_rtt_probe: self.browser_rtt_probe,
             }
         }
     }
@@ -336,6 +391,32 @@ mod wasm {
             return RoomJoinMode::Auto;
         };
         parse_room_input(&value).unwrap_or(RoomJoinMode::Auto)
+    }
+
+    fn parse_provider_param(value: Option<String>) -> Option<ProviderKind> {
+        match value?.trim().to_ascii_lowercase().as_str() {
+            "static" => Some(ProviderKind::Static),
+            "edgegap" => Some(ProviderKind::Edgegap),
+            "gameflow" => Some(ProviderKind::Gameflow),
+            _ => None,
+        }
+    }
+
+    fn parse_positive_f32_param(params: &web_sys::UrlSearchParams, key: &str) -> Option<f32> {
+        let parsed = params.get(key)?.trim().parse::<f32>().ok()?;
+        parsed.is_finite().then_some(parsed.max(0.0))
+    }
+
+    fn parse_bool_param(params: &web_sys::UrlSearchParams, key: &str) -> bool {
+        matches!(
+            params
+                .get(key)
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "1" | "true" | "yes" | "on"
+        )
     }
 
     fn parse_room_input(value: &str) -> Result<RoomJoinMode, String> {

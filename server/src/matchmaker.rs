@@ -23,7 +23,7 @@ pub(crate) fn matchmaker_server_plugin(
     port: u16,
     config: &GameConfig,
 ) -> LightyearMatchmakerServerPlugin {
-    LightyearMatchmakerServerPlugin::new(registered_server(port))
+    let plugin = LightyearMatchmakerServerPlugin::new(registered_server(port))
         .with_capacity_limits(
             max_players(config),
             config.rooms.max_rooms.max(1).try_into().unwrap_or(u32::MAX),
@@ -32,7 +32,10 @@ pub(crate) fn matchmaker_server_plugin(
             nats: nats_config_from_env(),
             ..default()
         })
-        .with_lightyear_netcode()
+        .with_lightyear_netcode();
+    #[cfg(feature = "gameflow")]
+    let plugin = plugin.with_agones_sdk();
+    plugin
 }
 
 pub(crate) struct LightriderMatchmakerMetricsPlugin;

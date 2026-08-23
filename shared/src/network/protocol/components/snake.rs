@@ -169,6 +169,13 @@ impl TailPoints {
         self.recompute_turn_path_length();
     }
 
+    pub fn apply_topology_diff(&mut self, diff: TailPointsDiff) {
+        match diff {
+            TailPointsDiff::PushTurn(turn) => self.push_turn(turn),
+            TailPointsDiff::RemoveTailTurns(count) => self.remove_tail_turns(usize::from(count)),
+        }
+    }
+
     pub fn prune_to_length(&mut self, head: &SnakeHead, length: f32) -> usize {
         let retained_length = length.max(0.0);
         let mut distance = 0.0;
@@ -298,6 +305,16 @@ impl PartialEq for TailPoints {
     }
 }
 
+impl RepliconDiffable for TailPoints {
+    type Diff = TailPointsDiff;
+    const HISTORY_LEN: usize = 512;
+
+    fn apply_diff(&mut self, diff: &Self::Diff) -> Result<()> {
+        self.apply_topology_diff(*diff);
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub enum TailPointsDiff {
     PushTurn(TailTurn),
@@ -310,6 +327,7 @@ pub struct TailPointsCorrection {
 }
 
 #[derive(Component, Deserialize, Serialize, Clone, Debug, PartialEq, Reflect)]
+#[component(map_entities)]
 pub struct HasPlayer(pub Entity);
 
 impl MapEntities for HasPlayer {
@@ -469,20 +487,6 @@ fn tail_direction_between(start: Vec2, end: Vec2) -> Option<Direction> {
         })
     } else {
         None
-    }
-}
-
-impl RepliconDiffable for TailPoints {
-    type Diff = TailPointsDiff;
-
-    const HISTORY_LEN: usize = 512;
-
-    fn apply_diff(&mut self, diff: &Self::Diff) -> Result<()> {
-        match *diff {
-            TailPointsDiff::PushTurn(turn) => self.push_turn(turn),
-            TailPointsDiff::RemoveTailTurns(count) => self.remove_tail_turns(usize::from(count)),
-        }
-        Ok(())
     }
 }
 
@@ -728,6 +732,17 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn has_player_component_maps_player_entity() {
+        let server_player = Entity::from_bits(1);
+        let client_player = Entity::from_bits(2);
+        let mut has_player = HasPlayer(server_player);
+
+        Component::map_entities(&mut has_player, &mut (server_player, client_player));
+
+        assert_eq!(has_player.0, client_player);
     }
 
     #[test]

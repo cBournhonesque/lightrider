@@ -1,4 +1,4 @@
-server config="config/test.ron" port="5000" release="false":
+server config="config/test.ron" port="5000" release="false" bots="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -f secrets/admin.env ]]; then
@@ -10,7 +10,11 @@ server config="config/test.ron" port="5000" release="false":
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p server --bin lightrider-server -- --headless --port {{ port }} --config {{ config }}
+    server_args=(--headless --port {{ port }} --config {{ config }})
+    if [[ -n "{{ bots }}" ]]; then
+      server_args+=(--bots {{ bots }})
+    fi
+    cargo run "${cargo_args[@]}" -p server --no-default-features --features server --bin lightrider-server -- "${server_args[@]}"
 
 client id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
     #!/usr/bin/env bash
@@ -19,7 +23,7 @@ client id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room=
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --client-id {{ id }} --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }}
+    cargo run "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client -- --client-id {{ id }} --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }}
 
 client-debug id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
     #!/usr/bin/env bash
@@ -28,7 +32,7 @@ client-debug id="1" config="config/test.ron" server_addr="127.0.0.1" port="5000"
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --debug --client-id {{ id }} --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }}
+    cargo run "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client -- --debug --client-id {{ id }} --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }}
 
 bot id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
     #!/usr/bin/env bash
@@ -37,7 +41,7 @@ bot id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room=
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id {{ id }} --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }}
+    cargo run "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client -- --headless --mode player --auto-respawn --client-id {{ id }} --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }}
 
 bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" port="5000" room="auto" release="false":
     #!/usr/bin/env bash
@@ -48,7 +52,7 @@ bots count="4" first_id="1001" config="config/test.ron" server_addr="127.0.0.1" 
       cargo_args+=(--release)
     fi
     for i in $(seq 0 $(({{ count }} - 1))); do
-      cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $(({{ first_id }} + i)) --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }} &
+      cargo run "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client -- --headless --mode player --auto-respawn --client-id $(({{ first_id }} + i)) --server-addr {{ server_addr }} --server-port {{ port }} --config {{ config }} --room {{ room }} &
       sleep 1
     done
     wait
@@ -125,14 +129,8 @@ local *args:
     if [[ "$release_arg" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p server --bin lightrider-server -- --headless --port "$port_arg" --config "$config_arg" &
+    cargo run "${cargo_args[@]}" -p server --no-default-features --features server --bin lightrider-server -- --headless --port "$port_arg" --config "$config_arg" --bots "$bots_arg" &
     sleep 2
-    if (( bots_arg > 0 )); then
-      for i in $(seq 0 $((bots_arg - 1))); do
-        cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- --headless --mode bot --client-id $((first_bot_id_arg + i)) --server-port "$port_arg" --config "$config_arg" --room "$room_arg" &
-        sleep 1
-      done
-    fi
     foreground_client_args=(--client-id "$client_id_arg" --server-port "$port_arg" --config "$config_arg" --room "$room_arg")
     if [[ -n "$name_arg" ]]; then
       foreground_client_args+=(--name "$name_arg")
@@ -141,9 +139,9 @@ local *args:
       foreground_client_args+=(--auto-respawn)
     fi
     if [[ "$headless_arg" == "true" || "$headless_arg" == "1" || "$headless_arg" == "yes" ]]; then
-      foreground_client_args=(--headless --mode bot "${foreground_client_args[@]}")
+      foreground_client_args=(--headless --mode player "${foreground_client_args[@]}")
     fi
-    cargo run "${cargo_args[@]}" -p client --bin lightrider-client -- "${foreground_client_args[@]}"
+    cargo run "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client -- "${foreground_client_args[@]}"
 
 trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_client_id="2001" room="auto" release="false":
     #!/usr/bin/env bash
@@ -163,7 +161,8 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
       bin_dir="release"
     fi
     target_dir="${CARGO_TARGET_DIR:-target}"
-    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
+    cargo build "${cargo_args[@]}" -p server --no-default-features --features server --bin lightrider-server
+    cargo build "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client
     pids=()
     cleanup() {
       for pid in "${pids[@]}"; do
@@ -180,7 +179,7 @@ trace-local clients="4" seconds="20" config="config/test.ron" port="5000" first_
     for i in $(seq 0 $(({{ clients }} - 1))); do
       id=$(({{ first_client_id }} + i))
       RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
-        "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{ port }} --config {{ config }} --room {{ room }} \
+        "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-port {{ port }} --config {{ config }} --room {{ room }} \
         > "$run_dir/client-$id.log" 2>&1 &
       pids+=("$!")
       sleep 1
@@ -239,7 +238,8 @@ interpolation-stress *args:
       bin_dir="release"
     fi
     target_dir="${CARGO_TARGET_DIR:-target}"
-    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
+    cargo build "${cargo_args[@]}" -p server --no-default-features --features server --bin lightrider-server
+    cargo build "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client
     pids=()
     cleanup() {
       for pid in "${pids[@]}"; do
@@ -256,7 +256,7 @@ interpolation-stress *args:
     for i in $(seq 0 $((clients - 1))); do
       id=$((first_client_id + i))
       RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-bot-$id.ndjson" \
-        "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+        "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
         > "$run_dir/client-bot-$id.log" 2>&1 &
       pids+=("$!")
       sleep 0.5
@@ -268,9 +268,9 @@ interpolation-stress *args:
     python3 tools/interpolation_stress_check.py "$run_dir" --max-interpolated-step-per-tick "$max_step_per_tick"
 
 # Load-test commands are intentionally separate from trace-local:
-# - `load-local` starts a server, many headless bot clients, OS samplers, and
+# - `load-local` starts a server, many headless player clients, OS samplers, and
 #   low-rate Lightyear JSONL tracing for the server plus a small client sample.
-# - `fake-clients` only launches headless bot clients against an already-running
+# - `fake-clients` only launches headless player clients against an already-running
 #   server, useful for testing deployed or manually started servers.
 # Metrics written under logs/load include CPU, RSS/HWM memory, network interface
 # throughput, frame/link trace rows, transport packet rows, and received fragment
@@ -351,7 +351,8 @@ load-local *args:
       bin_dir="release"
     fi
     target_dir="${CARGO_TARGET_DIR:-target}"
-    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
+    cargo build "${cargo_args[@]}" -p server --no-default-features --features server --bin lightrider-server
+    cargo build "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client
     pids_file="$run_dir/pids.csv"
     echo "role,name,pid" > "$pids_file"
     pids=()
@@ -391,11 +392,11 @@ load-local *args:
       id=$((first_client_id + i))
       if (( i < trace_clients )); then
         RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
-          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       else
         RUST_LOG="warn" \
-          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       fi
       client_pid="$!"
@@ -462,7 +463,7 @@ fake-clients *args:
       bin_dir="release"
     fi
     target_dir="${CARGO_TARGET_DIR:-target}"
-    cargo build "${cargo_args[@]}" -p client --bin lightrider-client
+    cargo build "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client
     pids_file="$run_dir/pids.csv"
     echo "role,name,pid" > "$pids_file"
     pids=()
@@ -489,11 +490,11 @@ fake-clients *args:
       id=$((first_id + i))
       if (( i < trace_clients )); then
         RUST_LOG="warn,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-$id.ndjson" \
-          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       else
         RUST_LOG="warn" \
-          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-addr "$server_addr" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
       fi
       client_pid="$!"
@@ -577,8 +578,8 @@ profile-chrome *args:
       cargo_incremental="1"
     fi
     target_dir="${CARGO_TARGET_DIR:-target}"
-    CARGO_INCREMENTAL="$cargo_incremental" cargo build "${cargo_args[@]}" -p server --features profile-chrome --bin lightrider-server
-    CARGO_INCREMENTAL="$cargo_incremental" cargo build "${cargo_args[@]}" -p client --bin lightrider-client
+    CARGO_INCREMENTAL="$cargo_incremental" cargo build "${cargo_args[@]}" -p server --no-default-features --features "server profile-chrome" --bin lightrider-server
+    CARGO_INCREMENTAL="$cargo_incremental" cargo build "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client
     pids_file="$run_dir/pids.csv"
     echo "role,name,pid" > "$pids_file"
     client_pids=()
@@ -617,7 +618,7 @@ profile-chrome *args:
       for i in $(seq 0 $((clients - 1))); do
         id=$((first_client_id + i))
         RUST_LOG="warn" \
-          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-port "$port" --config "$config" --room "$room" \
           > "$run_dir/client-$id.log" 2>&1 &
         client_pid="$!"
         client_pids+=("$client_pid")
@@ -672,7 +673,8 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
       bin_dir="release"
     fi
     target_dir="${CARGO_TARGET_DIR:-target}"
-    cargo build "${cargo_args[@]}" -p server --bin lightrider-server -p client --bin lightrider-client
+    cargo build "${cargo_args[@]}" -p server --no-default-features --features server --bin lightrider-server
+    cargo build "${cargo_args[@]}" -p client --no-default-features --features client --bin lightrider-client
     pids=()
     cleanup() {
       for pid in "${pids[@]}"; do
@@ -695,7 +697,7 @@ trace-local-mixed seconds="20" config="config/test.ron" port="5000" player_id="3
       for i in $(seq 0 $(({{ bot_clients }} - 1))); do
         id=$(({{ first_bot_id }} + i))
         RUST_LOG="info,lightyear_debug=trace" LIGHTYEAR_DEBUG_FILE="$run_dir/client-bot-$id.ndjson" \
-          "$target_dir/$bin_dir/lightrider-client" --headless --mode bot --client-id "$id" --server-port {{ port }} --config {{ config }} --room {{ room }} \
+          "$target_dir/$bin_dir/lightrider-client" --headless --mode player --auto-respawn --client-id "$id" --server-port {{ port }} --config {{ config }} --room {{ room }} \
           > "$run_dir/client-bot-$id.log" 2>&1 &
         pids+=("$!")
         sleep 1
@@ -799,7 +801,7 @@ lightyear-matchmaker-server-local config="config/test.ron" port="7777" release="
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p server --features lightyear-matchmaker --bin lightrider-server -- --headless --matchmaker --port {{ port }} --config {{ config }}
+    cargo run "${cargo_args[@]}" -p server --no-default-features --features "server lightyear-matchmaker" --bin lightrider-server -- --headless --matchmaker --port {{ port }} --config {{ config }}
 
 # Start the standalone matchmaker. By default it uses live static capacity from
 # NATS; set LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE=edgegap to use Edgegap.
@@ -880,7 +882,7 @@ lightyear-matchmaker-client-bot id="3001" config="config/test.ron" matchmaker_ur
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo run "${cargo_args[@]}" -p client --features lightyear-matchmaker --bin lightrider-client -- --headless --mode bot --client-id {{ id }} --config {{ config }} --room {{ room }} --matchmaker-url {{ matchmaker_url }} --matchmaker-game {{ game }} --matchmaker-version {{ version }}
+    cargo run "${cargo_args[@]}" -p client --no-default-features --features "client lightyear-matchmaker" --bin lightrider-client -- --headless --mode player --auto-respawn --client-id {{ id }} --config {{ config }} --room {{ room }} --matchmaker-url {{ matchmaker_url }} --matchmaker-game {{ game }} --matchmaker-version {{ version }}
 
 # Build server/client/matchmaker binaries, run NATS, run a local static game
 # server, run the matchmaker, then verify a bot can obtain a Lightyear token and
@@ -904,8 +906,8 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
     nats_user="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_USER:-lightrider}"
     nats_password="${LIGHTYEAR_MATCHMAKER_SMOKE_NATS_PASSWORD:-lightrider}"
     namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-lightrider_dev}}"
-    cargo build "${cargo_args[@]}" -p server --features lightyear-matchmaker --bin lightrider-server
-    cargo build "${cargo_args[@]}" -p client --features lightyear-matchmaker --bin lightrider-client
+    cargo build "${cargo_args[@]}" -p server --no-default-features --features "server lightyear-matchmaker" --bin lightrider-server
+    cargo build "${cargo_args[@]}" -p client --no-default-features --features "client lightyear-matchmaker" --bin lightrider-client
     CARGO_TARGET_DIR="$matchmaker_target_dir" cargo build "${cargo_args[@]}" --manifest-path ../lightyear-matchmaker/Cargo.toml -p lightyear_matchmaker_server --bin lightyear_matchmaker_server
 
     pids=()
@@ -985,7 +987,7 @@ lightyear-matchmaker-local-smoke seconds="8" config="config/test.ron" port="7777
 
     timeout "$(({{ seconds }} + 8))" \
       "$target_dir/$bin_dir/lightrider-client" \
-        --headless --mode bot --client-id {{ client_id }} --config {{ config }} --room auto \
+        --headless --mode player --auto-respawn --client-id {{ client_id }} --config {{ config }} --room auto \
         --matchmaker-url "ws://127.0.0.1:{{ matchmaker_port }}/ws" \
         --matchmaker-game lightrider \
         --matchmaker-version dev \
@@ -1019,7 +1021,7 @@ game-server-build-local release="false":
     if [[ "{{ release }}" == "true" ]]; then
       cargo_args+=(--release)
     fi
-    cargo build "${cargo_args[@]}" -p server --features lightyear-matchmaker --bin lightrider-server
+    cargo build "${cargo_args[@]}" -p server --no-default-features --features "server lightyear-matchmaker" --bin lightrider-server
 
 # Compile the standalone lightyear_matchmaker_server from the sibling repo.
 matchmaker-build-local release="false":
@@ -1039,17 +1041,18 @@ web-build release="false":
     rustup target add wasm32-unknown-unknown
     tool_root=".edgegap-build/tools"
     wasm_bindgen="$tool_root/bin/wasm-bindgen"
+    wasm_bindgen_version="${WASM_BINDGEN_CLI_VERSION:-0.2.126}"
     need_wasm_bindgen=1
     if [[ -x "$wasm_bindgen" ]]; then
       version="$("$wasm_bindgen" --version | awk '{print $2}')"
-      if [[ "$version" == "0.2.122" ]]; then
+      if [[ "$version" == "$wasm_bindgen_version" ]]; then
         need_wasm_bindgen=0
       fi
     fi
     if [[ "$need_wasm_bindgen" == "1" ]]; then
       rustup run nightly cargo install \
         wasm-bindgen-cli \
-        --version 0.2.122 \
+        --version "$wasm_bindgen_version" \
         --locked \
         --force \
         --root "$tool_root"

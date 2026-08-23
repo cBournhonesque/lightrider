@@ -1,9 +1,7 @@
 use crate::collision::collider::{snake_friction, SnakeFrictionEvent};
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
-use bevy_replicon::prelude::{
-    Diffable as RepliconDiffable, EntityCommandsDiffExt, ReplicationStorage,
-};
+use bevy_replicon::prelude::{EntityCommandsDiffExt, ReplicationStorage};
 use lightyear::prelude::input::bei::Fire;
 
 use crate::config::GameConfig;
@@ -21,16 +19,83 @@ pub enum SimulationSet {
 }
 
 pub const MIN_SPEED: f32 = 0.85;
-pub const MAX_SPEED: f32 = 3.0;
+pub const MAX_SPEED: f32 = 2.45;
 pub const BASE_ACCELERATION: f32 = -0.01;
-pub const ACCELERATION_RATIO: f32 = 2.0;
+pub const ACCELERATION_RATIO: f32 = 1.35;
+const TURN_RATE_LIMIT_HISTORY: usize = 16;
+pub const TURN_RATE_LIMIT_WINDOW_SECONDS: f32 = 1.0;
+
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+pub struct TurnRateLimiter {
+    recent_turn_ticks: [u32; TURN_RATE_LIMIT_HISTORY],
+    recent_turn_count: u8,
+}
+
+impl Default for TurnRateLimiter {
+    fn default() -> Self {
+        Self {
+            recent_turn_ticks: [0; TURN_RATE_LIMIT_HISTORY],
+            recent_turn_count: 0,
+        }
+    }
+}
+
+impl TurnRateLimiter {
+    pub fn try_consume_turn(
+        &mut self,
+        current_tick: u32,
+        max_turns: u8,
+        window_ticks: u32,
+    ) -> bool {
+        if max_turns == 0 {
+            return false;
+        }
+        self.prune(current_tick, window_ticks.max(1));
+        if self
+            .recent_turn_ticks
+            .iter()
+            .take(usize::from(self.recent_turn_count))
+            .any(|tick| *tick == current_tick)
+        {
+            return false;
+        }
+        let max_turns = usize::from(max_turns).min(TURN_RATE_LIMIT_HISTORY);
+        if usize::from(self.recent_turn_count) >= max_turns {
+            return false;
+        }
+        self.recent_turn_ticks[usize::from(self.recent_turn_count)] = current_tick;
+        self.recent_turn_count += 1;
+        true
+    }
+
+    fn prune(&mut self, current_tick: u32, window_ticks: u32) {
+        let mut kept = 0;
+        for index in 0..usize::from(self.recent_turn_count) {
+            let turn_tick = self.recent_turn_ticks[index];
+            if turn_tick <= current_tick && current_tick.saturating_sub(turn_tick) < window_ticks {
+                self.recent_turn_ticks[kept] = turn_tick;
+                kept += 1;
+            }
+        }
+        self.recent_turn_count = kept as u8;
+    }
+}
+
+pub fn turn_rate_limit_window_ticks(config: &GameConfig) -> u32 {
+    turn_rate_limit_window_ticks_for_rate(config.movement.tick_rate_hz)
+}
+
+fn turn_rate_limit_window_ticks_for_rate(tick_rate_hz: f32) -> u32 {
+    (tick_rate_hz.max(1.0) * TURN_RATE_LIMIT_WINDOW_SECONDS)
+        .round()
+        .max(1.0) as u32
+}
 
 impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ReplicationStorage>();
-
         // events
         app.add_message::<SnakeFrictionEvent>();
+        app.init_resource::<ReplicationStorage>();
 
         // sets
         app.configure_sets(FixedUpdate, SimulationSet::Movement);
@@ -54,12 +119,12 @@ impl Plugin for MovementPlugin {
 pub fn turn_head_from_input(
     trigger: On<Fire<MoveSnake>>,
     mut commands: Commands,
-    mut query: Query<(Entity, &mut SnakeHead), Simulated>,
+    mut query: Query<(Entity, &mut SnakeHead, &TailPoints), Simulated>,
 ) {
     let Some(direction) = direction_from_input(trigger.value) else {
         return;
     };
-    let Ok((entity, mut head)) = query.get_mut(trigger.context) else {
+    let Ok((entity, mut head, _tail)) = query.get_mut(trigger.context) else {
         return;
     };
     let current = head.direction;
@@ -96,11 +161,10 @@ pub fn direction_from_input(input: Vec2) -> Option<Direction> {
 pub fn turn_tail(head: &mut SnakeHead, tail: &mut TailPoints, requested: Direction) {
     let current = head.direction;
     if is_perpendicular_turn(current, requested) {
-        RepliconDiffable::apply_diff(
-            tail,
-            &TailPointsDiff::PushTurn(TailTurn::new(head.position, current.opposite())),
-        )
-        .expect("tail diffs should be valid for live TailPoints");
+        tail.apply_topology_diff(TailPointsDiff::PushTurn(TailTurn::new(
+            head.position,
+            current.opposite(),
+        )));
         head.direction = requested;
     }
 }
@@ -121,6 +185,26 @@ pub fn turn_tail_with_diff(
             )));
         head.direction = requested;
     }
+}
+
+pub fn turn_tail_with_diff_limited(
+    commands: &mut Commands,
+    entity: Entity,
+    head: &mut SnakeHead,
+    requested: Direction,
+    limiter: &mut TurnRateLimiter,
+    current_tick: u32,
+    max_turns: u8,
+    window_ticks: u32,
+) -> bool {
+    if !is_perpendicular_turn(head.direction, requested) {
+        return false;
+    }
+    if !limiter.try_consume_turn(current_tick, max_turns, window_ticks) {
+        return false;
+    }
+    turn_tail_with_diff(commands, entity, head, requested);
+    true
 }
 
 pub fn is_perpendicular_turn(current: Direction, requested: Direction) -> bool {
@@ -161,10 +245,15 @@ pub fn update_acceleration(
     }
 
     for (entity, mut acceleration, mut food_boost) in snakes.iter_mut() {
-        acceleration.set_if_neq(Acceleration(combined_acceleration(
+        let target_acceleration = combined_acceleration(
             movement.base_acceleration,
             proximity_boosts.get(&entity).copied(),
             food_boost.0,
+        );
+        acceleration.set_if_neq(Acceleration(smoothed_acceleration(
+            acceleration.0,
+            target_acceleration,
+            movement.acceleration_smoothing,
         )));
         food_boost.0 = decayed_food_boost(food_boost.0, movement.food_boost_decay);
     }
@@ -176,6 +265,10 @@ pub fn combined_acceleration(
     food_boost: f32,
 ) -> f32 {
     proximity_acceleration.unwrap_or(base_acceleration) + food_boost
+}
+
+pub fn smoothed_acceleration(current: f32, target: f32, smoothing: f32) -> f32 {
+    current + (target - current) * smoothing.clamp(0.0, 1.0)
 }
 
 pub fn decayed_food_boost(boost: f32, decay: f32) -> f32 {
@@ -364,6 +457,8 @@ mod tests {
     use super::*;
     use crate::network::bundle::snake::SnakeBundle;
     use crate::utils::query::SimulationAuthority;
+    use bevy_enhanced_input::prelude::TriggerState;
+    use bevy_replicon::prelude::DiffIndex;
     use bevy_replicon::shared::replication::diff::DiffHistory;
     use lightyear::prelude::{Interpolated, Predicted, Replicated};
 
@@ -416,7 +511,19 @@ mod tests {
     fn assert_tail_diff_recorded(app: &App, snake: Entity) {
         let storage = app.world().resource::<ReplicationStorage>();
         let history = storage.get::<DiffHistory<TailPoints>>(snake).unwrap();
-        assert_eq!(history.current_index().get(), 0);
+        assert_eq!(history.current_index(), DiffIndex::new(0));
+    }
+
+    fn fire_turn(app: &mut App, snake: Entity, action: Entity, direction: Direction) {
+        app.world_mut().trigger(Fire::<MoveSnake> {
+            context: snake,
+            action,
+            value: direction.delta(),
+            state: TriggerState::Fired,
+            fired_secs: 0.0,
+            elapsed_secs: 0.0,
+        });
+        app.world_mut().flush();
     }
 
     #[test]
@@ -457,6 +564,155 @@ mod tests {
     }
 
     #[test]
+    fn move_snake_fire_turns_head_and_records_tail_diff() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MovementPlugin);
+
+        let snake = app
+            .world_mut()
+            .spawn((SnakeBundle::default(), Predicted))
+            .id();
+        let action = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(Fire::<MoveSnake> {
+            context: snake,
+            action,
+            value: Vec2::X,
+            state: TriggerState::Fired,
+            fired_secs: 0.0,
+            elapsed_secs: 0.0,
+        });
+        app.world_mut().flush();
+
+        let entity = app.world().entity(snake);
+        assert_eq!(
+            entity.get::<SnakeHead>().unwrap().direction,
+            Direction::Right
+        );
+        assert_eq!(
+            entity.get::<TailPoints>().unwrap().turns,
+            VecDeque::from([TailTurn::new(Vec2::ZERO, Direction::Down)])
+        );
+        assert_tail_diff_recorded(&app, snake);
+    }
+
+    #[test]
+    fn move_snake_fire_does_not_apply_bot_turn_limiter() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MovementPlugin);
+
+        let snake = app
+            .world_mut()
+            .spawn((SnakeBundle::default(), Predicted))
+            .id();
+        let action = app.world_mut().spawn_empty().id();
+        let mut current = Direction::Up;
+
+        for _ in 0..=GameConfig::default().bots.max_turns_per_second {
+            let requested = match current {
+                Direction::Up | Direction::Down => Direction::Right,
+                Direction::Left | Direction::Right => Direction::Up,
+            };
+            fire_turn(&mut app, snake, action, requested);
+            current = requested;
+            assert_eq!(
+                app.world()
+                    .entity(snake)
+                    .get::<SnakeHead>()
+                    .unwrap()
+                    .direction,
+                current
+            );
+        }
+    }
+
+    #[test]
+    fn bot_turn_limiter_rejects_sixth_turn_in_one_second_window() {
+        let mut limiter = TurnRateLimiter::default();
+        let config = GameConfig::default();
+        let max_turns = config.bots.max_turns_per_second;
+        let window_ticks = turn_rate_limit_window_ticks(&config);
+
+        for tick in 1..=u32::from(max_turns) {
+            assert!(limiter.try_consume_turn(tick, max_turns, window_ticks));
+        }
+
+        assert!(!limiter.try_consume_turn(u32::from(max_turns) + 1, max_turns, window_ticks));
+        assert!(!limiter.try_consume_turn(u32::from(max_turns), max_turns, window_ticks));
+        assert!(limiter.try_consume_turn(window_ticks + 1, max_turns, window_ticks));
+    }
+
+    #[test]
+    fn limited_turn_commit_rejects_sixth_tail_diff_in_one_second_window() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MovementPlugin);
+
+        let snake = app.world_mut().spawn(TailPoints::empty()).id();
+        let config = GameConfig::default();
+        let max_turns = config.bots.max_turns_per_second;
+        let window_ticks = turn_rate_limit_window_ticks(&config);
+        let mut limiter = TurnRateLimiter::default();
+        let mut head = SnakeHead::default();
+
+        for tick in 1..=u32::from(max_turns) {
+            let requested = match head.direction {
+                Direction::Up | Direction::Down => Direction::Right,
+                Direction::Left | Direction::Right => Direction::Up,
+            };
+            let accepted = {
+                let mut commands = app.world_mut().commands();
+                turn_tail_with_diff_limited(
+                    &mut commands,
+                    snake,
+                    &mut head,
+                    requested,
+                    &mut limiter,
+                    tick,
+                    max_turns,
+                    window_ticks,
+                )
+            };
+            app.world_mut().flush();
+            assert!(accepted);
+            assert_eq!(head.direction, requested);
+        }
+
+        let blocked = match head.direction {
+            Direction::Up | Direction::Down => Direction::Right,
+            Direction::Left | Direction::Right => Direction::Up,
+        };
+        let accepted = {
+            let mut commands = app.world_mut().commands();
+            turn_tail_with_diff_limited(
+                &mut commands,
+                snake,
+                &mut head,
+                blocked,
+                &mut limiter,
+                u32::from(max_turns) + 1,
+                max_turns,
+                window_ticks,
+            )
+        };
+        app.world_mut().flush();
+
+        assert!(!accepted);
+        assert_ne!(head.direction, blocked);
+        assert_eq!(
+            app.world()
+                .entity(snake)
+                .get::<TailPoints>()
+                .unwrap()
+                .turns
+                .len(),
+            usize::from(max_turns)
+        );
+    }
+
+    #[test]
     fn perpendicular_turn_detection_rejects_noop_and_reverse() {
         assert!(!is_perpendicular_turn(Direction::Up, Direction::Up));
         assert!(!is_perpendicular_turn(Direction::Up, Direction::Down));
@@ -486,6 +742,14 @@ mod tests {
     }
 
     #[test]
+    fn acceleration_smoothing_moves_toward_target() {
+        assert_eq!(smoothed_acceleration(0.0, 1.0, 0.0), 0.0);
+        assert_eq!(smoothed_acceleration(0.0, 1.0, 1.0), 1.0);
+        assert_eq!(smoothed_acceleration(0.0, 1.0, 0.25), 0.25);
+        assert_eq!(smoothed_acceleration(1.0, 0.0, 0.25), 0.75);
+    }
+
+    #[test]
     fn replicated_interpolated_authoritative_snake_moves() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -510,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_snake_tail_records_diff_mutations() {
+    fn authoritative_snake_tail_prunes_via_diff() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<GameConfig>();
@@ -524,7 +788,6 @@ mod tests {
 
         run_fixed_update(&mut app);
 
-        assert_tail_diff_recorded(&app, snake);
         assert!(app
             .world()
             .entity(snake)
@@ -532,10 +795,11 @@ mod tests {
             .unwrap()
             .turns
             .is_empty());
+        assert_tail_diff_recorded(&app, snake);
     }
 
     #[test]
-    fn predicted_snake_tail_records_local_diff_mutations() {
+    fn predicted_snake_tail_prunes_via_diff() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<GameConfig>();
@@ -550,7 +814,6 @@ mod tests {
 
         let after = head_position(&app, snake);
         assert_ne!(after, before);
-        assert_tail_diff_recorded(&app, snake);
         assert!(app
             .world()
             .entity(snake)
@@ -558,6 +821,7 @@ mod tests {
             .unwrap()
             .turns
             .is_empty());
+        assert_tail_diff_recorded(&app, snake);
     }
 
     #[test]

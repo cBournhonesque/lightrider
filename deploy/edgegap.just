@@ -61,8 +61,7 @@ edgegap-push tag=edgegap-default-tag: edgegap-login
     set -euo pipefail
     source secrets/edgegap.env
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-server:{{ tag }}"
-    podman push "$image"
-    echo "Pushed $image"
+    deploy/push_image.sh "$image"
 
 edgegap-build-push *args:
     #!/usr/bin/env bash
@@ -142,8 +141,7 @@ matchmaker-push tag=edgegap-default-tag: edgegap-login
     set -euo pipefail
     source secrets/edgegap.env
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-matchmaker:{{ tag }}"
-    podman push "$image"
-    echo "Pushed $image"
+    deploy/push_image.sh "$image"
 
 # Build only the static browser client image: nginx + WASM/assets.
 webclient-build *args: edgegap-context
@@ -155,8 +153,7 @@ webclient-push tag=edgegap-default-tag: edgegap-login
     set -euo pipefail
     source secrets/edgegap.env
     image="$EDGEGAP_REGISTRY_URL/$EDGEGAP_REGISTRY_PROJECT/lightrider-webclient:{{ tag }}"
-    podman push "$image"
-    echo "Pushed $image"
+    deploy/push_image.sh "$image"
 
 matchmaker-build-push *args:
     #!/usr/bin/env bash
@@ -283,6 +280,25 @@ prod-images-build-push *args:
     just prod-images-build {{ args }}
     just prod-images-push {{ args }}
 
+# Cross-compile Linux artifacts locally, then stage them for runtime-only images.
+# Requires `zig` and `cargo-zigbuild` for the native server/matchmaker binaries.
+prebuilt-artifacts *args:
+    deploy/prebuilt_images.sh artifacts {{ args }}
+
+# Build runtime-only images that copy locally prebuilt artifacts. Run
+# `prebuilt-artifacts` first, or use `prebuilt-images-build-push`.
+prebuilt-images-build *args:
+    deploy/prebuilt_images.sh images {{ args }}
+
+# Push already-built runtime-only prebuilt images.
+prebuilt-images-push *args:
+    deploy/prebuilt_images.sh push {{ args }}
+
+# One-command path: cross-compile server + matchmaker, build web WASM locally,
+# build runtime-only images, then push all three images.
+prebuilt-images-build-push *args:
+    deploy/prebuilt_images.sh build-push {{ args }}
+
 github-release tag=edgegap-default-tag title="" notes="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -300,22 +316,56 @@ github-release tag=edgegap-default-tag title="" notes="":
     fi
     gh release create "{{ tag }}" --title "$release_title" --notes "$release_notes"
 
-edgegap-release-sync tag=edgegap-default-tag nats_host="45.79.138.102:4222" app="lightrider" version="" env_file="secrets/web-server.env":
+edgegap-release-sync *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    tag="{{ edgegap-default-tag }}"
+    nats_host="45.79.138.102:4222"
+    app="lightrider"
+    version=""
+    env_file="secrets/web-server.env"
+    positional=0
+    for arg in {{ args }}; do
+      case "$arg" in
+        tag=*) tag="${arg#tag=}" ;;
+        nats_host=*) nats_host="${arg#nats_host=}" ;;
+        host=*) nats_host="${arg#host=}" ;;
+        app=*) app="${arg#app=}" ;;
+        version=*) version="${arg#version=}" ;;
+        edgegap_version=*) version="${arg#edgegap_version=}" ;;
+        env_file=*) env_file="${arg#env_file=}" ;;
+        env=*) env_file="${arg#env=}" ;;
+        *)
+          case "$positional" in
+            0) tag="$arg" ;;
+            1) nats_host="$arg" ;;
+            2) app="$arg" ;;
+            3) version="$arg" ;;
+            4) env_file="$arg" ;;
+            *)
+              echo "unexpected extra argument for edgegap-release-sync: $arg" >&2
+              exit 2
+              ;;
+          esac
+          positional=$((positional + 1))
+          ;;
+      esac
+    done
     source secrets/edgegap.env
     source secrets/prod-netcode.env
-    if [[ -f "{{ env_file }}" ]]; then
-      source "{{ env_file }}"
+    if [[ -f "$env_file" ]]; then
+      source "$env_file"
     fi
-    edgegap_version="{{ version }}"
+    edgegap_version="$version"
     if [[ -z "$edgegap_version" ]]; then
-      edgegap_version="{{ tag }}"
+      edgegap_version="${EDGEGAP_APP_VERSION:-dev}"
     fi
-    export NATS_HOST="{{ nats_host }}"
+    export NATS_HOST="$nats_host"
     export NATS_USER="${NATS_USER:-lightrider}"
     export NATS_PASSWORD="${NATS_PASSWORD:-lightrider}"
-    export EDGEGAP_NATS_INSECURE="${EDGEGAP_NATS_INSECURE:-1}"
-    export LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-{{ app }}_${edgegap_version}}"
-    just edgegap-app-sync "{{ tag }}" "$edgegap_version" "{{ app }}"
-    just edgegap-app-verify "{{ tag }}" "$edgegap_version" "{{ app }}"
+    if [[ -z "${EDGEGAP_NATS_INSECURE:-}" ]]; then
+      export EDGEGAP_NATS_INSECURE="${NATS_ALLOW_INSECURE:-0}"
+    fi
+    export LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-${app}_${edgegap_version}}"
+    just edgegap-app-sync "$tag" "$edgegap_version" "$app"
+    just edgegap-app-verify "$tag" "$edgegap_version" "$app"

@@ -1,0 +1,16 @@
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        nginx && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY prebuilt/webclient/ /usr/share/nginx/html/
+COPY lightrider/deploy/webclient-container-entrypoint.sh /app/webclient-container-entrypoint.sh
+
+RUN chmod +x /app/webclient-container-entrypoint.sh
+
+EXPOSE 8080/tcp
+
+ENTRYPOINT ["/app/webclient-container-entrypoint.sh"]

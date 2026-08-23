@@ -19,7 +19,6 @@ use tracing_subscriber::filter::FilterFn;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
-use crate::bot::BotMarker;
 use crate::config::GameConfig;
 use crate::movement::SimulationSet;
 use crate::network::protocol::prelude::*;
@@ -106,18 +105,22 @@ impl Plugin for RuntimeDebugPlugin {
 pub fn runtime_log_plugin(config: &GameConfig, base_filter: &str) -> LogPlugin {
     let capture_lightyear_debug =
         config.debug.lightyear_debug && std::env::var_os(LIGHTYEAR_DEBUG_FILE_ENV).is_some();
+    let emit_lightyear_debug =
+        capture_lightyear_debug || (cfg!(target_family = "wasm") && config.debug.lightyear_debug);
     let mut plugin = if capture_lightyear_debug {
         debug_log_plugin()
     } else {
         LogPlugin::default()
     };
-    plugin.level = if capture_lightyear_debug {
+    plugin.level = if emit_lightyear_debug {
         Level::TRACE
     } else {
         Level::INFO
     };
     let filter = if capture_lightyear_debug {
         format!("{base_filter},lightyear_debug=trace")
+    } else if cfg!(target_family = "wasm") && config.debug.lightyear_debug {
+        "info,wgpu=error,bevy_render=info,lightyear_debug=trace".to_string()
     } else {
         base_filter.to_string()
     };
@@ -523,7 +526,6 @@ type SnakeTraceItem<'a> = (
     Has<SimulationAuthority>,
     Has<Controlled>,
     Option<&'a ControlledBy>,
-    Has<BotMarker>,
 );
 
 fn trace_snake_sample(
@@ -558,7 +560,6 @@ fn trace_snake_sample(
         has_simulation_authority,
         is_controlled,
         controlled_by,
-        is_bot,
     ) in &snakes
     {
         let player_id_bits = has_player
@@ -603,7 +604,6 @@ fn trace_snake_sample(
             has_simulation_authority = has_simulation_authority,
             is_controlled = is_controlled,
             has_controlled_by = controlled_by.is_some(),
-            is_bot = is_bot,
             "snake head debug sample"
         );
     }

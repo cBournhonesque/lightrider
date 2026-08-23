@@ -42,6 +42,27 @@ toml_string() {
   printf '"%s"' "$value"
 }
 
+toml_string_array_csv() {
+  local csv="${1:-}"
+  local first=1
+  local item
+  printf '['
+  IFS=',' read -ra items <<< "$csv"
+  for item in "${items[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    if [[ -z "$item" ]]; then
+      continue
+    fi
+    if [[ "$first" == "0" ]]; then
+      printf ', '
+    fi
+    toml_string "$item"
+    first=0
+  done
+  printf ']'
+}
+
 nats_port="${NATS_PORT:-4222}"
 nats_monitor_port="${NATS_MONITOR_PORT:-8222}"
 nats_user="${NATS_USER:-lightrider}"
@@ -55,6 +76,8 @@ edgegap_app_name="${EDGEGAP_APP_NAME:-$app_name}"
 edgegap_app_version="${EDGEGAP_APP_VERSION:-$app_version}"
 namespace="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${MATCHMAKER_NATS_NAMESPACE:-${app_name}_${app_version}}}"
 allocation_source="${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-${MATCHMAKER_ALLOCATION_SOURCE:-nats_static}}"
+provider_router_default="${LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_DEFAULT:-nats_static}"
+provider_router_fallback="${LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_FALLBACK:-edgegap,gameflow}"
 gameflow_mode="${GAMEFLOW_MODE:-fleet}"
 gameflow_api_key_env="${GAMEFLOW_API_KEY_ENV:-GAMEFLOW_API_KEY}"
 gameflow_api_key_path="${GAMEFLOW_API_KEY_PATH:-/run/secrets/gameflow_api_key}"
@@ -151,7 +174,21 @@ require_assignment_prepare = true
 assignment_prepare_timeout_ms = ${LIGHTYEAR_MATCHMAKER_ASSIGNMENT_PREPARE_TIMEOUT_MS:-30000}
 assignment_prepare_poll_ms = ${LIGHTYEAR_MATCHMAKER_ASSIGNMENT_PREPARE_POLL_MS:-100}
 
+EOF
+if [[ "$allocation_source" == "provider_router" ]]; then
+  cat >> "$matchmaker_config" <<EOF
+[allocation.provider_router]
+default = $(toml_string "$provider_router_default")
+fallback = $(toml_string_array_csv "$provider_router_fallback")
+
 [nats]
+EOF
+else
+  cat >> "$matchmaker_config" <<EOF
+[nats]
+EOF
+fi
+cat >> "$matchmaker_config" <<EOF
 url = $(toml_string "$nats_url")
 username = $(toml_string "$nats_user")
 password = $(toml_string "$nats_password")

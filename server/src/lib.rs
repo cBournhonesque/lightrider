@@ -11,6 +11,7 @@ use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
 use shared::SharedPlugin;
 
 mod admin;
+mod bot;
 mod bots;
 pub(crate) mod collision;
 mod debug;
@@ -46,6 +47,10 @@ pub struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
 
+    /// Override the number of server-side bots per active room.
+    #[arg(long)]
+    bots: Option<usize>,
+
     /// Gracefully stop the server after this many seconds.
     ///
     /// This is mainly used by profiling recipes so trace writers can flush.
@@ -58,7 +63,12 @@ struct ExitAfterSeconds(Duration);
 
 pub async fn app(cli: Cli) -> App {
     let mut app = App::new();
-    let config = load_config(cli.config.as_deref());
+    let mut config = load_config(cli.config.as_deref());
+    if let Some(bot_count) = cli.bots {
+        config.bots.enabled = bot_count > 0;
+        config.bots.target_count_per_room = bot_count;
+        config.bots.minimum_total_players_per_room = 0;
+    }
     let log_plugin = if cli.headless {
         runtime_log_plugin(&config, "wgpu=error,bevy_ecs=trace")
     } else {

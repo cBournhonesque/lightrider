@@ -12,6 +12,8 @@ use bevy::transform::TransformPlugin;
 use bevy::window::{Window, WindowPlugin};
 use bevy::{DefaultPlugins, MinimalPlugins};
 use clap::{Parser, ValueEnum};
+#[cfg(feature = "lightyear-matchmaker")]
+use lightyear_matchmaker_core::ProviderKind;
 
 use shared::config::GameConfig;
 use shared::debug::{runtime_log_plugin, RuntimeDebugPlugin};
@@ -19,7 +21,6 @@ use shared::network::protocol::prelude::RoomJoinMode;
 use shared::SharedPlugin;
 
 mod admin;
-mod bot;
 mod camera;
 mod collision;
 mod debug;
@@ -44,8 +45,6 @@ pub const SERVER_PORT: u16 = 5000;
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ClientMode {
     Player,
-    Bot,
-    StressTurns,
 }
 
 #[derive(Parser, PartialEq, Debug)]
@@ -65,6 +64,18 @@ pub struct Cli {
     /// Automatically request an initial spawn and later respawns when allowed.
     #[arg(long, default_value = "false")]
     auto_respawn: bool,
+
+    /// Generate local player turn inputs at this rate for headless RTT stress tests.
+    #[arg(long, default_value_t = 0.0)]
+    turn_stress_hz: f32,
+
+    /// Stop generating turn-stress inputs after this many seconds. Zero means no limit.
+    #[arg(long, default_value_t = 0.0)]
+    turn_stress_seconds: f32,
+
+    /// Record browser RTT samples into window.__lightriderRttSamples for deployed web tests.
+    #[arg(long, default_value = "false")]
+    browser_rtt_probe: bool,
 
     #[arg(long, value_enum, default_value_t = ClientMode::Player)]
     mode: ClientMode,
@@ -97,6 +108,11 @@ pub struct Cli {
     #[arg(long, default_value = "dev")]
     matchmaker_version: String,
 
+    /// Exact matchmaker provider to request: static, edgegap, or gameflow.
+    #[cfg(feature = "lightyear-matchmaker")]
+    #[arg(long, value_parser = parse_matchmaker_provider)]
+    matchmaker_provider: Option<ProviderKind>,
+
     #[arg(long, default_value_t = Ipv4Addr::LOCALHOST)]
     server_addr: Ipv4Addr,
 
@@ -122,9 +138,15 @@ pub struct WebClientOptions {
     pub matchmaker_url: String,
     pub matchmaker_game: String,
     pub matchmaker_version: String,
+    pub matchmaker_provider: Option<ProviderKind>,
     pub room: RoomJoinMode,
     pub name: String,
     pub canvas_selector: String,
+    pub headless: bool,
+    pub auto_respawn: bool,
+    pub turn_stress_hz: f32,
+    pub turn_stress_seconds: f32,
+    pub browser_rtt_probe: bool,
 }
 
 #[cfg(feature = "lightyear-matchmaker")]
@@ -135,6 +157,9 @@ impl Cli {
             debug: false,
             headless: false,
             auto_respawn: false,
+            turn_stress_hz: 0.0,
+            turn_stress_seconds: 0.0,
+            browser_rtt_probe: false,
             mode: ClientMode::Player,
             client_id: 0,
             client_port: CLIENT_PORT,
@@ -142,6 +167,7 @@ impl Cli {
             matchmaker_url: Some(matchmaker_url),
             matchmaker_game: "lightrider".to_string(),
             matchmaker_version: "dev".to_string(),
+            matchmaker_provider: None,
             server_addr: Ipv4Addr::LOCALHOST,
             server_port: SERVER_PORT,
             room: RoomJoinMode::Auto,
@@ -157,18 +183,29 @@ pub fn web_app(options: WebClientOptions) -> App {
     let mut cli = Cli::web_defaults(options.matchmaker_url);
     cli.matchmaker_game = options.matchmaker_game;
     cli.matchmaker_version = options.matchmaker_version;
+    cli.matchmaker_provider = options.matchmaker_provider;
     cli.room = options.room;
     cli.name = options.name;
     cli.canvas_selector = Some(options.canvas_selector);
+    cli.headless = options.headless;
+    cli.auto_respawn = options.auto_respawn;
+    cli.turn_stress_hz = options.turn_stress_hz;
+    cli.turn_stress_seconds = options.turn_stress_seconds;
+    cli.browser_rtt_probe = options.browser_rtt_probe;
     app(cli)
 }
 
 pub fn app(cli: Cli) -> App {
     let mut app = App::new();
     let config = load_config(cli.config.as_deref());
-    let bot_decision_interval_ticks = config.fake_clients.input_interval_ticks;
-    let bot_mistake_chance_per_decision_percent =
-        config.fake_clients.mistake_chance_per_decision_percent;
+    #[cfg(target_family = "wasm")]
+    let config = {
+        let mut config = config;
+        if cli.browser_rtt_probe || cli.turn_stress_hz > 0.0 {
+            config.debug.lightyear_debug = true;
+        }
+        config
+    };
     let player_name = player_name(&cli);
     let debug_enabled = cli.debug || cli.inspector;
     let log_plugin = if cli.headless {
@@ -218,6 +255,7 @@ pub fn app(cli: Cli) -> App {
                 matchmaker_url: matchmaker_url.clone(),
                 game_name: cli.matchmaker_game.clone(),
                 game_version: cli.matchmaker_version.clone(),
+                provider: cli.matchmaker_provider,
                 room: cli.room,
             });
 
@@ -260,12 +298,19 @@ pub fn app(cli: Cli) -> App {
     if cli.auto_respawn {
         app.insert_resource(network::inputs::AutoRespawnRequests);
     }
-    if matches!(cli.mode, ClientMode::Bot | ClientMode::StressTurns) {
-        app.add_plugins(bot::BotClientPlugin {
-            decision_interval_ticks: bot_decision_interval_ticks,
-            mistake_chance_per_decision_percent: bot_mistake_chance_per_decision_percent,
-            stress_turns: cli.mode == ClientMode::StressTurns,
+    if cli.turn_stress_hz > 0.0 {
+        app.insert_resource(network::inputs::TurnStressSettings {
+            hz: cli.turn_stress_hz,
+            duration_seconds: if cli.turn_stress_seconds > 0.0 {
+                Some(cli.turn_stress_seconds)
+            } else {
+                None
+            },
         });
+    }
+    #[cfg(target_family = "wasm")]
+    if cli.browser_rtt_probe || cli.turn_stress_hz > 0.0 {
+        app.insert_resource(network::inputs::BrowserRttProbe);
     }
     if !cli.headless {
         app.add_plugins(inputs::LocalInputsPlugin { debug_enabled });
@@ -298,14 +343,18 @@ fn player_name(cli: &Cli) -> String {
     if !trimmed.is_empty() {
         return trimmed.to_string();
     }
-    #[cfg(feature = "lightyear-matchmaker")]
-    if cli.matchmaker_url.is_some() && matches!(cli.mode, ClientMode::Player) {
-        return String::new();
-    }
     match cli.mode {
         ClientMode::Player => format!("Player {}", cli.client_id),
-        ClientMode::Bot => format!("Bot Client {}", cli.client_id),
-        ClientMode::StressTurns => format!("Stress Client {}", cli.client_id),
+    }
+}
+
+#[cfg(feature = "lightyear-matchmaker")]
+fn parse_matchmaker_provider(value: &str) -> Result<ProviderKind, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "static" => Ok(ProviderKind::Static),
+        "edgegap" => Ok(ProviderKind::Edgegap),
+        "gameflow" => Ok(ProviderKind::Gameflow),
+        _ => Err("expected `static`, `edgegap`, or `gameflow`".to_string()),
     }
 }
 

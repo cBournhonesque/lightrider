@@ -84,7 +84,7 @@ _remote-pull-service service image_env image_name *args:
       else
         : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT is required to build the image name}"
         registry="${EDGEGAP_REGISTRY_URL:-registry.edgegap.com}"
-        tag="${tag:-${LIGHTRIDER_MATCHMAKER_TAG:-${EDGEGAP_APP_VERSION:-{{ edgegap-default-tag }}}}}"
+        tag="${tag:-${LIGHTRIDER_MATCHMAKER_TAG:-{{ edgegap-default-tag }}}}"
         image="$registry/$EDGEGAP_REGISTRY_PROJECT/{{ image_name }}:$tag"
       fi
     fi
@@ -227,6 +227,8 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
       LIGHTRIDER_MANAGE_STATIC_SERVER
       LIGHTRIDER_RUN_STATIC_SERVER
       LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE
+      LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_DEFAULT
+      LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_FALLBACK
       EDGEGAP_API_KEY
       EDGEGAP_API_TOKEN
       GAMEFLOW_GAME_ID
@@ -288,6 +290,22 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
           unset "$var"
         fi
       done
+      # FORCE clears generated deployment values from an older web-server env.
+      # Re-source stable local secrets afterward so EDGEGAP_API_TOKEN and friends
+      # are not lost when regenerating the file.
+      if [[ -f secrets/edgegap.env ]]; then
+        source secrets/edgegap.env
+      fi
+      if [[ -f secrets/prod-netcode.env ]]; then
+        source secrets/prod-netcode.env
+      fi
+      for var in "${caller_deploy_vars[@]}"; do
+        caller_has_var="caller_deploy_has_$var"
+        caller_value_var="caller_deploy_value_$var"
+        if [[ "${!caller_has_var}" == "1" ]]; then
+          printf -v "$var" '%s' "${!caller_value_var}"
+        fi
+      done
     fi
     if [[ -z "${LIGHTRIDER_PROTOCOL_ID:-}" ]]; then
       LIGHTRIDER_PROTOCOL_ID="1"
@@ -299,11 +317,11 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
       NATS_PASSWORD="$(openssl rand -hex 24)"
     fi
     matchmaker_game="${LIGHTRIDER_MATCHMAKER_GAME:-${EDGEGAP_APP_NAME:-lightrider}}"
-    matchmaker_version="${LIGHTRIDER_MATCHMAKER_VERSION:-${EDGEGAP_APP_VERSION:-{{ tag }}}}"
     edgegap_app_version="{{ edgegap_version }}"
     if [[ -z "$edgegap_app_version" ]]; then
-      edgegap_app_version="${EDGEGAP_APP_VERSION:-$matchmaker_version}"
+      edgegap_app_version="${EDGEGAP_APP_VERSION:-dev}"
     fi
+    matchmaker_version="${LIGHTRIDER_MATCHMAKER_VERSION:-${EDGEGAP_APP_VERSION:-$edgegap_app_version}}"
     if [[ -n "{{ edgegap_version }}" ]]; then
       LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE="${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE_OVERRIDE:-${matchmaker_game}_${matchmaker_version}}"
     fi
@@ -355,6 +373,8 @@ web-server-env-template tag=edgegap-default-tag file=static-default-env host=sta
       write_env LIGHTRIDER_PRIVATE_KEY "$LIGHTRIDER_PRIVATE_KEY"
       write_env LIGHTRIDER_REQUIRE_PRODUCTION_NETCODE "1"
       write_env LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE "${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-nats_static}"
+      write_env LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_DEFAULT "${LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_DEFAULT:-nats_static}"
+      write_env LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_FALLBACK "${LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_FALLBACK:-edgegap,gameflow}"
       write_env LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE "${LIGHTYEAR_MATCHMAKER_NATS_NAMESPACE:-${matchmaker_game}_${matchmaker_version}}"
       write_env NATS_USER "${NATS_USER:-lightrider}"
       write_env NATS_PASSWORD "$NATS_PASSWORD"
@@ -409,6 +429,9 @@ web-server-env-check file=static-default-env:
     set -a
     source "{{ file }}"
     set +a
+    if [[ -z "${EDGEGAP_API_KEY:-}" && -n "${EDGEGAP_API_TOKEN:-}" ]]; then
+      EDGEGAP_API_KEY="$EDGEGAP_API_TOKEN"
+    fi
     require_var() {
       local name="$1"
       if [[ -z "${!name:-}" ]]; then
@@ -445,6 +468,13 @@ web-server-env-check file=static-default-env:
       require_var EDGEGAP_API_KEY
     fi
     if [[ "$LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE" == "gameflow" ]]; then
+      require_var GAMEFLOW_GAME_ID
+      require_var GAMEFLOW_API_KEY
+    fi
+    if [[ "$LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE" == "provider_router" ]]; then
+      require_var LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_DEFAULT
+      require_var LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_FALLBACK
+      require_var EDGEGAP_API_KEY
       require_var GAMEFLOW_GAME_ID
       require_var GAMEFLOW_API_KEY
     fi
@@ -620,15 +650,29 @@ web-server-enable-nats-tls-from-caddy *args:
     if systemctl list-unit-files lightrider-static-server.service >/dev/null 2>&1; then
       systemctl --no-pager --full status lightrider-static-server || true
     fi
-    if command -v openssl >/dev/null 2>&1; then
-      timeout 10 openssl s_client -connect "${domain}:4222" -servername "$domain" -verify_return_error </dev/null >/tmp/lightrider-nats-tls-check.txt 2>&1 || {
-        cat /tmp/lightrider-nats-tls-check.txt >&2
-        exit 1
-      }
-      echo "nats tls ok: ${domain}:4222"
-    else
-      echo "openssl not found; skipped external NATS TLS check"
+    if ! podman exec lightrider-matchmaker sh -c 'test -n "${NATS_TLS_CERT:-}" && test -n "${NATS_TLS_KEY:-}"' >/dev/null 2>&1; then
+      echo "lightrider-matchmaker restarted, but the running container does not see NATS_TLS_CERT/NATS_TLS_KEY." >&2
+      echo "Check /etc/lightrider/lightrider-matchmaker.env and systemctl cat lightrider-matchmaker on the VPS." >&2
+      exit 1
     fi
+    nats_cmd="$(podman exec lightrider-matchmaker sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = "nats-server" ] || continue; tr "\000" " " < "$p/cmdline"; exit 0; done; exit 1' 2>/dev/null || true)"
+    if [[ "$nats_cmd" != *"--tls"* ]]; then
+      echo "lightrider-matchmaker restarted, but nats-server is still not running with TLS." >&2
+      echo "nats-server command line: ${nats_cmd:-<not found>}" >&2
+      echo "The most likely cause is that the VPS is still running an older lightrider-matchmaker image that ignores NATS_TLS_CERT/NATS_TLS_KEY." >&2
+      echo "Rebuild/push the current image, redeploy the control host with that tag, then rerun this recipe." >&2
+      exit 1
+    fi
+    resolved_ip="$(getent ahostsv4 "$domain" 2>/dev/null | awk '{ print $1; exit }' || true)"
+    echo "checking nats tls advertisement: ${domain}:4222${resolved_ip:+ -> $resolved_ip}"
+    nats_info="$(timeout 10 bash -c 'exec 3<>/dev/tcp/"$1"/4222; IFS= read -r line <&3; printf "%s\n" "$line"' _ "$domain" 2>/dev/null || true)"
+    if [[ "$nats_info" != INFO\ * || "$nats_info" != *'"tls_required":true'* ]]; then
+      echo "NATS did not advertise required TLS on ${domain}:4222." >&2
+      echo "First NATS line: ${nats_info:-<none>}" >&2
+      echo "Check that ${domain} resolves to this VPS and that no other process is serving port 4222." >&2
+      exit 1
+    fi
+    echo "nats tls advertised: ${domain}:4222"
     REMOTE
 
 # generates the deploy env, installs/updates the VPS services, and runs a web
@@ -641,7 +685,7 @@ control-host-deploy *args:
     vps_host="${LIGHTRIDER_CONTROL_HOST:-${VPS_HOST:-${HOST:-${host:-{{ static-default-host }}}}}}"
     ssh_port="${LIGHTRIDER_CONTROL_SSH_PORT:-${SSH_PORT:-${ssh_port:-{{ static-default-ssh-port }}}}}"
     ssh_key="${LIGHTRIDER_CONTROL_SSH_KEY:-${SSH_KEY:-${ssh_key:-}}}"
-    tag="${TAG:-${tag:-$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}}"
+    tag="${TAG:-${tag:-{{ edgegap-default-tag }}}}"
     edgegap_version=""
     web_domain="${LIGHTRIDER_WEB_DOMAIN:-${DOMAIN:-${WEB_DOMAIN:-${domain:-${web_domain:-}}}}}"
     enable_https="${LIGHTRIDER_ENABLE_HTTPS:-${HTTPS:-${https:-${enable_https:-}}}}"
@@ -656,6 +700,9 @@ control-host-deploy *args:
     manage_static_server="${LIGHTRIDER_MANAGE_STATIC_SERVER:-${manage_static_server:-}}"
     run_static_server="${LIGHTRIDER_RUN_STATIC_SERVER:-${run_static_server:-}}"
     allocation_source="${LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE:-${allocation_source:-}}"
+    provider_router_default="${LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_DEFAULT:-${provider_router_default:-}}"
+    provider_router_fallback="${LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_FALLBACK:-${provider_router_fallback:-}}"
+    matchmaker_version="${LIGHTRIDER_MATCHMAKER_VERSION:-${matchmaker_version:-}}"
     build_memory=""
     build_memory_swap=""
     build_cpus=""
@@ -689,6 +736,10 @@ control-host-deploy *args:
         manage_static_server=*) manage_static_server="${arg#manage_static_server=}" ;;
         run_static_server=*) run_static_server="${arg#run_static_server=}" ;;
         allocation_source=*) allocation_source="${arg#allocation_source=}" ;;
+        provider_router_default=*) provider_router_default="${arg#provider_router_default=}" ;;
+        provider_router_fallback=*) provider_router_fallback="${arg#provider_router_fallback=}" ;;
+        matchmaker_version=*) matchmaker_version="${arg#matchmaker_version=}" ;;
+        game_version=*) matchmaker_version="${arg#game_version=}" ;;
         memory=*) build_memory="${arg#memory=}" ;;
         build_memory=*) build_memory="${arg#build_memory=}" ;;
         memory_swap=*) build_memory_swap="${arg#memory_swap=}" ;;
@@ -718,7 +769,7 @@ control-host-deploy *args:
       esac
     done
     if [[ -z "$vps_host" ]]; then
-      echo "usage: just control-host-deploy host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<tag>] [edgegap_version=<version>] [domain=<domain>] [https=1] [env=<file>] [service_name=<name>] [route=<name>] [web_upstream_port=<port>] [nats_port=<port>]" >&2
+      echo "usage: just control-host-deploy host=<vps-ip-or-host> [ssh_port=<port>] [ssh_key=<key>] [tag=<image-tag>] [game_version=<matchmaker-version>] [edgegap_version=<edgegap-app-version>] [domain=<domain>] [https=1] [env=<file>] [service_name=<name>] [route=<name>] [web_upstream_port=<port>] [nats_port=<port>]" >&2
       echo "example: just control-host-deploy host=45.79.138.102 domain=play.example.com" >&2
       exit 2
     fi
@@ -762,6 +813,15 @@ control-host-deploy *args:
     fi
     if [[ -n "$allocation_source" ]]; then
       env_args+=(LIGHTYEAR_MATCHMAKER_ALLOCATION_SOURCE="$allocation_source")
+    fi
+    if [[ -n "$provider_router_default" ]]; then
+      env_args+=(LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_DEFAULT="$provider_router_default")
+    fi
+    if [[ -n "$provider_router_fallback" ]]; then
+      env_args+=(LIGHTYEAR_MATCHMAKER_PROVIDER_ROUTER_FALLBACK="$provider_router_fallback")
+    fi
+    if [[ -n "$matchmaker_version" ]]; then
+      env_args+=(LIGHTRIDER_MATCHMAKER_VERSION="$matchmaker_version")
     fi
     env "${env_args[@]}" just web-server-env-template "$tag" "$env_file" "$vps_host" "$edgegap_version"
     just web-server-env-check "$env_file"

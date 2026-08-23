@@ -1,13 +1,15 @@
 use bevy::prelude::*;
-use lightyear::prelude::{PeerId, RoomId as LightyearRoomId};
+use lightyear::prelude::{LocalTimeline, PeerId, RoomId as LightyearRoomId};
 use std::collections::HashMap;
 
+use crate::bot::{BotController, BotMarker};
 use crate::respawn::RespawnReadyAt;
 use crate::rooms::{add_replicated_entity_to_room, RoomAssignment, RoomDirectory};
 use crate::spawning::snake_spawn_pose_avoiding;
-use shared::bot::{BotController, BotMarker};
 use shared::config::GameConfig;
-use shared::movement::{is_perpendicular_turn, turn_tail_with_diff, SimulationSet};
+use shared::movement::{
+    turn_rate_limit_window_ticks, turn_tail_with_diff_limited, SimulationSet, TurnRateLimiter,
+};
 use shared::network::bundle::player::PlayerBundle;
 use shared::network::bundle::snake::SnakeBundle;
 use shared::network::protocol::prelude::*;
@@ -255,6 +257,7 @@ fn spawn_bot_snake<'a>(
     );
     commands.entity(snake).insert((
         BotMarker,
+        TurnRateLimiter::default(),
         BotController::new_with_mistakes(
             config.bots.decision_interval_ticks,
             bot_id.to_bits() ^ room.0.rotate_left(17),
@@ -268,6 +271,7 @@ fn spawn_bot_snake<'a>(
 fn drive_bots(
     mut commands: Commands,
     config: Res<GameConfig>,
+    timeline: Res<LocalTimeline>,
     mut queries: ParamSet<(
         Query<(
             Entity,
@@ -283,6 +287,7 @@ fn drive_bots(
                 &mut SnakeHead,
                 &TailPoints,
                 &TailLength,
+                &mut TurnRateLimiter,
                 &mut BotController,
             ),
             With<BotMarker>,
@@ -296,7 +301,9 @@ fn drive_bots(
         .collect::<Vec<_>>();
 
     let mut bot_query = queries.p1();
-    for (entity, room, mut head, tail, length, mut controller) in bot_query.iter_mut() {
+    let window_ticks = turn_rate_limit_window_ticks(&config);
+    for (entity, room, mut head, tail, length, mut limiter, mut controller) in bot_query.iter_mut()
+    {
         let obstacle_tails = tail_snapshots
             .iter()
             .filter(|(other_entity, other_room, _)| *other_entity != entity && other_room == room)
@@ -308,11 +315,18 @@ fn drive_bots(
             &config.arena,
             &obstacle_tails,
             config.bots.max_turns_per_second,
-            config.movement.tick_rate_hz.round().max(1.0) as u32,
+            window_ticks,
         );
-        if is_perpendicular_turn(head.direction, direction) {
-            turn_tail_with_diff(&mut commands, entity, head.as_mut(), direction);
-        }
+        turn_tail_with_diff_limited(
+            &mut commands,
+            entity,
+            head.as_mut(),
+            direction,
+            limiter.as_mut(),
+            timeline.tick().0,
+            config.bots.max_turns_per_second,
+            window_ticks,
+        );
     }
 }
 
