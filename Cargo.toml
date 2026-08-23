@@ -4,31 +4,67 @@ members = [
   "client",
   "server",
   "shared",
+  "web_client",
 ]
 
 [workspace.dependencies]
-lightyear = { git = "https://github.com/cBournhonesque/lightyear", branch = "main", features = [
-  "leafwing",
+lightyear = { git = "https://github.com/cBournhonesque/lightyear.git", branch = "main", features = [
+  "input_bei",
+  "frame_interpolation",
+  "netcode",
   "webtransport",
-  "websocket",
-  "render",
+  "webtransport_self_signed",
+  "webtransport_dangerous_configuration",
+  "debug",
+  "compression_lz4",
 ] }
-leafwing-input-manager = "0.13"
+lightyear_tools = { git = "https://github.com/cBournhonesque/lightyear.git", branch = "main" }
+bevy_replicon = { git = "https://github.com/simgine/bevy_replicon", branch = "master" }
+bevy_enhanced_input = { version = "0.26.0", features = ["serialize"] }
 serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0"
+ron = "0.8"
 anyhow = { version = "1.0.75", features = [] }
 tracing = "0.1"
 tracing-subscriber = "0.3.17"
-bevy = { version = "0.13", features = ["bevy_core_pipeline", "dynamic_linking"] }
+bevy = { version = "0.19", default-features = false, features = [
+  "default_app",
+  "scene",
+] }
+bevy_seedling = { git = "https://github.com/corvusprudens/bevy_seedling", branch = "bevy-0.19", default-features = false, features = [
+  "ogg",
+  "reflect",
+  "wav",
+] }
 derive_more = { version = "0.99", features = ["add", "mul"] }
 clap = { version = "4.4", features = ["derive"] }
-bevy_xpbd_2d = { version = "0.4", features = ["parry-f32"] }
-bevy_turborand = "0.8"
-bevy-inspector-egui = "0.23.2"
+bevy_rand = { version = "0.15", default-features = false, features = [
+  "std",
+  "wyrand",
+] }
+rand_core = "0.10"
+
+[patch.crates-io]
+firewheel = { git = "https://github.com/ChristopherBiscardi/Firewheel", branch = "chris-0.19" }
+rtgc = { git = "https://codeberg.org/chrisbiscardi/rtgc", branch = "chris-0.19" }
+# Local Aeronet instrumentation for WebTransport RTT investigations.
+aeronet_io = { path = "../aeronet/crates/aeronet_io" }
+aeronet_webtransport = { path = "../aeronet/crates/aeronet_webtransport" }
+aeronet_websocket = { path = "../aeronet/crates/aeronet_websocket" }
+aeronet_steam = { path = "../aeronet/crates/aeronet_steam" }
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]
 opt-level = 1
+incremental = true
+debug = "line-tables-only"
 
-# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code.
+# Dependency debuginfo is expensive for Bevy/Lightyear and usually not worth the disk.
 [profile.dev.package."*"]
 opt-level = 3
+debug = 0
+
+# Build scripts and proc macros do not need debuginfo for normal iteration.
+[profile.dev.build-override]
+debug = 0

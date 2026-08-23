@@ -1,0 +1,26 @@
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libasound2 \
+        libudev1 \
+        libwayland-client0 \
+        libx11-6 \
+        libxcursor1 \
+        libxi6 \
+        libxinerama1 \
+        libxkbcommon0 \
+        libxrandr2 && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY prebuilt/bin/lightrider-server /app/lightrider-server
+COPY lightrider/config/default.ron /app/config/default.ron
+COPY lightrider/deploy/server-container-entrypoint.sh /app/server-container-entrypoint.sh
+
+RUN chmod +x /app/lightrider-server /app/server-container-entrypoint.sh
+
+EXPOSE 7777/udp
+
+ENTRYPOINT ["/app/server-container-entrypoint.sh"]

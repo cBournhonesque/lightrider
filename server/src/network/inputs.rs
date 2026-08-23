@@ -1,39 +1,107 @@
 use bevy::app::{App, Plugin};
-use bevy::prelude::{Commands, Entity, Query, Update};
-use leafwing_input_manager::prelude::ActionState;
-use lightyear::server::input_leafwing::LeafwingInputPlugin;
+use bevy::prelude::*;
+use lightyear::connection::client::Connected;
+use lightyear::prelude::{ControlledBy, MessageReceiver, RemoteId};
 use tracing::info;
 
-use shared::network::protocol::{DeadGameAction, GameProtocol, PlayerMovement};
-use shared::network::protocol::prelude::{HasPlayer, Player};
+use crate::respawn::RespawnReadyAt;
+use crate::rooms::{add_replicated_entity_to_room, RoomDirectory};
+use crate::spawning::snake_spawn_pose_avoiding;
+use shared::config::GameConfig;
 use shared::network::bundle::snake::SnakeBundle;
+use shared::network::protocol::prelude::*;
 
 pub struct NetworkInputsPlugin;
 
-
 impl Plugin for NetworkInputsPlugin {
     fn build(&self, app: &mut App) {
-        // plugins
-        app.add_plugins(LeafwingInputPlugin::<GameProtocol, PlayerMovement>::default());
-        app.add_plugins(LeafwingInputPlugin::<GameProtocol, DeadGameAction>::default());
-
-        // systems
-        app.add_systems(Update, handle_game_action);
+        app.add_systems(Update, handle_spawn_requests);
     }
 }
 
-fn handle_game_action(
+pub(crate) fn handle_spawn_requests(
     mut commands: Commands,
-    mut players: Query<(Entity, &mut Player, &ActionState<DeadGameAction>)>
+    config: Res<GameConfig>,
+    directory: Res<RoomDirectory>,
+    time: Res<Time>,
+    mut clients: Query<(&RemoteId, &mut MessageReceiver<PlayerSpawnRequest>), With<Connected>>,
+    mut players: Query<(
+        Entity,
+        &mut Player,
+        &mut PlayerScore,
+        &mut PlayerStats,
+        &mut PlayerStatus,
+        &RoomId,
+        Option<&ControlledBy>,
+        Option<&RespawnReadyAt>,
+    )>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
 ) {
-    for (player_entity, mut player, action_state) in players.iter_mut() {
-        if action_state.just_pressed(&DeadGameAction::Spawn) {
+    for (remote_id, mut receiver) in &mut clients {
+        for _request in receiver.receive() {
+            let Some((
+                player_entity,
+                mut player,
+                mut score,
+                mut stats,
+                mut status,
+                room,
+                controlled_by,
+                respawn_ready_at,
+            )) = players
+                .iter_mut()
+                .find(|(_, player, ..)| player.id == remote_id.0)
+            else {
+                continue;
+            };
+            if player.snake.is_some() {
+                continue;
+            }
+            if respawn_ready_at.is_some_and(|ready_at| !ready_at.is_ready(time.elapsed_secs_f64()))
+            {
+                continue;
+            }
+
             info!(?player, "Respawning player");
             let client_id = player.id;
-            // respawn the snake
-            let head_entity = SnakeBundle::spawn(&mut commands, client_id);
-            commands.entity(head_entity).insert(HasPlayer(player_entity));
+            let obstacle_tails = tails
+                .iter()
+                .filter(|(_, _, _, tail_room)| **tail_room == *room)
+                .map(|(head, tail, length, _)| visible_tail(head, tail, length))
+                .collect::<Vec<_>>();
+            let (spawn_position, spawn_direction) =
+                snake_spawn_pose_avoiding(&config, *room, client_id.to_bits(), &obstacle_tails);
+            let head_entity = SnakeBundle::spawn_with_room_at(
+                &mut commands,
+                client_id,
+                &config.movement,
+                *room,
+                spawn_position,
+                spawn_direction,
+            );
+            commands
+                .entity(head_entity)
+                .insert(HasPlayer(player_entity));
+            if let Some(controlled_by) = controlled_by.copied() {
+                commands.entity(head_entity).insert(controlled_by);
+            }
+            let input_action = spawn_snake_input_actions(&mut commands, head_entity);
+            if let Some(lightyear_room) = directory.lightyear_room(*room) {
+                add_replicated_entity_to_room(&mut commands, lightyear_room, head_entity);
+                add_replicated_entity_to_room(&mut commands, lightyear_room, input_action);
+            }
+            commands.entity(player_entity).remove::<RespawnReadyAt>();
             player.snake = Some(head_entity);
+            *score = PlayerScore::default();
+            stats.reset_for_life();
+            *status = PlayerStatus::Alive;
         }
     }
+}
+
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
 }

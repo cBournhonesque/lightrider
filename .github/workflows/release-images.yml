@@ -1,0 +1,184 @@
+name: Release Images
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  EDGEGAP_REGISTRY_URL: ${{ vars.EDGEGAP_REGISTRY_URL || secrets.EDGEGAP_REGISTRY_URL || 'registry.edgegap.com' }}
+  EDGEGAP_REGISTRY_PROJECT: ${{ vars.EDGEGAP_REGISTRY_PROJECT || secrets.EDGEGAP_REGISTRY_PROJECT }}
+  IMAGE_TAG: ${{ github.event.release.tag_name }}
+
+jobs:
+  build-and-push:
+    name: Build and push Edgegap images
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check release tag is a Docker tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Release tag '$IMAGE_TAG' is not a valid Docker tag." >&2
+            echo "Use tags like v0.1.0 or release-20260529." >&2
+            exit 1
+          fi
+
+      - name: Check out Lightrider release
+        uses: actions/checkout@v4
+        with:
+          path: lightrider
+
+      - name: Check out Lightyear
+        uses: actions/checkout@v4
+        with:
+          repository: cBournhonesque/lightyear
+          ref: ${{ vars.LIGHTYEAR_REF || 'main' }}
+          token: ${{ secrets.CHECKOUT_TOKEN || github.token }}
+          path: lightyear
+
+      - name: Check out Lightyear Matchmaker
+        uses: actions/checkout@v4
+        with:
+          repository: cBournhonesque/lightyear-matchmaker
+          ref: ${{ vars.LIGHTYEAR_MATCHMAKER_REF || 'main' }}
+          token: ${{ secrets.CHECKOUT_TOKEN || github.token }}
+          path: lightyear-matchmaker
+
+      - name: Check out Bevy Replicon
+        uses: actions/checkout@v4
+        with:
+          repository: simgine/bevy_replicon
+          ref: ${{ vars.BEVY_REPLICON_REF || 'master' }}
+          token: ${{ secrets.CHECKOUT_TOKEN || github.token }}
+          path: bevy_replicon
+
+      - name: Print dependency refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'lightrider ref: %s\n' "${GITHUB_REF_NAME}"
+          printf 'lightyear ref: %s\n' "${{ vars.LIGHTYEAR_REF || 'main' }}"
+          printf 'lightyear-matchmaker ref: %s\n' "${{ vars.LIGHTYEAR_MATCHMAKER_REF || 'main' }}"
+          printf 'bevy_replicon ref: %s\n' "${{ vars.BEVY_REPLICON_REF || 'master' }}"
+
+      - name: Stage image build context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p lightrider/.edgegap-build/context
+          rsync -a --delete \
+            --exclude .edgegap-build \
+            --exclude .git \
+            --exclude logs \
+            --exclude pkg \
+            --exclude secrets \
+            --exclude target \
+            lightrider/ lightrider/.edgegap-build/context/lightrider/
+          rsync -a --delete \
+            --exclude .git \
+            --exclude target \
+            lightyear/ lightrider/.edgegap-build/context/lightyear/
+          rsync -a --delete \
+            --exclude .git \
+            --exclude target \
+            lightyear-matchmaker/ lightrider/.edgegap-build/context/lightyear-matchmaker/
+          rsync -a --delete \
+            --exclude .git \
+            --exclude target \
+            bevy_replicon/ lightrider/.edgegap-build/context/bevy_replicon/
+          if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+            cp /etc/ssl/certs/ca-certificates.crt lightrider/.edgegap-build/context/host-ca-certificates.crt
+          else
+            : > lightrider/.edgegap-build/context/host-ca-certificates.crt
+          fi
+
+      - name: Set image names
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${EDGEGAP_REGISTRY_PROJECT:?EDGEGAP_REGISTRY_PROJECT must be set as a GitHub variable or secret}"
+          echo "SERVER_IMAGE=${EDGEGAP_REGISTRY_URL}/${EDGEGAP_REGISTRY_PROJECT}/lightrider-server:${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "MATCHMAKER_IMAGE=${EDGEGAP_REGISTRY_URL}/${EDGEGAP_REGISTRY_PROJECT}/lightrider-matchmaker:${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "WEBCLIENT_IMAGE=${EDGEGAP_REGISTRY_URL}/${EDGEGAP_REGISTRY_PROJECT}/lightrider-webclient:${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Edgegap registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.EDGEGAP_REGISTRY_URL }}
+          username: ${{ secrets.EDGEGAP_REGISTRY_USERNAME }}
+          password: ${{ secrets.EDGEGAP_REGISTRY_TOKEN }}
+
+      - name: Build and push game server image
+        uses: docker/build-push-action@v6
+        with:
+          context: lightrider/.edgegap-build/context
+          file: lightrider/.edgegap-build/context/lightrider/deploy/Dockerfile.server
+          push: true
+          tags: ${{ env.SERVER_IMAGE }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            SERVER_CARGO_JOBS=1
+            SERVER_CARGO_INCREMENTAL=0
+            SERVER_RELEASE_OPT_LEVEL=3
+            SERVER_RELEASE_LTO=false
+            SERVER_RELEASE_CODEGEN_UNITS=16
+          cache-from: type=gha,scope=lightrider-server
+          cache-to: type=gha,mode=max,scope=lightrider-server
+
+      - name: Build and push matchmaker/control image
+        uses: docker/build-push-action@v6
+        with:
+          context: lightrider/.edgegap-build/context
+          file: lightrider/.edgegap-build/context/lightrider/deploy/Dockerfile.matchmaker
+          push: true
+          tags: ${{ env.MATCHMAKER_IMAGE }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            MATCHMAKER_CARGO_JOBS=1
+            MATCHMAKER_CARGO_INCREMENTAL=0
+            MATCHMAKER_RELEASE_OPT_LEVEL=2
+            MATCHMAKER_RELEASE_LTO=false
+            MATCHMAKER_RELEASE_CODEGEN_UNITS=16
+          cache-from: type=gha,scope=lightrider-matchmaker
+          cache-to: type=gha,mode=max,scope=lightrider-matchmaker
+
+      - name: Build and push web-client image
+        uses: docker/build-push-action@v6
+        with:
+          context: lightrider/.edgegap-build/context
+          file: lightrider/.edgegap-build/context/lightrider/deploy/Dockerfile.webclient
+          push: true
+          tags: ${{ env.WEBCLIENT_IMAGE }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            WEB_CARGO_JOBS=1
+            WEB_CARGO_INCREMENTAL=0
+            WEB_RELEASE_OPT_LEVEL=s
+            WEB_RELEASE_LTO=false
+            WEB_RELEASE_CODEGEN_UNITS=16
+          cache-from: type=gha,scope=lightrider-webclient
+          cache-to: type=gha,mode=max,scope=lightrider-webclient
+
+      - name: Print pushed images
+        shell: bash
+        run: |
+          printf 'Pushed %s\n' "$SERVER_IMAGE"
+          printf 'Pushed %s\n' "$MATCHMAKER_IMAGE"
+          printf 'Pushed %s\n' "$WEBCLIENT_IMAGE"

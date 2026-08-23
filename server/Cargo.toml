@@ -3,7 +3,7 @@ name = "server"
 version = "0.1.0"
 authors = ["Charles Bournhonesque <charlesbour@gmail.com>"]
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.89"
 description = "Client for the lightrider game"
 readme = "README.md"
 repository = "https://github.com/cBournhonesque/lightrider"
@@ -12,31 +12,66 @@ categories = ["game-development", "network-programming"]
 license = "MIT OR Apache-2.0"
 publish = false
 
+[[bin]]
+name = "lightrider-server"
+path = "src/bin/main.rs"
+
+[features]
+default = ["server"]
+server = ["shared/server"]
+profile-chrome = ["bevy/trace_chrome", "bevy/detailed_trace"]
+render = [
+    "bevy/2d_bevy_render",
+    "bevy/3d_bevy_render",
+    "bevy/bevy_core_pipeline",
+    "bevy/picking",
+    "bevy/ui_api",
+    "bevy/ui_bevy_render",
+]
+lightyear-matchmaker = [
+    "dep:lightyear_matchmaker_bevy_server",
+    "dep:lightyear_matchmaker_core",
+    "dep:lightyear_matchmaker_nats",
+    "dep:serde_json",
+]
+gameflow = [
+    "lightyear-matchmaker",
+    "lightyear_matchmaker_bevy_server/agones",
+]
+bevygap = ["lightyear-matchmaker"]
 
 [dependencies]
-shared = { path = "../shared" }
+shared = { path = "../shared", default-features = false }
 lightyear.workspace = true
-leafwing-input-manager.workspace = true
+bevy_replicon.workspace = true
+bevy_enhanced_input.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 bevy.workspace = true
 clap.workspace = true
-bevy_xpbd_2d.workspace = true
-bevy_turborand.workspace = true
-bevy-inspector-egui.workspace = true
+bevy_rand.workspace = true
+rand_core.workspace = true
 parry2d = "0.13.6"
 derive_more = { version = "0.99", features = ["add", "mul"] }
 cfg-if = "1.0.0"
+lightyear_matchmaker_bevy_server = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_bevy_server", features = ["lightyear-netcode"], optional = true }
+lightyear_matchmaker_core = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_core", optional = true }
+lightyear_matchmaker_nats = { path = "../../lightyear-matchmaker/crates/lightyear_matchmaker_nats", optional = true }
+serde_json = { version = "1", optional = true }
 
 [target."cfg(not(target_family = \"wasm\"))".dependencies]
 tokio = { version = "1.34", features = [
+    "macros",
     "rt",
     "rt-multi-thread",
     "net",
     "time",
 ] }
 
+[target."cfg(target_os = \"linux\")".dependencies]
+libc = "0.2"
+
 [target."cfg(target_family = \"wasm\")".dependencies]
-tokio = { version = "1.34", features = ["rt"] }
+tokio = { version = "1.34", features = ["macros", "rt"] }

@@ -1,0 +1,139 @@
+FROM nats:latest AS nats
+
+FROM rustlang/rust:nightly-bookworm AS chef
+
+ARG CARGO_CHEF_VERSION=0.1.77
+
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    RUSTUP_USE_CURL=1
+
+COPY host-ca-certificates.crt /tmp/host-ca-certificates.crt
+
+RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=lightrider-cargo-install-target,target=/tmp/cargo-install-target \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        lld \
+        libasound2-dev \
+        libudev-dev \
+        libwayland-dev \
+        libx11-dev \
+        libxcursor-dev \
+        libxi-dev \
+        libxinerama-dev \
+        libxkbcommon-dev \
+        libxrandr-dev \
+        pkg-config && \
+    if [ -s /tmp/host-ca-certificates.crt ]; then \
+        cat /tmp/host-ca-certificates.crt >> /etc/ssl/certs/ca-certificates.crt; \
+    fi && \
+    rm -rf /var/lib/apt/lists/* && \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_TARGET_DIR=/tmp/cargo-install-target \
+    cargo install cargo-chef --version "${CARGO_CHEF_VERSION}" --locked
+
+WORKDIR /src/lightrider
+
+FROM chef AS planner
+
+ARG LIGHTYEAR_MATCHMAKER_MANIFEST_SHA=unknown
+
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+
+WORKDIR /src/lightyear-matchmaker
+RUN printf '%s\n' "${LIGHTYEAR_MATCHMAKER_MANIFEST_SHA}" > /tmp/lightyear-matchmaker-manifest-sha && \
+    cargo chef prepare --recipe-path /tmp/lightyear-matchmaker-recipe.json
+
+FROM chef AS path_deps
+
+COPY lightrider/deploy/cargo_path_dep_skeleton.sh /tmp/cargo_path_dep_skeleton.sh
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+RUN sh /tmp/cargo_path_dep_skeleton.sh \
+    /src/lightyear \
+    /src/lightyear-matchmaker \
+    /src/bevy_replicon
+
+FROM chef AS cook
+
+ARG MATCHMAKER_CARGO_JOBS=2
+ARG MATCHMAKER_CARGO_INCREMENTAL=0
+ARG MATCHMAKER_RELEASE_OPT_LEVEL=2
+ARG MATCHMAKER_RELEASE_LTO=thin
+ARG MATCHMAKER_RELEASE_CODEGEN_UNITS=8
+
+COPY --from=planner /tmp/lightyear-matchmaker-recipe.json /tmp/lightyear-matchmaker-recipe.json
+
+COPY --from=path_deps /src/lightyear /src/lightyear
+COPY --from=path_deps /src/lightyear-matchmaker /src/lightyear-matchmaker
+COPY --from=path_deps /src/bevy_replicon /src/bevy_replicon
+COPY lightrider/deploy/cargo_clean_path_packages.sh /tmp/cargo_clean_path_packages.sh
+
+WORKDIR /src/lightyear-matchmaker
+RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
+    CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${MATCHMAKER_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${MATCHMAKER_RELEASE_CODEGEN_UNITS}" \
+    RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    cargo chef cook --release -j "${MATCHMAKER_CARGO_JOBS}" \
+        --recipe-path /tmp/lightyear-matchmaker-recipe.json \
+        --package lightyear_matchmaker_server && \
+    sh /tmp/cargo_clean_path_packages.sh \
+        /src/lightyear \
+        /src/lightyear-matchmaker \
+        /src/bevy_replicon
+
+FROM cook AS builder
+
+ARG MATCHMAKER_CARGO_JOBS=2
+ARG MATCHMAKER_CARGO_INCREMENTAL=0
+ARG MATCHMAKER_RELEASE_OPT_LEVEL=2
+ARG MATCHMAKER_RELEASE_LTO=thin
+ARG MATCHMAKER_RELEASE_CODEGEN_UNITS=8
+
+COPY lightyear /src/lightyear
+COPY lightyear-matchmaker /src/lightyear-matchmaker
+COPY bevy_replicon /src/bevy_replicon
+
+WORKDIR /src/lightyear-matchmaker
+RUN --mount=type=cache,id=lightrider-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lightrider-cargo-git,target=/usr/local/cargo/git \
+    CARGO_INCREMENTAL="${MATCHMAKER_CARGO_INCREMENTAL}" \
+    CARGO_BUILD_JOBS="${MATCHMAKER_CARGO_JOBS}" \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL="${MATCHMAKER_RELEASE_OPT_LEVEL}" \
+    CARGO_PROFILE_RELEASE_LTO="${MATCHMAKER_RELEASE_LTO}" \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${MATCHMAKER_RELEASE_CODEGEN_UNITS}" \
+    RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
+    cargo build --release -j "${MATCHMAKER_CARGO_JOBS}" \
+        --package lightyear_matchmaker_server \
+        --bin lightyear_matchmaker_server && \
+    cp /src/lightyear-matchmaker/target/release/lightyear_matchmaker_server /tmp/lightyear_matchmaker_server
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=nats /nats-server /app/nats-server
+COPY --from=builder /tmp/lightyear_matchmaker_server /app/lightyear_matchmaker_server
+COPY lightrider/deploy/matchmaker-container-entrypoint.sh /app/matchmaker-container-entrypoint.sh
+
+EXPOSE 3000/tcp
+EXPOSE 4222/tcp
+EXPOSE 8222/tcp
+
+ENTRYPOINT ["/app/matchmaker-container-entrypoint.sh"]

@@ -2,14 +2,14 @@
 //! The player can enter their name and choose a server to connect to.
 //! When they press enter, we will get a ConnectToken from the backend,
 //! which we will use to connect to the server.
+#![allow(dead_code)]
 
 use bevy::prelude::*;
-use lightyear::connection::netcode::ConnectToken;
 
 pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
-    fn build(&self, app: &mut App) {
+    fn build(&self, _app: &mut App) {
         // NotConnected
         // app.add_systems(Update, start_connection.run_if(in_state(AppState::NotConnected)));
 
@@ -32,14 +32,13 @@ pub fn start_connection(keys: Res<ButtonInput<KeyCode>>) {
     }
 }
 
-
 /// Issue a request to the backend to get a connect token
-pub fn get_connect_token() -> ConnectToken {
+pub fn get_connect_token() {
     todo!()
 }
 
 /// Get the ConnectToken from a resource, and use it
-pub fn connect(world: &mut World) {
+pub fn connect(_world: &mut World) {
     // TODO: can we do a blocking io op here? or will it block all other systems?
     // lightyear::client::resource::connect_with_token(world, )
 

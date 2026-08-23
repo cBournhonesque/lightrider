@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lightrider</title>
+    <link rel="modulepreload" href="./pkg/lightrider-web.js" />
+    <link
+      rel="preload"
+      href="./pkg/lightrider-web_bg.wasm"
+      as="fetch"
+      type="application/wasm"
+      crossorigin
+    />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #05070b;
+        color: #e7fbff;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+
+      body {
+        min-width: 320px;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      .lightrider-web-shell,
+      .game-stage {
+        height: 100vh;
+        width: 100vw;
+      }
+
+      .lightrider-web-shell {
+        position: relative;
+        isolation: isolate;
+      }
+
+      .game-stage {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+      }
+
+      canvas {
+        display: block;
+        height: 100vh !important;
+        width: 100vw !important;
+      }
+
+      .menu-backdrop {
+        align-items: center;
+        background:
+          radial-gradient(circle at 50% 25%, rgb(18 80 76 / 40%), transparent 34rem),
+          rgb(1 6 10 / 52%);
+        display: flex;
+        inset: 0;
+        justify-content: center;
+        padding: 24px;
+        position: absolute;
+        z-index: 2;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .loading-status {
+        align-items: center;
+        background: rgb(2 10 16 / 78%);
+        border: 1px solid rgb(102 255 232 / 34%);
+        border-radius: 6px;
+        box-shadow: 0 14px 50px rgb(0 0 0 / 38%);
+        color: #d9fffb;
+        display: flex;
+        font-size: 14px;
+        font-weight: 800;
+        justify-content: center;
+        left: 50%;
+        max-width: min(640px, calc(100vw - 32px));
+        min-height: 36px;
+        padding: 0 14px;
+        position: fixed;
+        text-align: center;
+        top: 18px;
+        transform: translateX(-50%);
+        white-space: normal;
+        z-index: 5;
+      }
+
+      .join-modal {
+        background: rgb(2 10 16 / 84%);
+        border: 1px solid rgb(102 255 232 / 38%);
+        border-radius: 8px;
+        box-shadow: 0 24px 90px rgb(0 0 0 / 56%);
+        max-width: 420px;
+        padding: 26px;
+        position: relative;
+        width: min(420px, calc(100vw - 48px));
+      }
+
+      .join-modal h1 {
+        color: #70ffee;
+        font-size: clamp(34px, 9vw, 64px);
+        font-weight: 800;
+        letter-spacing: 0;
+        line-height: 0.9;
+        margin: 0 0 22px;
+        text-shadow: 0 0 18px rgb(112 255 238 / 42%);
+      }
+
+      .join-modal form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .name-input,
+      .room-input {
+        background: rgb(255 255 255 / 8%);
+        border: 1px solid rgb(212 255 247 / 28%);
+        border-radius: 6px;
+        box-sizing: border-box;
+        color: #f4ffff;
+        height: 46px;
+        outline: none;
+        padding: 0 13px;
+        width: 100%;
+      }
+
+      .name-input:focus,
+      .room-input:focus {
+        border-color: #70ffee;
+        box-shadow: 0 0 0 3px rgb(112 255 238 / 18%);
+      }
+
+      .room-row {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(92px, 120px) 1fr;
+      }
+
+      .room-input {
+        text-transform: uppercase;
+      }
+
+      .play-button,
+      .menu-button,
+      .modal-close {
+        border: 0;
+        cursor: pointer;
+      }
+
+      .play-button {
+        background: #70ffee;
+        border-radius: 6px;
+        color: #031014;
+        font-weight: 800;
+        height: 46px;
+      }
+
+      .form-error {
+        color: #ff8f8f;
+        font-size: 13px;
+        margin: 0;
+        min-height: 18px;
+      }
+
+      .menu-button {
+        color: #bdfbf5;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .modal-close {
+        align-items: center;
+        background: rgb(255 255 255 / 8%);
+        border: 1px solid rgb(212 255 247 / 22%);
+        border-radius: 6px;
+        color: #cffffb;
+        display: flex;
+        font-size: 13px;
+        font-weight: 800;
+        height: 30px;
+        justify-content: center;
+        padding: 0;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        width: 30px;
+      }
+
+      .modal-close:hover,
+      .menu-button:hover,
+      .room-code-badge:hover {
+        border-color: rgb(112 255 238 / 52%);
+      }
+
+      .room-code-badge {
+        align-items: center;
+        background: rgb(2 10 16 / 72%);
+        border: 1px solid rgb(102 255 232 / 28%);
+        border-radius: 6px;
+        color: #bdfbf5;
+        display: flex;
+        font-size: 12px;
+        font-weight: 800;
+        height: 34px;
+        left: 14px;
+        padding: 0 12px;
+        position: absolute;
+        top: 14px;
+        z-index: 3;
+      }
+
+      .menu-button {
+        background: rgb(2 10 16 / 72%);
+        border: 1px solid rgb(102 255 232 / 28%);
+        border-radius: 6px;
+        height: 34px;
+        padding: 0 12px;
+        position: absolute;
+        right: 14px;
+        top: 14px;
+        z-index: 3;
+      }
+
+      @media (max-width: 440px) {
+        .room-row {
+          grid-template-columns: 1fr;
+        }
+
+        .join-modal {
+          padding: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="lightrider-status" class="loading-status">Loading assets...</div>
+    <div id="lightrider-root">
+      <main class="lightrider-web-shell">
+        <div class="menu-backdrop">
+          <section class="join-modal" aria-label="Lightrider menu">
+            <h1>LIGHTRIDER</h1>
+            <form id="lightrider-bootstrap-form">
+              <input
+                id="lightrider-bootstrap-name"
+                class="name-input"
+                autocomplete="nickname"
+                maxlength="18"
+                placeholder="Name"
+              />
+              <div class="room-row">
+                <input
+                  id="lightrider-bootstrap-room"
+                  class="room-input"
+                  autocomplete="off"
+                  maxlength="4"
+                  placeholder="ROOM"
+                />
+                <button class="play-button" type="submit">PLAY</button>
+              </div>
+              <p class="form-error hidden"></p>
+            </form>
+          </section>
+        </div>
+      </main>
+    </div>
+    <script>
+      window.LIGHTRIDER_BOOTSTRAP = window.LIGHTRIDER_BOOTSTRAP || {};
+      window.LIGHTRIDER_STARTUP_STARTED_AT = performance.now();
+
+      const bootstrapForm = document.getElementById("lightrider-bootstrap-form");
+      const bootstrapName = document.getElementById("lightrider-bootstrap-name");
+      const bootstrapRoom = document.getElementById("lightrider-bootstrap-room");
+
+      function updateBootstrapUrl() {
+        const url = new URL(window.location.href);
+        const name = bootstrapName.value.trim().slice(0, 18);
+        const room = bootstrapRoom.value.trim().toUpperCase();
+        if (name) {
+          url.searchParams.set("name", name);
+        } else {
+          url.searchParams.delete("name");
+        }
+        if (room) {
+          url.searchParams.set("room", room);
+        } else {
+          url.searchParams.delete("room");
+        }
+        window.history.replaceState(null, "", url);
+      }
+
+      bootstrapForm?.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const name = bootstrapName.value.trim().slice(0, 18);
+        const error = bootstrapForm.querySelector(".form-error");
+        if (!name) {
+          if (error) {
+            error.textContent = "Enter a name.";
+            error.className = "form-error";
+          }
+          return;
+        }
+        if (error) {
+          error.textContent = "";
+          error.className = "form-error hidden";
+        }
+        updateBootstrapUrl();
+        document.getElementById("lightrider-status").textContent =
+          "Starting game...";
+      });
+
+    </script>
+    <script src="./bootstrap.js"></script>
+    <script type="module">
+      const importStart = performance.now();
+      import("./pkg/lightrider-web.js")
+        .then(({ default: init }) => {
+          const initStart = performance.now();
+          window.LIGHTRIDER_WASM_INIT_STARTED_AT = initStart;
+          return init().then(() => ({ initStart }));
+        })
+        .then(({ initStart }) => {
+          const done = performance.now();
+          console.info(
+            `Lightrider startup: module wait ${(initStart - importStart).toFixed(0)}ms, wasm init ${(done - initStart).toFixed(0)}ms, total ${(done - window.LIGHTRIDER_STARTUP_STARTED_AT).toFixed(0)}ms`
+          );
+        })
+        .catch((error) => {
+          console.error("Failed to start Lightrider", error);
+          const status = document.getElementById("lightrider-status");
+          if (status) {
+            status.textContent = `Failed to start game: ${error}`;
+            status.className = "loading-status";
+          }
+        });
+    </script>
+  </body>
+</html>

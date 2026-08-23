@@ -1,9 +1,5 @@
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
-use lightyear::prelude::server::*;
-
-use shared::network::config::Transports;
-use shared::network::protocol::GameProtocol;
 
 use crate::network::inputs::NetworkInputsPlugin;
 
@@ -12,22 +8,28 @@ mod connection_events;
 mod inputs;
 
 pub(crate) struct NetworkPluginGroup {
-    pub(crate) lightyear: ServerPlugin<GameProtocol>,
+    pub(crate) port: u16,
+    pub(crate) start_immediately: bool,
 }
 
 impl PluginGroup for NetworkPluginGroup {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
-            .add(self.lightyear)
+            .add(config::ServerConnectionPlugin {
+                config: config::ServerConnectionConfig {
+                    port: self.port,
+                    start_immediately: self.start_immediately,
+                },
+            })
             .add(NetworkPlugin)
     }
 }
 
 impl NetworkPluginGroup {
-    pub async fn new(port: u16, transport: Transports) -> Self {
-        let lightyear = config::build_plugin(port, transport).await;
+    pub fn new(port: u16, start_immediately: bool) -> Self {
         Self {
-            lightyear,
+            port,
+            start_immediately,
         }
     }
 }
@@ -39,12 +41,8 @@ impl Plugin for NetworkPlugin {
         // plugins
         app.add_plugins(NetworkInputsPlugin);
 
-        // resources
-        app.init_resource::<connection_events::Global>();
-
         // systems
-        app.add_systems(Update, (connection_events::handle_connections, connection_events::handle_disconnections));
-
+        app.add_observer(connection_events::handle_new_client);
+        app.add_observer(connection_events::handle_new_client_of);
     }
 }
-

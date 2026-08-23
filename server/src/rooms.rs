@@ -1,0 +1,1112 @@
+use bevy::ecs::relationship::Relationship;
+use bevy::ecs::schedule::ApplyDeferred;
+use bevy::prelude::*;
+use bevy_rand::prelude::{GlobalRng, WyRand};
+use lightyear::connection::client::{Connected, Disconnected};
+use lightyear::prelude::input::bei::{Action, ActionOf};
+use lightyear::prelude::server::ClientOf;
+use lightyear::prelude::{
+    ControlledBy, MessageReceiver, PeerId, RemoteId, RoomAllocator, RoomId as LightyearRoomId,
+    RoomPlugin as LightyearRoomPlugin, Rooms,
+};
+use rand_core::Rng;
+
+use crate::spawning::snake_spawn_pose_avoiding;
+use shared::config::GameConfig;
+use shared::map::spawn_room_map;
+use shared::network::bundle::player::PlayerBundle;
+use shared::network::bundle::snake::SnakeBundle;
+use shared::network::protocol::prelude::*;
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ClientRoom {
+    pub(crate) room: RoomId,
+}
+
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+struct PendingPlayerName(String);
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+struct RegisteredHumanRoom(RoomId);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RoomAssignment {
+    pub(crate) game_room: RoomId,
+    pub(crate) lightyear_room: LightyearRoomId,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RoomState {
+    pub(crate) game_room: RoomId,
+    pub(crate) lightyear_room: LightyearRoomId,
+    human_count: usize,
+    private: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RoomMetrics {
+    pub(crate) game_room: RoomId,
+    pub(crate) human_count: usize,
+    pub(crate) private: bool,
+}
+
+#[derive(Resource, Default, Debug)]
+pub(crate) struct RoomDirectory {
+    rooms: Vec<RoomState>,
+    next_room_id: u64,
+}
+
+impl RoomDirectory {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rooms.is_empty()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = RoomAssignment> + '_ {
+        self.rooms.iter().map(|room| RoomAssignment {
+            game_room: room.game_room,
+            lightyear_room: room.lightyear_room,
+        })
+    }
+
+    pub(crate) fn lightyear_room(&self, game_room: RoomId) -> Option<LightyearRoomId> {
+        self.rooms
+            .iter()
+            .find(|room| room.game_room == game_room)
+            .map(|room| room.lightyear_room)
+    }
+
+    pub(crate) fn metrics(&self) -> impl Iterator<Item = RoomMetrics> + '_ {
+        self.rooms.iter().map(|room| RoomMetrics {
+            game_room: room.game_room,
+            human_count: room.human_count,
+            private: room.private,
+        })
+    }
+
+    pub(crate) fn assign_auto(
+        &mut self,
+        commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
+        config: &GameConfig,
+        roll: usize,
+    ) -> RoomAssignment {
+        let max_players_per_room = config.rooms.max_players_per_room.max(1);
+        let max_rooms = config.rooms.max_rooms.max(1);
+        let public_indices = self
+            .rooms
+            .iter()
+            .enumerate()
+            .filter_map(|(index, room)| (!room.private).then_some(index))
+            .collect::<Vec<_>>();
+        let candidates = public_indices
+            .iter()
+            .copied()
+            .filter(|index| self.rooms[*index].human_count < max_players_per_room)
+            .collect::<Vec<_>>();
+
+        if !candidates.is_empty() {
+            return self.assignment_at(candidates[roll % candidates.len()]);
+        }
+        if self.rooms.len() < max_rooms {
+            return self.create_room(commands, room_allocator, config, None);
+        }
+
+        if let Some(fallback) = public_indices
+            .into_iter()
+            .min_by_key(|index| self.rooms[*index].human_count)
+        {
+            return self.assignment_at(fallback);
+        }
+
+        // Preserve private-room isolation even when all configured room slots are private.
+        self.create_room(commands, room_allocator, config, None)
+    }
+
+    pub(crate) fn assign_for_mode(
+        &mut self,
+        commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
+        config: &GameConfig,
+        mode: RoomJoinMode,
+        roll: usize,
+    ) -> RoomAssignment {
+        match mode {
+            RoomJoinMode::Auto => self.assign_auto(commands, room_allocator, config, roll),
+            RoomJoinMode::New => {
+                if self.rooms.len() < config.rooms.max_rooms.max(1) {
+                    self.create_room(commands, room_allocator, config, None)
+                } else {
+                    self.assign_auto(commands, room_allocator, config, roll)
+                }
+            }
+            RoomJoinMode::Specific(room_id) => {
+                self.assign_specific(commands, room_allocator, config, room_id, roll)
+            }
+            RoomJoinMode::Private(code) => {
+                self.assign_private(commands, room_allocator, config, code.room_id())
+            }
+        }
+    }
+
+    fn assign_specific(
+        &mut self,
+        commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
+        config: &GameConfig,
+        room_id: RoomId,
+        roll: usize,
+    ) -> RoomAssignment {
+        if let Some(existing) = self.rooms.iter().position(|room| room.game_room == room_id) {
+            self.assignment_at(existing)
+        } else if self.rooms.len() < config.rooms.max_rooms.max(1) {
+            self.create_room(commands, room_allocator, config, Some(room_id))
+        } else {
+            self.assign_auto(commands, room_allocator, config, roll)
+        }
+    }
+
+    fn assign_private(
+        &mut self,
+        commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
+        config: &GameConfig,
+        room_id: RoomId,
+    ) -> RoomAssignment {
+        if let Some(existing) = self.rooms.iter().position(|room| room.game_room == room_id) {
+            return self.assignment_at(existing);
+        }
+
+        // A full server should not route a private-code request into a public room.
+        // Treat max_rooms as a soft guard here; matchmaker capacity policy should
+        // prevent this path in production.
+        self.create_room(commands, room_allocator, config, Some(room_id))
+    }
+
+    pub(crate) fn register_human(&mut self, room_id: RoomId) {
+        if let Some(room) = self.rooms.iter_mut().find(|room| room.game_room == room_id) {
+            room.human_count = room.human_count.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn unregister_human(&mut self, room_id: RoomId) {
+        if let Some(room) = self.rooms.iter_mut().find(|room| room.game_room == room_id) {
+            room.human_count = room.human_count.saturating_sub(1);
+        }
+    }
+
+    pub(crate) fn move_human(&mut self, from: RoomId, to: RoomId) {
+        if from == to {
+            return;
+        }
+        self.unregister_human(from);
+        self.register_human(to);
+    }
+
+    fn assignment_at(&self, index: usize) -> RoomAssignment {
+        let room = self.rooms[index];
+        RoomAssignment {
+            game_room: room.game_room,
+            lightyear_room: room.lightyear_room,
+        }
+    }
+
+    fn create_room(
+        &mut self,
+        commands: &mut Commands,
+        room_allocator: &mut RoomAllocator,
+        config: &GameConfig,
+        requested: Option<RoomId>,
+    ) -> RoomAssignment {
+        let game_room = requested.unwrap_or_else(|| RoomId(self.next_room_id));
+        if requested.is_none() || !RoomCode::is_private_room_id(game_room) {
+            self.next_room_id = self.next_room_id.max(game_room.0.saturating_add(1));
+        }
+        let lightyear_room = room_allocator.allocate();
+        commands.spawn(Name::from(format!("Room {}", game_room.0)));
+        spawn_room_map(commands, config, game_room);
+        self.rooms.push(RoomState {
+            game_room,
+            lightyear_room,
+            human_count: 0,
+            private: RoomCode::is_private_room_id(game_room),
+        });
+        RoomAssignment {
+            game_room,
+            lightyear_room,
+        }
+    }
+}
+
+pub(crate) struct ServerRoomsPlugin;
+
+impl Plugin for ServerRoomsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(LightyearRoomPlugin);
+        app.init_resource::<RoomDirectory>();
+        app.add_systems(Startup, ensure_initial_room);
+        app.add_systems(
+            Update,
+            (
+                handle_player_name_updates,
+                handle_room_join_requests,
+                ApplyDeferred,
+                spawn_pending_named_players,
+                update_player_ranks,
+            )
+                .chain(),
+        );
+        app.add_observer(handle_disconnected);
+    }
+}
+
+fn ensure_initial_room(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut room_allocator: ResMut<RoomAllocator>,
+    mut directory: ResMut<RoomDirectory>,
+) {
+    if directory.is_empty() {
+        directory.create_room(&mut commands, &mut room_allocator, &config, None);
+    }
+}
+
+fn handle_player_name_updates(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut directory: ResMut<RoomDirectory>,
+    mut clients: Query<
+        (
+            Entity,
+            &RemoteId,
+            &mut MessageReceiver<PlayerNameUpdate>,
+            Option<&ClientRoom>,
+            Option<&RegisteredHumanRoom>,
+        ),
+        With<Connected>,
+    >,
+    mut players: Query<(
+        Entity,
+        &mut Player,
+        &mut PlayerScore,
+        &mut PlayerStats,
+        &mut PlayerStatus,
+        &RoomId,
+        Option<&ControlledBy>,
+    )>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
+) {
+    for (client_entity, remote_id, mut receiver, client_room, registered_room) in &mut clients {
+        for message in receiver.receive() {
+            let Some(name) = sanitize_player_name(&message.name) else {
+                commands.entity(client_entity).remove::<PendingPlayerName>();
+                continue;
+            };
+            commands
+                .entity(client_entity)
+                .insert(PendingPlayerName(name.clone()));
+
+            if let Some((
+                player_entity,
+                mut player,
+                mut score,
+                mut stats,
+                mut status,
+                room,
+                controlled_by,
+            )) = players
+                .iter_mut()
+                .find(|(_, player, ..)| player.id == remote_id.0)
+            {
+                if player.name == name && player.snake.is_some() && *status == PlayerStatus::Alive {
+                    continue;
+                }
+                player.name = name;
+                if let Some(snake_entity) = player.snake.take() {
+                    commands.entity(snake_entity).try_despawn();
+                }
+                let Some(lightyear_room) = directory.lightyear_room(*room) else {
+                    continue;
+                };
+                let assignment = RoomAssignment {
+                    game_room: *room,
+                    lightyear_room,
+                };
+                let obstacle_tails = obstacle_tails_for_room(*room, &tails);
+                let head_entity = spawn_client_snake(
+                    &mut commands,
+                    client_entity,
+                    remote_id.0,
+                    player_entity,
+                    assignment,
+                    &config,
+                    &obstacle_tails,
+                );
+                if let Some(controlled_by) = controlled_by.copied() {
+                    commands.entity(head_entity).insert(controlled_by);
+                }
+                player.snake = Some(head_entity);
+                *score = PlayerScore::default();
+                stats.reset_for_life();
+                *status = PlayerStatus::Alive;
+                if registered_room.is_none() {
+                    directory.register_human(*room);
+                    commands
+                        .entity(client_entity)
+                        .insert(RegisteredHumanRoom(*room));
+                }
+                continue;
+            }
+
+            let Some(client_room) = client_room else {
+                continue;
+            };
+            let Some(lightyear_room) = directory.lightyear_room(client_room.room) else {
+                continue;
+            };
+            let assignment = RoomAssignment {
+                game_room: client_room.room,
+                lightyear_room,
+            };
+            if registered_room.is_none() {
+                directory.register_human(client_room.room);
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(client_room.room));
+            }
+            let obstacle_tails = obstacle_tails_for_room(client_room.room, &tails);
+            spawn_client_player(
+                &mut commands,
+                client_entity,
+                remote_id.0,
+                assignment,
+                &config,
+                name,
+                &obstacle_tails,
+            );
+        }
+    }
+}
+
+fn sanitize_player_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    (!trimmed.is_empty()).then(|| trimmed.chars().take(18).collect())
+}
+
+fn handle_room_join_requests(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut directory: ResMut<RoomDirectory>,
+    mut room_allocator: ResMut<RoomAllocator>,
+    mut rng: Single<&mut WyRand, With<GlobalRng>>,
+    mut clients: Query<
+        (
+            Entity,
+            &RemoteId,
+            &mut MessageReceiver<RoomJoinRequest>,
+            Option<&ClientRoom>,
+            Option<&PendingPlayerName>,
+            Option<&RegisteredHumanRoom>,
+        ),
+        With<Connected>,
+    >,
+    players: Query<(Entity, &Player)>,
+    input_actions: Query<(Entity, &ActionOf<SnakeInput>), With<Action<MoveSnake>>>,
+    mut room_queries: ParamSet<(
+        Query<&mut RoomId>,
+        Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
+    )>,
+) {
+    for (client_entity, remote_id, mut receiver, client_room, pending_name, registered_room) in
+        &mut clients
+    {
+        let mut current_room = client_room.map(|room| room.room);
+        let mut registered_room = registered_room.map(|room| room.0);
+        for request in receiver.receive() {
+            let roll = rng.next_u64() as usize;
+            let assignment = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                request.mode,
+                roll,
+            );
+            let obstacle_tails = {
+                let tails = room_queries.p1();
+                obstacle_tails_for_room(assignment.game_room, &tails)
+            };
+            let mut room_components = room_queries.p0();
+
+            registered_room = move_client_to_room(
+                &mut commands,
+                &mut directory,
+                client_entity,
+                remote_id.0,
+                current_room,
+                registered_room,
+                assignment,
+                &config,
+                pending_name,
+                &players,
+                &input_actions,
+                &mut room_components,
+                &obstacle_tails,
+            );
+            current_room = Some(assignment.game_room);
+        }
+    }
+}
+
+fn spawn_pending_named_players(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut directory: ResMut<RoomDirectory>,
+    clients: Query<
+        (
+            Entity,
+            &RemoteId,
+            &ClientRoom,
+            &PendingPlayerName,
+            Option<&RegisteredHumanRoom>,
+        ),
+        With<Connected>,
+    >,
+    players: Query<&Player>,
+    tails: Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
+) {
+    for (client_entity, remote_id, client_room, pending_name, registered_room) in &clients {
+        if players.iter().any(|player| player.id == remote_id.0) {
+            continue;
+        }
+        let Some(lightyear_room) = directory.lightyear_room(client_room.room) else {
+            continue;
+        };
+        match registered_room.map(|room| room.0) {
+            Some(registered_room) if registered_room != client_room.room => {
+                directory.move_human(registered_room, client_room.room);
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(client_room.room));
+            }
+            Some(_) => {}
+            None => {
+                directory.register_human(client_room.room);
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(client_room.room));
+            }
+        }
+        spawn_client_player(
+            &mut commands,
+            client_entity,
+            remote_id.0,
+            RoomAssignment {
+                game_room: client_room.room,
+                lightyear_room,
+            },
+            &config,
+            pending_name.0.clone(),
+            &obstacle_tails_for_room(client_room.room, &tails),
+        );
+    }
+}
+
+fn update_player_ranks(
+    players: Query<(Entity, &RoomId, &PlayerScore), With<Player>>,
+    mut ranks: Query<&mut PlayerRank, With<Player>>,
+) {
+    let mut rows = players
+        .iter()
+        .map(|(entity, room, score)| RankRow {
+            entity,
+            room: *room,
+            score: score.value,
+        })
+        .collect::<Vec<_>>();
+    let updates = compute_room_ranks(&mut rows);
+    for (entity, rank) in updates {
+        if let Ok(mut player_rank) = ranks.get_mut(entity) {
+            *player_rank = rank;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RankRow {
+    entity: Entity,
+    room: RoomId,
+    score: u32,
+}
+
+fn compute_room_ranks(rows: &mut [RankRow]) -> Vec<(Entity, PlayerRank)> {
+    rows.sort_by(|a, b| {
+        a.room
+            .0
+            .cmp(&b.room.0)
+            .then_with(|| b.score.cmp(&a.score))
+            .then_with(|| a.entity.to_bits().cmp(&b.entity.to_bits()))
+    });
+
+    let mut updates = Vec::with_capacity(rows.len());
+    let mut current_room = None;
+    let mut rank = 0_u16;
+    for row in rows {
+        if current_room != Some(row.room) {
+            current_room = Some(row.room);
+            rank = 1;
+        } else {
+            rank = rank.saturating_add(1);
+        }
+        updates.push((row.entity, PlayerRank { value: rank }));
+    }
+    updates
+}
+
+fn move_client_to_room(
+    commands: &mut Commands,
+    directory: &mut RoomDirectory,
+    client_entity: Entity,
+    client_id: lightyear::prelude::PeerId,
+    _current_room: Option<RoomId>,
+    registered_room: Option<RoomId>,
+    assignment: RoomAssignment,
+    config: &GameConfig,
+    pending_name: Option<&PendingPlayerName>,
+    players: &Query<(Entity, &Player)>,
+    input_actions: &Query<(Entity, &ActionOf<SnakeInput>), With<Action<MoveSnake>>>,
+    room_components: &mut Query<&mut RoomId>,
+    obstacle_tails: &[TailPolyline],
+) -> Option<RoomId> {
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, client_entity);
+    commands.entity(client_entity).insert(ClientRoom {
+        room: assignment.game_room,
+    });
+
+    let Some((player_entity, player)) = players.iter().find(|(_, player)| player.id == client_id)
+    else {
+        if let Some(pending_name) = pending_name {
+            if registered_room != Some(assignment.game_room) {
+                if let Some(registered_room) = registered_room {
+                    directory.move_human(registered_room, assignment.game_room);
+                } else {
+                    directory.register_human(assignment.game_room);
+                }
+                commands
+                    .entity(client_entity)
+                    .insert(RegisteredHumanRoom(assignment.game_room));
+            }
+            spawn_client_player(
+                commands,
+                client_entity,
+                client_id,
+                assignment,
+                config,
+                pending_name.0.clone(),
+                obstacle_tails,
+            );
+            return Some(assignment.game_room);
+        }
+        return registered_room;
+    };
+    if registered_room != Some(assignment.game_room) {
+        if let Some(registered_room) = registered_room {
+            directory.move_human(registered_room, assignment.game_room);
+        } else {
+            directory.register_human(assignment.game_room);
+        }
+        commands
+            .entity(client_entity)
+            .insert(RegisteredHumanRoom(assignment.game_room));
+    }
+    move_replicated_entity_to_room(commands, player_entity, assignment.lightyear_room);
+    if let Ok(mut player_room) = room_components.get_mut(player_entity) {
+        *player_room = assignment.game_room;
+    }
+
+    if let Some(snake_entity) = player.snake {
+        if let Ok(mut snake_room) = room_components.get_mut(snake_entity) {
+            move_replicated_entity_to_room(commands, snake_entity, assignment.lightyear_room);
+            move_snake_input_actions_to_room(
+                commands,
+                snake_entity,
+                assignment.lightyear_room,
+                input_actions,
+            );
+            *snake_room = assignment.game_room;
+        }
+    }
+    Some(assignment.game_room)
+}
+
+fn spawn_client_player(
+    commands: &mut Commands,
+    client_entity: Entity,
+    client_id: PeerId,
+    assignment: RoomAssignment,
+    config: &GameConfig,
+    name: String,
+    obstacle_tails: &[TailPolyline],
+) {
+    info!(
+        "Client {client_id:?} joined room {}",
+        assignment.game_room.0,
+    );
+    let player_entity = PlayerBundle::new_in_room(
+        Player {
+            id: client_id,
+            name: name.clone(),
+            snake: None,
+        },
+        assignment.game_room,
+    )
+    .spawn(commands, client_id);
+    let head_entity = spawn_client_snake(
+        commands,
+        client_entity,
+        client_id,
+        player_entity,
+        assignment,
+        config,
+        obstacle_tails,
+    );
+
+    let controlled_by = ControlledBy {
+        owner: client_entity,
+        lifetime: Default::default(),
+    };
+    commands.entity(head_entity).insert(controlled_by);
+    commands.entity(player_entity).insert(controlled_by);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, player_entity);
+    commands.entity(player_entity).insert(Player {
+        id: client_id,
+        name,
+        snake: Some(head_entity),
+    });
+}
+
+fn spawn_client_snake(
+    commands: &mut Commands,
+    client_entity: Entity,
+    client_id: PeerId,
+    player_entity: Entity,
+    assignment: RoomAssignment,
+    config: &GameConfig,
+    obstacle_tails: &[TailPolyline],
+) -> Entity {
+    let (spawn_position, spawn_direction) = snake_spawn_pose_avoiding(
+        config,
+        assignment.game_room,
+        client_id.to_bits(),
+        obstacle_tails,
+    );
+    let head_entity = SnakeBundle::spawn_with_room_at(
+        commands,
+        client_id,
+        &config.movement,
+        assignment.game_room,
+        spawn_position,
+        spawn_direction,
+    );
+    commands.entity(head_entity).insert((
+        HasPlayer(player_entity),
+        ControlledBy {
+            owner: client_entity,
+            lifetime: Default::default(),
+        },
+    ));
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, head_entity);
+    let input_action = spawn_snake_input_actions(commands, head_entity);
+    add_replicated_entity_to_room(commands, assignment.lightyear_room, input_action);
+    head_entity
+}
+
+fn obstacle_tails_for_room(
+    room: RoomId,
+    tails: &Query<(&SnakeHead, &TailPoints, Option<&TailLength>, &RoomId)>,
+) -> Vec<TailPolyline> {
+    tails
+        .iter()
+        .filter(|(_, _, _, tail_room)| **tail_room == room)
+        .map(|(head, tail, length, _)| visible_tail(head, tail, length))
+        .collect()
+}
+
+fn visible_tail(head: &SnakeHead, tail: &TailPoints, length: Option<&TailLength>) -> TailPolyline {
+    tail.polyline(
+        head,
+        length.map(|length| length.current_size).unwrap_or(0.0),
+    )
+}
+
+pub(crate) fn add_replicated_entity_to_room(
+    commands: &mut Commands,
+    room: LightyearRoomId,
+    entity: Entity,
+) {
+    commands.entity(entity).insert(Rooms::single(room));
+}
+
+pub(crate) fn remove_replicated_entity_from_room(
+    commands: &mut Commands,
+    _room: LightyearRoomId,
+    entity: Entity,
+) {
+    commands.entity(entity).remove::<Rooms>();
+}
+
+fn move_replicated_entity_to_room(
+    commands: &mut Commands,
+    entity: Entity,
+    lightyear_room: LightyearRoomId,
+) {
+    add_replicated_entity_to_room(commands, lightyear_room, entity);
+}
+
+fn move_snake_input_actions_to_room(
+    commands: &mut Commands,
+    snake_entity: Entity,
+    lightyear_room: LightyearRoomId,
+    input_actions: &Query<(Entity, &ActionOf<SnakeInput>), With<Action<MoveSnake>>>,
+) {
+    for (action, _action_of) in input_actions
+        .iter()
+        .filter(|(_, action_of)| action_of.get() == snake_entity)
+    {
+        add_replicated_entity_to_room(commands, lightyear_room, action);
+    }
+}
+
+fn handle_disconnected(
+    trigger: On<Add, Disconnected>,
+    clients: Query<(&RemoteId, Option<&RegisteredHumanRoom>), With<ClientOf>>,
+    players: Query<(Entity, &Player)>,
+    mut directory: ResMut<RoomDirectory>,
+    mut commands: Commands,
+) {
+    let Ok((remote_id, registered_room)) = clients.get(trigger.entity) else {
+        return;
+    };
+    if let Some(registered_room) = registered_room {
+        directory.unregister_human(registered_room.0);
+    }
+
+    let Some((player_entity, player)) = players.iter().find(|(_, player)| player.id == remote_id.0)
+    else {
+        return;
+    };
+    if let Some(snake_entity) = player.snake {
+        commands.entity(snake_entity).try_despawn();
+    }
+    commands.entity(player_entity).try_despawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_room_does_not_assign_private_rooms() {
+        #[derive(Resource, Default)]
+        struct Results {
+            private: Option<RoomAssignment>,
+            public: Option<RoomAssignment>,
+        }
+
+        fn assign_rooms(
+            mut commands: Commands,
+            config: Res<GameConfig>,
+            mut room_allocator: ResMut<RoomAllocator>,
+            mut directory: ResMut<RoomDirectory>,
+            mut results: ResMut<Results>,
+        ) {
+            let private = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Private(RoomCode::parse("ABCD").unwrap()),
+                0,
+            );
+            let public = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Auto,
+                0,
+            );
+            results.private = Some(private);
+            results.public = Some(public);
+        }
+
+        let mut app = App::new();
+        app.init_resource::<RoomAllocator>();
+        app.init_resource::<RoomDirectory>();
+        app.init_resource::<Results>();
+        app.insert_resource(GameConfig::default());
+        app.add_systems(Update, assign_rooms);
+
+        app.update();
+
+        let results = app.world().resource::<Results>();
+        assert_eq!(
+            results.private.unwrap().game_room,
+            RoomCode::parse("ABCD").unwrap().room_id()
+        );
+        assert_eq!(results.public.unwrap().game_room, RoomId(0));
+    }
+
+    #[test]
+    fn private_room_does_not_fall_back_to_public_when_room_limit_is_full() {
+        #[derive(Resource, Default)]
+        struct Results {
+            public: Option<RoomAssignment>,
+            private: Option<RoomAssignment>,
+        }
+
+        fn assign_rooms(
+            mut commands: Commands,
+            config: Res<GameConfig>,
+            mut room_allocator: ResMut<RoomAllocator>,
+            mut directory: ResMut<RoomDirectory>,
+            mut results: ResMut<Results>,
+        ) {
+            let public = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Auto,
+                0,
+            );
+            let private = directory.assign_for_mode(
+                &mut commands,
+                &mut room_allocator,
+                &config,
+                RoomJoinMode::Private(RoomCode::parse("WXYZ").unwrap()),
+                0,
+            );
+            results.public = Some(public);
+            results.private = Some(private);
+        }
+
+        let mut config = GameConfig::default();
+        config.rooms.max_rooms = 1;
+
+        let mut app = App::new();
+        app.init_resource::<RoomAllocator>();
+        app.init_resource::<RoomDirectory>();
+        app.init_resource::<Results>();
+        app.insert_resource(config);
+        app.add_systems(Update, assign_rooms);
+
+        app.update();
+
+        let results = app.world().resource::<Results>();
+        assert_eq!(results.public.unwrap().game_room, RoomId(0));
+        assert_eq!(
+            results.private.unwrap().game_room,
+            RoomCode::parse("WXYZ").unwrap().room_id()
+        );
+    }
+
+    #[test]
+    fn pending_named_client_in_room_gets_player_and_snake() {
+        let client_id = PeerId::Netcode(1);
+        let game_room = RoomId(0);
+        let mut room_allocator = RoomAllocator::default();
+        let lightyear_room = room_allocator.allocate();
+
+        let mut app = App::new();
+        app.insert_resource(GameConfig::default());
+        app.insert_resource(RoomDirectory {
+            rooms: vec![RoomState {
+                game_room,
+                lightyear_room,
+                human_count: 0,
+                private: false,
+            }],
+            next_room_id: 1,
+        });
+        app.add_systems(Update, spawn_pending_named_players);
+
+        let client_entity = app
+            .world_mut()
+            .spawn((
+                RemoteId(client_id),
+                ClientRoom { room: game_room },
+                PendingPlayerName("Alice".to_string()),
+            ))
+            .id();
+        app.world_mut().entity_mut(client_entity).insert(Connected);
+
+        app.update();
+
+        let players = {
+            let mut query = app.world_mut().query::<(&Player, &RoomId)>();
+            query
+                .iter(app.world())
+                .map(|(player, room)| (player.clone(), *room))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(players.len(), 1);
+        let (player, room) = &players[0];
+        assert_eq!(player.id, client_id);
+        assert_eq!(player.name, "Alice");
+        assert_eq!(*room, game_room);
+        assert!(player.snake.is_some());
+        assert_eq!(
+            app.world()
+                .entity(client_entity)
+                .get::<RegisteredHumanRoom>(),
+            Some(&RegisteredHumanRoom(game_room))
+        );
+
+        let metrics = app
+            .world()
+            .resource::<RoomDirectory>()
+            .metrics()
+            .collect::<Vec<_>>();
+        assert_eq!(metrics[0].human_count, 1);
+    }
+
+    #[test]
+    fn pending_named_client_spawn_avoids_existing_room_tail() {
+        let client_id = PeerId::Netcode(1);
+        let game_room = RoomId(0);
+        let mut room_allocator = RoomAllocator::default();
+        let lightyear_room = room_allocator.allocate();
+        let config = GameConfig::default();
+        let (unsafe_position, unsafe_direction) =
+            crate::spawning::snake_spawn_pose(&config, game_room, client_id.to_bits());
+        let obstacle_direction = match unsafe_direction {
+            Direction::Up | Direction::Down => Direction::Right,
+            Direction::Left | Direction::Right => Direction::Up,
+        };
+        let obstacle_mid = unsafe_position
+            - unsafe_direction.delta() * (config.movement.starting_tail_length / 2.0);
+        let obstacle_start = obstacle_mid - obstacle_direction.delta() * 100.0;
+        let obstacle_end = obstacle_mid + obstacle_direction.delta() * 100.0;
+        assert!(shared::utils::geometry::ray_segment_intersection(
+            unsafe_position - unsafe_direction.delta() * config.movement.starting_tail_length,
+            unsafe_direction.delta(),
+            config.movement.starting_tail_length,
+            obstacle_start,
+            obstacle_end,
+        )
+        .is_some());
+
+        let mut app = App::new();
+        app.insert_resource(config.clone());
+        app.insert_resource(RoomDirectory {
+            rooms: vec![RoomState {
+                game_room,
+                lightyear_room,
+                human_count: 0,
+                private: false,
+            }],
+            next_room_id: 1,
+        });
+        app.add_systems(Update, spawn_pending_named_players);
+        app.world_mut().spawn((
+            SnakeHead {
+                position: obstacle_start,
+                direction: obstacle_direction.opposite(),
+            },
+            TailPoints::empty(),
+            TailLength {
+                current_size: 200.0,
+                target_size: 200.0,
+            },
+            game_room,
+        ));
+        let client_entity = app
+            .world_mut()
+            .spawn((
+                RemoteId(client_id),
+                ClientRoom { room: game_room },
+                PendingPlayerName("Alice".to_string()),
+            ))
+            .id();
+        app.world_mut().entity_mut(client_entity).insert(Connected);
+
+        app.update();
+
+        let player = {
+            let mut query = app.world_mut().query::<&Player>();
+            query
+                .iter(app.world())
+                .find(|player| player.id == client_id)
+                .cloned()
+                .unwrap()
+        };
+        let snake = app.world().entity(player.snake.unwrap());
+        let head = snake.get::<SnakeHead>().unwrap();
+        let length = snake.get::<TailLength>().unwrap();
+        assert!(shared::utils::geometry::ray_segment_intersection(
+            head.position - head.direction.delta() * length.current_size,
+            head.direction.delta(),
+            length.current_size,
+            obstacle_start,
+            obstacle_end,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn player_ranks_are_computed_per_room_by_score() {
+        let mut app = App::new();
+        app.add_systems(Update, update_player_ranks);
+
+        let low = app
+            .world_mut()
+            .spawn((
+                Player {
+                    id: lightyear::prelude::PeerId::Netcode(1),
+                    name: "low".to_string(),
+                    snake: None,
+                },
+                PlayerScore { value: 10 },
+                PlayerRank::default(),
+                RoomId(0),
+            ))
+            .id();
+        let high = app
+            .world_mut()
+            .spawn((
+                Player {
+                    id: lightyear::prelude::PeerId::Netcode(2),
+                    name: "high".to_string(),
+                    snake: None,
+                },
+                PlayerScore { value: 20 },
+                PlayerRank::default(),
+                RoomId(0),
+            ))
+            .id();
+        let other_room = app
+            .world_mut()
+            .spawn((
+                Player {
+                    id: lightyear::prelude::PeerId::Netcode(3),
+                    name: "other".to_string(),
+                    snake: None,
+                },
+                PlayerScore { value: 1 },
+                PlayerRank::default(),
+                RoomId(1),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().entity(high).get::<PlayerRank>(),
+            Some(&PlayerRank { value: 1 })
+        );
+        assert_eq!(
+            app.world().entity(low).get::<PlayerRank>(),
+            Some(&PlayerRank { value: 2 })
+        );
+        assert_eq!(
+            app.world().entity(other_room).get::<PlayerRank>(),
+            Some(&PlayerRank { value: 1 })
+        );
+    }
+}
